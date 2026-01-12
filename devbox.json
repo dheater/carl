@@ -1,0 +1,25 @@
+{
+  "$schema":  "https://raw.githubusercontent.com/jetify-com/devbox/0.16.0/.schema/devbox.schema.json",
+  "packages": ["zig@0.15.2"],
+  "shell": {
+    "init_hook": [
+      "echo 'Carl development environment ready. Zig 0.15.2 available.'"
+    ],
+    "scripts": {
+      "build": [
+        "zig build"
+      ],
+      "test": [
+        "zig build test"
+      ],
+      "run": [
+        "zig build run -- \"$@\""
+      ],
+      "install": [
+        "zig build -Doptimize=ReleaseSafe",
+        "cp zig-out/bin/carl ~/.local/bin/carl",
+        "echo 'Carl installed to ~/.local/bin/carl'"
+      ]
+    }
+  }
+}

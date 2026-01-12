@@ -1,0 +1,21 @@
+# Carl build artifacts
+zig-cache/
+zig-out/
+.zig-cache/
+
+# Devbox
+.devbox/
+
+# Agent
+.agent/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
