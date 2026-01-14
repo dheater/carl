@@ -6,6 +6,7 @@ const check_exports = @import("check_exports.zig");
 const check_comments = @import("check_comments.zig");
 const check_docs = @import("check_docs.zig");
 const check_logs = @import("check_logs.zig");
+const check_tests = @import("check_tests.zig");
 const string = @import("string.zig");
 
 pub const CheckResult = struct {
@@ -52,6 +53,7 @@ const Command = enum {
     check_comments,
     check_docs,
     check_logs,
+    check_tests,
     check_all,
 };
 
@@ -82,6 +84,7 @@ pub fn main() !void {
         .check_comments => try check_comments.run(allocator, cwd),
         .check_docs => try check_docs.run(allocator, cwd),
         .check_logs => try check_logs.run(allocator, cwd),
+        .check_tests => try check_tests.run(allocator, cwd),
         .check_all => try checkAll(allocator, cwd),
     };
     defer result.deinit(allocator);
@@ -103,6 +106,7 @@ fn checkAll(allocator: std.mem.Allocator, cwd: std.fs.Dir) !CheckResult {
     try results.append(allocator, try check_comments.run(allocator, cwd));
     try results.append(allocator, try check_docs.run(allocator, cwd));
     try results.append(allocator, try check_logs.run(allocator, cwd));
+    try results.append(allocator, try check_tests.run(allocator, cwd));
 
     var fail_count: usize = 0;
     var warn_count: usize = 0;
@@ -152,6 +156,7 @@ fn printUsage() !void {
         \\  check_comments  Check for narration comments
         \\  check_docs      Check for unsolicited .md files
         \\  check_logs      Check structured logging format
+        \\  check_tests     Check for test files
         \\  check_all       Run all checks
         \\
         \\Output: JSON (parseable by AI/CI)
@@ -170,5 +175,5 @@ test {
     _ = @import("check_comments.zig");
     _ = @import("check_docs.zig");
     _ = @import("check_logs.zig");
+    _ = @import("check_tests.zig");
 }
-

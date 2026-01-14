@@ -111,7 +111,7 @@ fn scanFile(allocator: std.mem.Allocator, base_dir: std.fs.Dir, path: []const u8
 
     var line_num: usize = 1;
     var lines = std.mem.splitScalar(u8, content, '\n');
-    
+
     while (lines.next()) |line| : (line_num += 1) {
         const trimmed = std.mem.trim(u8, line, " \t\r");
 
@@ -126,4 +126,3 @@ fn scanFile(allocator: std.mem.Allocator, base_dir: std.fs.Dir, path: []const u8
         }
     }
 }
-

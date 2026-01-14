@@ -1,10 +1,10 @@
 # Code Review
 
-**Enforcement:** Guideline for AI and human review (not automated)
+**Trigger:** "review code" or "carl review"
 
-**Trigger:** User says "review code" or "carl review"
-
-**Purpose:** Comprehensive code review following Carl's principles: delete over add, simplify over complicate, explicit over implicit.
+**Modes:**
+- **Interactive** (user says "review code"): Review → wait for approval → make changes
+- **Analysis** (called by "review project"): Review → report findings → NO changes
 
 ## Review Checklist
 
@@ -31,21 +31,22 @@
 
 **Action:** Extract to helper, unify, or delete one copy.
 
-### 3. Unnecessary Comments
+### 3. Comment Quality
 
-**Delete if:**
-- Repeats type/function name ("C++ standard versions" above `CppStd`)
-- Narrates code ("Increment counter" above `counter++`)
-- States what next line does without explaining WHY
-- Section headers that are obvious from code structure
-- "Build combined flags" above flag-building code
+**Delete (narration - WHAT not WHY):**
+- Repeats function name: `// Increment counter` above `counter++`
+- States what next line does: `// Update cache` above `updateCache()`
+- Just describes call: `// Create window` above `XCreateWindow()`
 
-**Keep if:**
-- Explains WHY (non-obvious decisions, constraints, workarounds)
-- Documents public API (parameters, return, errors, thread safety)
-- Shows examples of non-obvious usage
-- References bugs, issues, or external requirements
-- Explains business rules or domain constraints
+**Keep (explains WHY or context):**
+- `// Create window (340x120 to match Qt version)` - explains WHY
+- `// Use deque for O(1) insertion` - non-obvious decision
+- `// Must hold mutex_` - constraint
+- `// Boost.Asio bug #12345` - workaround
+- Public API docs, bug references, business rules
+
+**Always acceptable:**
+- `} // namespace`, `#endif // HEADER_H` - conventional markers
 
 ### 4. Simplification Opportunities
 
@@ -152,33 +153,17 @@ For each error message/panic/validation:
 **Total savings: ~N lines of dead/duplicate code**
 ```
 
-## Review Principles
+## Principles
 
-1. **Delete first** - Always look for what can be removed before suggesting additions
-2. **Question everything** - Why does this exist? Is it solving a real problem?
-3. **Simplify ruthlessly** - Complexity is the enemy
-4. **Be specific** - Line numbers, exact code, concrete suggestions
-5. **Don't hedge** - "Delete this" not "Consider deleting this"
-6. **Check usage** - grep for actual usage before suggesting deletion
-7. **Wait for approval** - Review only, don't make changes without user confirmation
-
-## Investigation Steps
-
-1. **View the entire file** to understand structure
-2. **Search for usage** of suspicious functions/types across codebase
-3. **Check tests** to see what's actually tested
-4. **Check docs** to see what's documented vs used
-5. **Ask clarifying questions** if purpose is unclear
+1. Delete first, question everything, simplify ruthlessly
+2. Be specific (line numbers, exact code)
+3. Don't hedge ("Delete this" not "Consider deleting")
+4. Check usage before suggesting deletion
+5. **Respect mode:** Interactive = wait for approval. Analysis = report only, no changes.
 
 ## After Review
 
-**Always end with:**
-"Wait for your input before making changes."
+**Interactive mode:** End with "Wait for your input before making changes." Don't make changes, hedge, praise, or apologize.
 
-**Don't:**
-- Make changes during review
-- Hedge suggestions ("maybe", "consider", "perhaps")
-- Praise existing code
-- Apologize for being direct
-- Suggest additions unless deleting something requires replacement
+**Analysis mode:** Report findings with file/line refs, categorize by P0/P1/P2. Don't make changes, ask approval, or wait.
 

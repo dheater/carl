@@ -1,6 +1,6 @@
 # Documentation
 
-**Enforcement:** Partial (check_docs detects new .md files without commit message mention)
+**Enforcement:** ⚠️ Limited automation (quality is subjective - use AI review instead)
 
 **TODO:**
 - Detect overwhelming documentation (based on guidelines: prefer code > comments > docs)
@@ -165,10 +165,19 @@ Two-plane design:
 
 ## Enforcement
 
-**Automated:**
-- `carl check-docs` - Detect unsolicited .md files
-  - Check git diff for new .md files
-  - Warn if not in commit message or user request
+**Automated (limited):**
+- `carl check_docs` - Detects new .md files in uncommitted changes
+  - Only checks git diff (not overall doc quality)
+  - Can't assess if docs are overwhelming or helpful
+  - Use as indicator for "did AI create unsolicited docs"
+
+**AI Review (recommended):**
+- Trigger: "review project" or "review code" prompt
+- AI can assess:
+  - Is documentation overwhelming or helpful?
+  - Does README explain too much or too little?
+  - Are there redundant .md files?
+  - Can docs be consolidated or deleted?
 
 **Manual:**
 - Code review: Challenge every new .md file

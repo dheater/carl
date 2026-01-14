@@ -136,4 +136,3 @@ test "OptionalString - literal" {
     try std.testing.expectEqualStrings("test", s.slice().?);
     s.deinit(std.testing.allocator);
 }
-

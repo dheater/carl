@@ -69,8 +69,7 @@ pub fn run(allocator: std.mem.Allocator, cwd: std.fs.Dir) !CheckResult {
         try writer.print("  ... and {d} more\n", .{unexpected_symbols.items.len - max_show});
     }
 
-    const references = &[_][]const u8{
-    "rules/exports.md"};
+    const references = &[_][]const u8{"rules/exports.md"};
 
     return CheckResult{
         .tool = "check-exports",
@@ -85,14 +84,14 @@ pub fn run(allocator: std.mem.Allocator, cwd: std.fs.Dir) !CheckResult {
 
 fn findSharedLibraries(allocator: std.mem.Allocator, cwd: std.fs.Dir, libs: *std.ArrayList([]const u8)) !void {
     const extensions = [_][]const u8{ ".so", ".dylib", ".dll" };
-    
+
     var build_dir = cwd.openDir("build", .{ .iterate = true }) catch return;
     defer build_dir.close();
 
     var iter = build_dir.iterate();
     while (try iter.next()) |entry| {
         if (entry.kind != .file) continue;
-        
+
         for (extensions) |ext| {
             if (std.mem.endsWith(u8, entry.name, ext)) {
                 const lib_path = try std.fmt.allocPrint(allocator, "build/{s}", .{entry.name});
@@ -107,7 +106,7 @@ fn checkToolAvailable(allocator: std.mem.Allocator, tool: []const u8) !bool {
     var child = std.process.Child.init(&[_][]const u8{ "which", tool }, allocator);
     child.stdout_behavior = .Ignore;
     child.stderr_behavior = .Ignore;
-    
+
     const term = child.spawnAndWait() catch return false;
     return term == .Exited and term.Exited == 0;
 }
@@ -156,4 +155,3 @@ fn hasExpectedPrefix(symbol: []const u8) bool {
     }
     return false;
 }
-

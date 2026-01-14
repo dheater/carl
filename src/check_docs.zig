@@ -62,8 +62,7 @@ pub fn run(allocator: std.mem.Allocator, cwd: std.fs.Dir) !CheckResult {
         try writer.print("  - {s}\n", .{f});
     }
 
-    const references = &[_][]const u8{
-    "rules/documentation.md"};
+    const references = &[_][]const u8{"rules/documentation.md"};
 
     return CheckResult{
         .tool = "check-docs",
@@ -80,7 +79,7 @@ fn checkToolAvailable(allocator: std.mem.Allocator, tool: []const u8) !bool {
     var child = std.process.Child.init(&[_][]const u8{ "which", tool }, allocator);
     child.stdout_behavior = .Ignore;
     child.stderr_behavior = .Ignore;
-    
+
     const term = child.spawnAndWait() catch return false;
     return term == .Exited and term.Exited == 0;
 }
@@ -121,4 +120,3 @@ fn getLastCommitMessage(allocator: std.mem.Allocator) ![]const u8 {
 
     return stdout_data;
 }
-

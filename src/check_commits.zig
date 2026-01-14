@@ -71,8 +71,7 @@ pub fn run(allocator: std.mem.Allocator, cwd: std.fs.Dir) !CheckResult {
         try writer.print("  - {s}{s}\n", .{ truncated, if (msg.len > 60) "..." else "" });
     }
 
-    const references = &[_][]const u8{
-    "https://www.conventionalcommits.org"};
+    const references = &[_][]const u8{"https://www.conventionalcommits.org"};
 
     return CheckResult{
         .tool = "check-commits",
@@ -89,7 +88,7 @@ fn checkToolAvailable(allocator: std.mem.Allocator, tool: []const u8) !bool {
     var child = std.process.Child.init(&[_][]const u8{ "which", tool }, allocator);
     child.stdout_behavior = .Ignore;
     child.stderr_behavior = .Ignore;
-    
+
     const term = child.spawnAndWait() catch return false;
     return term == .Exited and term.Exited == 0;
 }
@@ -138,4 +137,3 @@ fn isValidType(type_str: []const u8) bool {
     }
     return false;
 }
-

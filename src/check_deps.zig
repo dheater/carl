@@ -229,7 +229,8 @@ fn findCargoDeps(allocator: std.mem.Allocator, cwd: std.fs.Dir, deps: *std.Array
         const trimmed = std.mem.trim(u8, line, " \t\r");
 
         if (std.mem.eql(u8, trimmed, "[dependencies]") or
-            std.mem.eql(u8, trimmed, "[build-dependencies]")) {
+            std.mem.eql(u8, trimmed, "[build-dependencies]"))
+        {
             in_dependencies = true;
             continue;
         }
@@ -251,4 +252,3 @@ fn findCargoDeps(allocator: std.mem.Allocator, cwd: std.fs.Dir, deps: *std.Array
         }
     }
 }
-

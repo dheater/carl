@@ -1,9 +1,10 @@
 # Testing
 
-**Enforcement:** Not yet automated
+**Enforcement:** ✅ Automated (`carl check_tests` detects test file presence)
 
 **TODO:**
 - Detect missing tests for new features (new functions without tests)
+- Detect test coverage gaps
 
 **Will NOT enforce:**
 - Test coverage percentage (arbitrary threshold)
@@ -124,7 +125,10 @@ test "base64 round-trip" {
 
 ## Enforcement
 
-**Automated:** `carl check-ci-config`, `carl check-fuzz-coverage`
+**Automated:**
+- `carl check_tests` - Detect test file presence (FAIL if 0 test files)
+- `carl check-ci-config` - Verify sanitizers in CI (TODO)
+- `carl check-fuzz-coverage` - Verify fuzz targets (TODO)
 
 **Code review:** Tests added? Sanitizers enabled? Fuzz targets for parsers?
 

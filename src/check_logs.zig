@@ -3,7 +3,7 @@ const CheckResult = @import("main.zig").CheckResult;
 const String = @import("string.zig").String;
 const OptionalString = @import("string.zig").OptionalString;
 
-const SOURCE_EXTENSIONS = [_][]const u8{ ".zig", ".py", ".rs", ".go" };
+const SOURCE_EXTENSIONS = [_][]const u8{ ".zig", ".py", ".rs", ".go", ".c", ".cpp", ".cc", ".cxx", ".h", ".hpp" };
 
 const LogPattern = struct {
     pattern: []const u8,
@@ -11,22 +11,56 @@ const LogPattern = struct {
 };
 
 const LOG_PATTERNS = [_]LogPattern{
+    // Zig control plane (should be structured)
     .{ .pattern = "std.log.debug(", .language = ".zig" },
     .{ .pattern = "std.log.info(", .language = ".zig" },
     .{ .pattern = "std.log.warn(", .language = ".zig" },
     .{ .pattern = "std.log.err(", .language = ".zig" },
+    // Python
     .{ .pattern = "logging.debug(", .language = ".py" },
     .{ .pattern = "logging.info(", .language = ".py" },
     .{ .pattern = "logging.warning(", .language = ".py" },
     .{ .pattern = "logging.error(", .language = ".py" },
+    // Rust
     .{ .pattern = "log::debug!(", .language = ".rs" },
     .{ .pattern = "log::info!(", .language = ".rs" },
     .{ .pattern = "log::warn!(", .language = ".rs" },
     .{ .pattern = "log::error!(", .language = ".rs" },
+    // Go
     .{ .pattern = "log.Debug(", .language = ".go" },
     .{ .pattern = "log.Info(", .language = ".go" },
     .{ .pattern = "log.Warn(", .language = ".go" },
     .{ .pattern = "log.Error(", .language = ".go" },
+    // C++ (spdlog)
+    .{ .pattern = "spdlog::debug(", .language = ".cpp" },
+    .{ .pattern = "spdlog::info(", .language = ".cpp" },
+    .{ .pattern = "spdlog::warn(", .language = ".cpp" },
+    .{ .pattern = "spdlog::error(", .language = ".cpp" },
+    // C++ (librssconnect RSS_LOG_* macros)
+    .{ .pattern = "RSS_LOG_DEBUG(", .language = ".cpp" },
+    .{ .pattern = "RSS_LOG_INFO(", .language = ".cpp" },
+    .{ .pattern = "RSS_LOG_WARN(", .language = ".cpp" },
+    .{ .pattern = "RSS_LOG_ERROR(", .language = ".cpp" },
+    .{ .pattern = "RSS_LOG_FATAL(", .language = ".cpp" },
+    // C
+    .{ .pattern = "LOG_DEBUG(", .language = ".c" },
+    .{ .pattern = "LOG_INFO(", .language = ".c" },
+    .{ .pattern = "LOG_WARN(", .language = ".c" },
+    .{ .pattern = "LOG_ERROR(", .language = ".c" },
+};
+
+// Trace/debug patterns (acceptable for data plane - NOT flagged)
+const TRACE_PATTERNS = [_][]const u8{
+    "std.debug.print(", // Zig data plane trace (compile-time disabled in release)
+    "LOG_TRACE(", // C/C++ trace logging
+    "RSS_LOG_TRACE(", // librssconnect trace logging
+};
+
+const CONSOLE_PATTERNS = [_][]const u8{
+    "std::cout",
+    "std::cerr",
+    "printf(",
+    "fprintf(",
 };
 
 pub fn run(allocator: std.mem.Allocator, cwd: std.fs.Dir) !CheckResult {
@@ -64,8 +98,7 @@ pub fn run(allocator: std.mem.Allocator, cwd: std.fs.Dir) !CheckResult {
         try writer.print("  ... and {d} more\n", .{unstructured_logs.items.len - max_show});
     }
 
-    const references = &[_][]const u8{
-    "rules/logging.md"};
+    const references = &[_][]const u8{"rules/logging.md"};
 
     return CheckResult{
         .tool = "check-logs",
@@ -126,6 +159,16 @@ fn scanFile(allocator: std.mem.Allocator, base_dir: std.fs.Dir, path: []const u8
 
         if (isStringLiteral(trimmed)) continue;
 
+        // Skip trace patterns (acceptable for data plane)
+        var is_trace = false;
+        for (TRACE_PATTERNS) |trace_pattern| {
+            if (std.mem.indexOf(u8, trimmed, trace_pattern)) |_| {
+                is_trace = true;
+                break;
+            }
+        }
+        if (is_trace) continue;
+
         for (LOG_PATTERNS) |log_pattern| {
             if (!std.mem.endsWith(u8, path, log_pattern.language)) continue;
 
@@ -148,7 +191,7 @@ fn isStringLiteral(line: []const u8) bool {
     if (std.mem.indexOf(u8, trimmed, ".language = ") != null) return true;
 
     return (std.mem.startsWith(u8, trimmed, "\"") and std.mem.endsWith(u8, trimmed, "\",")) or
-           (std.mem.startsWith(u8, trimmed, "\"") and std.mem.endsWith(u8, trimmed, "\""));
+        (std.mem.startsWith(u8, trimmed, "\"") and std.mem.endsWith(u8, trimmed, "\""));
 }
 
 fn hasKeyValuePattern(line: []const u8) bool {
@@ -166,4 +209,3 @@ fn hasKeyValuePattern(line: []const u8) bool {
     }
     return false;
 }
-

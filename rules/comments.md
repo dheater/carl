@@ -1,6 +1,6 @@
 # Comments
 
-**Enforcement:** ✅ Automated (`carl check_comments` detects narration comments)
+**Enforcement:** ⚠️ Partial automation (`carl check_comments` has false positives - use AI review instead)
 
 ## Principle
 
@@ -135,10 +135,18 @@ int client_connect(const char* server_url, uint32_t timeout_ms);
 
 ## Enforcement
 
-**Automated (partial):**
-- `carl check_comments` - Detect narration patterns
-  - "Loop through", "Check if", "Increment", "Set", "Get"
-  - Comments that repeat function/variable names
+**Automated (limited, has false positives):**
+- `carl check_comments` - Detects obvious narration patterns
+  - Simple patterns like "// Loop through", "// Increment"
+  - **High false positive rate** - catches acceptable comments
+  - Use as a rough indicator only
+
+**AI Review (recommended):**
+- Trigger: "review code" prompt
+- AI can distinguish:
+  - `// Create window` (narration) vs `// Create window (340x120 to match Qt version)` (explains WHY)
+  - `// Update cache` (narration) vs `// Update cache to avoid stale data` (explains WHY)
+  - Closing brace comments (acceptable) vs code narration (remove)
 
 **Manual:**
 - Code review: Challenge every comment

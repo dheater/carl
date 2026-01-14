@@ -1,6 +1,6 @@
 # Logging
 
-**Enforcement:** ✅ Automated (`carl check_logs` detects unstructured logging in std.log.*, logging.*, log::*)
+**Enforcement:** ✅ Automated (`carl check_logs` detects unstructured logging, skips trace patterns like std.debug.print)
 
 ## Principle
 
