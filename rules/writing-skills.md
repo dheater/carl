@@ -76,8 +76,8 @@ Every Carl rule follows this structure:
 ## Before Changing Public API
 - [ ] Is this add-only?
 - [ ] Are defaults unchanged?
-- [ ] Incompatible? Ship as new product
-- [ ] Run: `carl check-abi`
+- [ ] Incompatible? Bump major version (rare, clean break)
+- [ ] Run: `carl check_abi`
 ```
 
 ### Decision Trees (for choosing between options)

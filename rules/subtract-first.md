@@ -159,7 +159,7 @@ Added:
 ## Where This Connects
 
 - **Dependencies:** Keep external runtime deps ≤5; duplication over unnecessary deps
-- **API Stability:** Add-only evolution; incompatible redesigns become new products
+- **API Stability:** Add-only evolution; breaking changes allowed but rare (major version bump)
 - **Portability:** Broad, boring compatibility; avoid platform-specific feature creep
 - **Metrics/SLOs:** Optional thresholds; use measurements to validate, not justify complexity
 

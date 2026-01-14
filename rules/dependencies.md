@@ -65,8 +65,8 @@ Need functionality?
 **All runtime libraries must expose stable C ABI:**
 - Zig may be used internally
 - Public boundary is C (opaque handles, size'd structs, error codes)
-- No breaking changes under same name
-- Incompatible redesigns ship as new product (e.g., `Project2`)
+- Evolve additively; breaking changes allowed but rare (major version bump)
+- Maintain LTS for old major versions during migration
 
 ---
 

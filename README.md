@@ -171,6 +171,25 @@ Can you duplicate it? (≤200 LOC, low risk)
 
 **See:** `rules/comments.md`, `rules/documentation.md`
 
+### Project Assessment
+
+**Principle:** One-person components, stable APIs, finish before moving on.
+
+**Planning-phase metrics:**
+- API surface: ≤50 public symbols (≤20 for libraries)
+- Dependencies: ≤5 runtime deps
+- Modules: ≤10 files
+- Finished criteria: ≤5 bullets
+
+**Decision framework:**
+- Rewrite vs refactor vs rescope
+- Finish vs kill (sunk cost test)
+- Go/no-go decision points (week 1, 2, month 1, 3)
+
+**Plan template:** `docs/plan-template.md` (use for all plans/proposals)
+
+**See:** `rules/project-assessment.md`
+
 ### Code Review
 
 **Principle:** Delete first, simplify second, add last.
@@ -199,6 +218,22 @@ Can you duplicate it? (≤200 LOC, low risk)
 **Trigger:** "hey intern"
 
 **See:** `rules/intern-protocol.md`
+
+### Virtual Focus Group
+
+**Principle:** Simulate expert opinions to validate ideas early, before investing months.
+
+**Use when:**
+- Validating new project ideas (week 1)
+- Getting diverse expert perspectives
+- Identifying problems early
+- Challenging assumptions
+
+**Personas:** Select 4-6 real experts + AI agent perspective
+
+**Value:** Reject bad ideas in hours, not months (Zai: 2 weeks instead of months)
+
+**See:** `skills/virtual-focus-group.md`
 
 ---
 
@@ -239,10 +274,10 @@ Carl rules are designed for LLM consumption.
 - testing.md
 - comments.md
 - documentation.md
-- ephemeral-scripts.md
 - review-code.md
 - intern-protocol.md
 - writing-skills.md
+- web-content-fetching.md
 
 **Language-specific** (loaded on-demand):
 - cpp.md
@@ -296,6 +331,7 @@ Augment loads all .md files from `~/.augment/rules/` recursively, so skills work
 
 - **Rules:** `~/.augment/rules/` (symlinked from Carl repo)
 - **Tools:** `carl` (Zig implementation)
+- **Experiments:** `experiments/` (validation of principles)
 - **Source:** https://github.com/carl-lang/carl
 
 **Inspired by:**
