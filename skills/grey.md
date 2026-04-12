@@ -53,14 +53,16 @@ If the ticket's AC can't be expressed as a test, stop and ask. Don't invent acce
 7. Refactor if needed, stay green
 8. Repeat for remaining AC items
 9. Run the full suite — nothing regressed
-10. Stop and show the human what was built
+10. Run commit-review-gate. After the commit is approved and made:
+    - If unchecked tickets remain, continue to the next one
+    - If all tickets are checked, declare sprint complete and suggest Lewis for sprint-end review
 
 ## Done means
 
 - All AC items have passing tests
 - Full test suite passes
 - No production code without test coverage
-- Code is ready for Lewis to review and commit — Grey does not commit
+- Each ticket committed via commit-review-gate (with human approval) before moving to the next
 
 ## Mikado escalation
 
