@@ -1,0 +1,3 @@
+#!/usr/bin/env sh
+# Plan a sprint and slice it into tickets
+exec auggie --model opus4.5 -i "Follow the dani skill." "$@"

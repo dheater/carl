@@ -1,0 +1,3 @@
+#!/usr/bin/env sh
+# Sprint-end review: QA plan, diff critique, housekeeping
+exec auggie --model sonnet4.6 -i "Follow the lewis skill." "$@"

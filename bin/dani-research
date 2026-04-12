@@ -1,0 +1,3 @@
+#!/usr/bin/env sh
+# Fetch and summarize external context before planning
+exec auggie --model sonnet4.6 -i "Follow the research skill." "$@"

@@ -1,24 +1,28 @@
 {
-  "$schema":  "https://raw.githubusercontent.com/jetify-com/devbox/0.16.0/.schema/devbox.schema.json",
-  "packages": ["zig@0.15.2"],
+  "$schema": "https://raw.githubusercontent.com/jetify-com/devbox/0.16.0/.schema/devbox.schema.json",
+  "packages": [
+    "zig@0.15.2",
+    "just@latest"
+  ],
   "shell": {
     "init_hook": [
       "echo 'Carl development environment ready. Zig 0.15.2 available.'"
     ],
     "scripts": {
       "build": [
-        "zig build"
+        "just build"
       ],
       "test": [
-        "zig build test"
+        "just test"
       ],
       "run": [
-        "zig build run -- \"$@\""
+        "just run -- \"$@\""
+      ],
+      "sync-augment": [
+        "just sync-augment"
       ],
       "install": [
-        "zig build -Doptimize=ReleaseSafe",
-        "cp zig-out/bin/carl ~/.local/bin/carl",
-        "echo 'Carl installed to ~/.local/bin/carl'"
+        "OPTIMIZE=ReleaseSafe just install"
       ]
     }
   }

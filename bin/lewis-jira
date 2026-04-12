@@ -1,0 +1,3 @@
+#!/usr/bin/env sh
+# Draft Jira updates for approval before posting
+exec auggie --model haiku4.5 -i "Follow the jira-draft-and-review skill." "$@"

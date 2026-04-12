@@ -84,6 +84,16 @@ fn checkToolAvailable(allocator: std.mem.Allocator, tool: []const u8) !bool {
     return term == .Exited and term.Exited == 0;
 }
 
+// Directories that contain product content, not unsolicited documentation
+const CONTENT_DIRS = [_][]const u8{ "rules/", "skills/", ".agent/" };
+
+fn isProductContent(path: []const u8) bool {
+    for (CONTENT_DIRS) |dir| {
+        if (std.mem.startsWith(u8, path, dir)) return true;
+    }
+    return false;
+}
+
 fn getNewMarkdownFiles(allocator: std.mem.Allocator, files: *std.ArrayList([]const u8)) !void {
     var child = std.process.Child.init(&[_][]const u8{ "git", "diff", "--name-only", "--diff-filter=A", "HEAD" }, allocator);
     child.stdout_behavior = .Pipe;
@@ -99,7 +109,7 @@ fn getNewMarkdownFiles(allocator: std.mem.Allocator, files: *std.ArrayList([]con
     var lines = std.mem.splitScalar(u8, stdout_data, '\n');
     while (lines.next()) |line| {
         const trimmed = std.mem.trim(u8, line, " \t\r");
-        if (trimmed.len > 0 and std.mem.endsWith(u8, trimmed, ".md")) {
+        if (trimmed.len > 0 and std.mem.endsWith(u8, trimmed, ".md") and !isProductContent(trimmed)) {
             const copy = try allocator.dupe(u8, trimmed);
             try files.append(allocator, copy);
         }

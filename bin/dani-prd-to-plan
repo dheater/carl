@@ -1,0 +1,3 @@
+#!/usr/bin/env sh
+# Convert a PRD into a vertical slice plan
+exec auggie --model sonnet4.6 -i "Follow the prd-to-plan skill." "$@"

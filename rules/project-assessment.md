@@ -8,9 +8,12 @@
 
 **Why one person:**
 - 2 people = 2x time (coordination cost)
-- 3 people = 2.5x time
-- 4 people = 2x time (might get back to 1x as 2 independent teams)
+- 3 people = 2.2x time
+- 4 people = 1.5x (as 2 independent pairs)
 - 5+ people = ∞ (will never get done)
+
+This doesn't mean that having people work together is wrong. You get knowledge sharing, varying ideas.
+Just know that it will be slower.
 
 **If you need >1 person, your component is too large. Rescope.**
 
@@ -77,7 +80,7 @@ Month 3: DEADLINE
 
 **Week 1 validation methods:**
 
-1. **Virtual focus group** - Simulate expert opinions (see `skills/virtual-focus-group.md`)
+1. **Vera** - Simulate expert opinions (see `skills/vera.md`)
 2. **Prototype** - Build minimal version, test core idea
 3. **Competitive analysis** - Does existing solution win?
 4. **Data collection** - Measure key metrics
@@ -187,5 +190,5 @@ zig build test -Dsanitize=address,undefined,thread
 - `rules/subtract-first.md` - Delete before adding
 - `rules/dependencies.md` - Dependency budget (≤5)
 - `rules/api-stability.md` - Stable APIs
-- `skills/virtual-focus-group.md` - Early validation technique
+- `skills/vera.md` - Early validation technique
 

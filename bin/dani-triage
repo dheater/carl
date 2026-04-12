@@ -1,0 +1,3 @@
+#!/usr/bin/env sh
+# Root-cause a bug and produce a fix plan
+exec auggie --model opus4.5 -i "Follow the triage-issue skill." "$@"

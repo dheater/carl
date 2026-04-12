@@ -1,0 +1,3 @@
+#!/usr/bin/env sh
+# Write a PRD from a clarified problem
+exec auggie --model opus4.5 -i "Follow the write-a-prd skill." "$@"

@@ -7,6 +7,7 @@ const check_comments = @import("check_comments.zig");
 const check_docs = @import("check_docs.zig");
 const check_logs = @import("check_logs.zig");
 const check_tests = @import("check_tests.zig");
+const sync_augment = @import("sync_augment.zig");
 const string = @import("string.zig");
 
 pub const CheckResult = struct {
@@ -55,6 +56,7 @@ const Command = enum {
     check_logs,
     check_tests,
     check_all,
+    sync_augment,
 };
 
 pub fn main() !void {
@@ -86,6 +88,7 @@ pub fn main() !void {
         .check_logs => try check_logs.run(allocator, cwd),
         .check_tests => try check_tests.run(allocator, cwd),
         .check_all => try checkAll(allocator, cwd),
+        .sync_augment => try sync_augment.run(allocator, cwd),
     };
     defer result.deinit(allocator);
 
@@ -158,6 +161,7 @@ fn printUsage() !void {
         \\  check_logs      Check structured logging format
         \\  check_tests     Check for test files
         \\  check_all       Run all checks
+        \\  sync_augment    Copy Carl rules and skills into ~/.augment/rules/
         \\
         \\Output: JSON (parseable by AI/CI)
         \\Exit code: 0 (advisory, not blocking)
@@ -176,4 +180,7 @@ test {
     _ = @import("check_docs.zig");
     _ = @import("check_logs.zig");
     _ = @import("check_tests.zig");
+    _ = @import("sync_augment.zig");
 }
+
+

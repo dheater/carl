@@ -1,0 +1,3 @@
+#!/usr/bin/env sh
+# Execute the next ticket from .carl/tickets.md
+exec auggie --model sonnet4.6 -i "Follow the grey skill." "$@"

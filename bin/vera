@@ -1,0 +1,3 @@
+#!/usr/bin/env sh
+# Challenge a premise with a panel of domain experts
+exec auggie --model opus4.5 -i "Follow the vera skill." "$@"

@@ -18,6 +18,13 @@ const TEST_PATTERNS = [_][]const u8{
     "_test.py",
 };
 
+// Zig tests live inline — detect files containing test blocks
+const ZIG_TEST_MARKERS = [_][]const u8{
+    "test \"",
+    "test{",
+    "test {",
+};
+
 pub fn run(allocator: std.mem.Allocator, cwd: std.fs.Dir) !CheckResult {
     var test_files: std.ArrayList([]const u8) = .empty;
     defer {
@@ -89,6 +96,11 @@ fn scanDirectory(allocator: std.mem.Allocator, base_dir: std.fs.Dir, rel_path: [
             if (isTestFile(entry.name)) {
                 const owned_path = try allocator.dupe(u8, full_path);
                 try test_files.append(allocator, owned_path);
+            } else if (isZigFile(entry.name)) {
+                if (try zigFileHasTests(allocator, base_dir, full_path)) {
+                    const owned_path = try allocator.dupe(u8, full_path);
+                    try test_files.append(allocator, owned_path);
+                }
             }
         }
     }
@@ -98,6 +110,28 @@ fn isTestFile(filename: []const u8) bool {
     for (TEST_PATTERNS) |pattern| {
         if (std.mem.indexOf(u8, filename, pattern)) |_| {
             return true;
+        }
+    }
+    return false;
+}
+
+fn isZigFile(filename: []const u8) bool {
+    return std.mem.endsWith(u8, filename, ".zig");
+}
+
+// Zig puts tests inline — scan for test blocks rather than relying on file naming
+fn zigFileHasTests(allocator: std.mem.Allocator, base_dir: std.fs.Dir, path: []const u8) !bool {
+    const file = base_dir.openFile(path, .{}) catch return false;
+    defer file.close();
+
+    const content = file.readToEndAlloc(allocator, 10 * 1024 * 1024) catch return false;
+    defer allocator.free(content);
+
+    var lines = std.mem.splitScalar(u8, content, '\n');
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        for (ZIG_TEST_MARKERS) |marker| {
+            if (std.mem.startsWith(u8, trimmed, marker)) return true;
         }
     }
     return false;

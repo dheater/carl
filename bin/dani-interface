@@ -1,0 +1,3 @@
+#!/usr/bin/env sh
+# Design and compare interface options before implementation
+exec auggie --model opus4.5 -i "Follow the design-an-interface skill." "$@"
