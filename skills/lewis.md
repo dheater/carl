@@ -71,8 +71,8 @@ Once the human approves the review, run `commit-review-gate`: show the proposed 
 
 After the commit is approved and made:
 - Archive: move `.agent/tickets.md` and `.agent/qa-plan.md` to `.agent/archive/<date>/`
-- Hand off to `jira-draft-and-review` for ticket closure
-- Hand off to `pr-draft-and-review` for PR creation
+- Run `jira-draft-and-review` for ticket closure
+- Run `pr-draft-and-review` — human approval of the PR message is the gate
 
 Do not post to Jira or open a PR without explicit approval.
 
