@@ -68,6 +68,24 @@ describe('Workflow Loop', () => {
     expect(mockPrompt).toHaveBeenCalledTimes(2);
   });
 
+  test('fails if artifacts diverge', async () => {
+    stateManager.update({
+      current_phase: 'dani',
+      status: 'running',
+      artifacts: {
+        tickets: [{ id: 't-1', title: 'Test', description: '', ac: [], status: 'todo' }]
+      }
+    });
+
+    const agentDir = path.join(tmpDir, '.agent');
+    if (!fs.existsSync(agentDir)) fs.mkdirSync(agentDir, { recursive: true });
+
+    // Diverging file content
+    fs.writeFileSync(path.join(agentDir, 'tickets.md'), '# Different Content');
+
+    await expect(runLoop(stateManager)).rejects.toThrow(/diverges from authoritative state/);
+  });
+
   test('completes workflow after the last phase', async () => {
     stateManager.update({ current_phase: 'commit-review-gate', status: 'running' });
     await runLoop(stateManager);

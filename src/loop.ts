@@ -1,10 +1,13 @@
-import { StateManager } from "./state";
+import { StateManager, validateArtifacts } from "./state";
 import { getNextPhase, getFallbackPhase } from "./graph";
+import { parseTickets, generateTicketsMarkdown } from "./tickets";
 import * as path from "path";
 import * as fs from "fs";
 
 export async function runLoop(stateManager: StateManager): Promise<void> {
   let state = stateManager.load();
+  validateArtifacts(state);
+
   if (state.status === 'awaiting_approval') {
     throw new Error('Workflow is awaiting approval. Run `carl approve` or `carl reject`.');
   }
@@ -47,10 +50,29 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
         outputs: response
       });
 
+      const artifacts = state.artifacts || {};
+      const agentDir = path.join(state.workspace_path, '.agent');
+
+      if (!isBlocked) {
+        if (phaseName === 'dani') {
+          artifacts.slicePlan = response;
+          const notesDir = path.join(agentDir, 'notes');
+          if (!fs.existsSync(notesDir)) fs.mkdirSync(notesDir, { recursive: true });
+          fs.writeFileSync(path.join(notesDir, 'slice-plan.md'), response, 'utf-8');
+        } else if (phaseName === 'dani-tickets') {
+          artifacts.tickets = parseTickets(response);
+          fs.writeFileSync(path.join(agentDir, 'tickets.md'), generateTicketsMarkdown('Workflow Orchestrator', artifacts.tickets), 'utf-8');
+        } else if (phaseName === 'lewis-qa') {
+          artifacts.qaPlan = response;
+          fs.writeFileSync(path.join(agentDir, 'qa-plan.md'), response, 'utf-8');
+        }
+      }
+
       if (isBlocked) {
         const fallback = getFallbackPhase(phaseName);
         state = stateManager.update({
           history,
+          artifacts,
           current_phase: fallback,
         });
         console.log(`Phase ${phaseName} reported a blocker. Handing back to ${fallback}.`);
@@ -63,6 +85,7 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
       if (isGate) {
         state = stateManager.update({
           history,
+          artifacts,
           status: 'awaiting_approval',
           // Stay on the gate phase while awaiting approval
         });
@@ -71,6 +94,7 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
       } else if (nextPhase) {
         state = stateManager.update({
           history,
+          artifacts,
           current_phase: nextPhase,
         });
         console.log(`Phase ${phaseName} completed successfully. Advancing to ${nextPhase}.`);
@@ -78,7 +102,8 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
         // End of graph
         state = stateManager.update({
           history,
-          status: 'paused', // Or "completed" if we add that status
+          artifacts,
+          status: 'completed', // Or "completed" if we add that status
         });
         console.log(`Phase ${phaseName} completed. Workflow finished.`);
         break; // Exit loop

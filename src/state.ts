@@ -11,12 +11,52 @@ export interface PhaseResult {
   outputs: string;
 }
 
+import { Ticket, generateTicketsMarkdown } from './tickets';
+
+export interface Artifacts {
+  slicePlan?: string;
+  tickets?: any[];
+  qaPlan?: string;
+}
+
 export interface RunState {
   run_id: string;
   workspace_path: string;
   current_phase: string;
   status: WorkflowStatus;
   history?: PhaseResult[];
+  artifacts?: Artifacts;
+}
+
+export function validateArtifacts(state: RunState): void {
+  if (!state.artifacts) return;
+
+  const artifactsPath = path.join(state.workspace_path, '.agent');
+  const ticketsPath = path.join(artifactsPath, 'tickets.md');
+  const qaPlanPath = path.join(artifactsPath, 'qa-plan.md');
+  const slicePlanPath = path.join(artifactsPath, 'notes', 'slice-plan.md');
+
+  if (state.artifacts.tickets && fs.existsSync(ticketsPath)) {
+    const content = fs.readFileSync(ticketsPath, 'utf-8');
+    const expected = generateTicketsMarkdown('Workflow Orchestrator', state.artifacts.tickets);
+    if (content.trim() !== expected.trim()) {
+      throw new Error(`Markdown artifact ${ticketsPath} diverges from authoritative state.`);
+    }
+  }
+
+  if (state.artifacts.slicePlan && fs.existsSync(slicePlanPath)) {
+    const content = fs.readFileSync(slicePlanPath, 'utf-8');
+    if (content.trim() !== state.artifacts.slicePlan.trim()) {
+      throw new Error(`Markdown artifact ${slicePlanPath} diverges from authoritative state.`);
+    }
+  }
+
+  if (state.artifacts.qaPlan && fs.existsSync(qaPlanPath)) {
+    const content = fs.readFileSync(qaPlanPath, 'utf-8');
+    if (content.trim() !== state.artifacts.qaPlan.trim()) {
+      throw new Error(`Markdown artifact ${qaPlanPath} diverges from authoritative state.`);
+    }
+  }
 }
 
 export class StateManager {
