@@ -1,5 +1,5 @@
 import { StateManager } from './state';
-import { runPhase } from './runner';
+import { getNextPhase, getPriorPhase } from './graph';
 
 export function approveCommand(workspaceRoot: string): void {
   const stateManager = new StateManager(workspaceRoot);
@@ -7,7 +7,12 @@ export function approveCommand(workspaceRoot: string): void {
   if (state.status !== 'awaiting_approval') {
     throw new Error('Cannot approve: Workflow is not awaiting approval.');
   }
-  stateManager.update({ status: 'running' });
+  const nextPhase = getNextPhase(state.current_phase);
+  if (!nextPhase) {
+    stateManager.update({ status: 'completed' });
+  } else {
+    stateManager.update({ status: 'running', current_phase: nextPhase });
+  }
 }
 
 export function rejectCommand(workspaceRoot: string, reason: string): void {
@@ -18,7 +23,7 @@ export function rejectCommand(workspaceRoot: string, reason: string): void {
   }
 
   const history = state.history || [];
-  const priorPhase = history.length > 1 ? history[history.length - 2].phase : 'dani';
+  const priorPhase = getPriorPhase(state.current_phase) || 'dani';
 
   history.push({
     phase: state.current_phase,

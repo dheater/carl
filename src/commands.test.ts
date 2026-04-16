@@ -70,7 +70,7 @@ describe('Commands', () => {
 
     const state = stateManager.load();
     expect(state.status).toBe('running');
-    expect(state.current_phase).toBe('dani'); // Fallback
+    expect(state.current_phase).toBe('grey'); // Configured prior phase
   });
 
   test('rejectCommand throws if not awaiting_approval', () => {
