@@ -4,11 +4,19 @@ import { randomUUID } from 'crypto';
 
 export type WorkflowStatus = 'running' | 'paused';
 
+export interface PhaseResult {
+  phase: string;
+  model: string;
+  status: string;
+  outputs: string;
+}
+
 export interface RunState {
   run_id: string;
   workspace_path: string;
   current_phase: string;
   status: WorkflowStatus;
+  history?: PhaseResult[];
 }
 
 export class StateManager {
@@ -29,6 +37,7 @@ export class StateManager {
       workspace_path: workspaceRoot,
       current_phase: 'dani',
       status: 'running',
+      history: [],
     };
 
     this.save(state);

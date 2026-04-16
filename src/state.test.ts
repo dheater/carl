@@ -24,6 +24,7 @@ describe('StateManager', () => {
     expect(state.workspace_path).toBe(tmpDir);
     expect(state.current_phase).toBe('dani');
     expect(state.status).toBe('running');
+    expect(state.history).toEqual([]);
 
     expect(fs.existsSync(stateFilePath)).toBe(true);
     const savedData = JSON.parse(fs.readFileSync(stateFilePath, 'utf-8'));
