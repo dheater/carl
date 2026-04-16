@@ -36,8 +36,8 @@ describe('Commands', () => {
       current_phase: 'qa-gate',
       status: 'awaiting_approval',
       history: [
-        { phase: 'grey', model: 'sonnet4.5', status: 'success', outputs: 'ok' },
-        { phase: 'qa-gate', model: 'sonnet4.5', status: 'success', outputs: 'please approve' }
+        { phase: 'grey', model: 'sonnet4.6', status: 'success', outputs: 'ok' },
+        { phase: 'qa-gate', model: 'sonnet4.6', status: 'success', outputs: 'please approve' }
       ]
     });
 

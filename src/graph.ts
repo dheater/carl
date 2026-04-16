@@ -30,3 +30,10 @@ export function getFallbackPhase(currentPhase: string): string {
       return 'dani';
   }
 }
+
+export function getPhaseModel(phase: string): string {
+  if (phase === 'dani') {
+    return 'opus4.5';
+  }
+  return 'sonnet4.6';
+}

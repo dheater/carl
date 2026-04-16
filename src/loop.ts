@@ -1,5 +1,5 @@
 import { StateManager, validateArtifacts } from "./state";
-import { getNextPhase, getFallbackPhase } from "./graph";
+import { getNextPhase, getFallbackPhase, getPhaseModel } from "./graph";
 import { parseTickets, generateTicketsMarkdown } from "./tickets";
 import * as path from "path";
 import * as fs from "fs";
@@ -21,7 +21,7 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
 
   while (state.status === 'running') {
     const phaseName = state.current_phase;
-    const model = "sonnet4.5"; // Could be derived from phase config eventually
+    const model = getPhaseModel(phaseName);
 
     const skillPath = path.join(state.workspace_path, "skills", `${phaseName}.md`);
     if (!fs.existsSync(skillPath)) {
@@ -32,7 +32,7 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
     
     const client = await Auggie.create({
       workspaceRoot: state.workspace_path,
-      model: model,
+      model: model as any,
       allowIndexing: true,
     });
 
