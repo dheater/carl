@@ -55,6 +55,21 @@ describe('Workflow Loop', () => {
     
     // Check Auggie calls
     expect(mockPrompt).toHaveBeenCalledTimes(4);
+
+    expect(Auggie.create).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      workspaceRoot: tmpDir,
+      model: 'gpt5.4', // dani
+      allowIndexing: true,
+    }));
+    expect(Auggie.create).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      model: 'gpt5.4', // dani-tickets
+    }));
+    expect(Auggie.create).toHaveBeenNthCalledWith(3, expect.objectContaining({
+      model: 'haiku4.5', // grey
+    }));
+    expect(Auggie.create).toHaveBeenNthCalledWith(4, expect.objectContaining({
+      model: 'haiku4.5', // qa-gate
+    }));
   });
 
   test('resumes from a gate when status is running', async () => {
@@ -66,6 +81,13 @@ describe('Workflow Loop', () => {
     expect(state.current_phase).toBe('lewis');
     expect(state.history).toHaveLength(2); // lewis-qa, lewis
     expect(mockPrompt).toHaveBeenCalledTimes(2);
+
+    expect(Auggie.create).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      model: 'gemini-3.1-pro-preview', // lewis-qa
+    }));
+    expect(Auggie.create).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      model: 'gemini-3.1-pro-preview', // lewis
+    }));
   });
 
   test('fails if artifacts diverge', async () => {

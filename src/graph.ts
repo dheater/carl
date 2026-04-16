@@ -32,8 +32,15 @@ export function getFallbackPhase(currentPhase: string): string {
 }
 
 export function getPhaseModel(phase: string): string {
-  if (phase === 'dani') {
-    return 'opus4.5';
+  if (phase === 'dani' || phase.startsWith('dani-')) {
+    return 'gpt5.4';
   }
-  return 'sonnet4.6';
+  if (phase === 'grey' || phase.startsWith('grey-') || phase === 'qa-gate') {
+    return 'haiku4.5';
+  }
+  if (phase === 'lewis' || phase.startsWith('lewis-') || phase === 'commit-review-gate') {
+    return 'gemini-3.1-pro-preview';
+  }
+  // Default fallback
+  return 'haiku4.5';
 }
