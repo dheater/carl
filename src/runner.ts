@@ -34,8 +34,13 @@ export async function runPhase(phaseName: string, stateManager: StateManager): P
       status: 'success',
       outputs: response
     });
-    
-    stateManager.update({ history });
+
+    const isGate = phaseName.endsWith('-gate');
+    stateManager.update({
+      history,
+      current_phase: phaseName,
+      status: isGate ? 'awaiting_approval' : 'running'
+    });
   } catch (error: any) {
     const history = state.history || [];
     history.push({
@@ -44,7 +49,7 @@ export async function runPhase(phaseName: string, stateManager: StateManager): P
       status: 'failed',
       outputs: error.message || String(error)
     });
-    stateManager.update({ history });
+    stateManager.update({ history, current_phase: phaseName });
     throw error;
   } finally {
     await client.close();

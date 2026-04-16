@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
 
-export type WorkflowStatus = 'running' | 'paused';
+export type WorkflowStatus = 'running' | 'paused' | 'awaiting_approval';
 
 export interface PhaseResult {
   phase: string;
@@ -76,8 +76,8 @@ export class StateManager {
     if (typeof parsed.current_phase !== 'string') {
       throw new Error('Malformed run state - missing or invalid current_phase');
     }
-    if (parsed.status !== 'running' && parsed.status !== 'paused') {
-      throw new Error('Malformed run state - status must be "running" or "paused"');
+    if (parsed.status !== 'running' && parsed.status !== 'paused' && parsed.status !== 'awaiting_approval') {
+      throw new Error('Malformed run state - status must be "running", "paused", or "awaiting_approval"');
     }
 
     return parsed as RunState;

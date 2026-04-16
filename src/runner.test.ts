@@ -54,6 +54,8 @@ describe('PhaseRunner', () => {
     // Verify state across restart (new manager instance)
     const newManager = new StateManager(tmpDir);
     const state = newManager.load();
+    expect(state.status).toBe('running');
+    expect(state.current_phase).toBe('test-phase');
     expect(state.history).toHaveLength(1);
     expect(state.history![0]).toEqual({
       phase: 'test-phase',
@@ -61,6 +63,14 @@ describe('PhaseRunner', () => {
       status: 'success',
       outputs: 'mocked response',
     });
+  });
+
+  test('sets status to awaiting_approval for gate phases', async () => {
+    fs.writeFileSync(path.join(tmpDir, 'skills', 'test-gate.md'), 'dummy skill');
+    await runPhase('test-gate', stateManager);
+    const state = stateManager.load();
+    expect(state.status).toBe('awaiting_approval');
+    expect(state.current_phase).toBe('test-gate');
   });
 
   test('records failure and throws error on crash', async () => {
