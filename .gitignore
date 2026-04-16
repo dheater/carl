@@ -1,7 +1,8 @@
 # Carl build artifacts
-zig-cache/
-zig-out/
-.zig-cache/
+node_modules/
+dist/
+coverage/
+.npm/
 
 # Devbox
 .devbox/

@@ -89,67 +89,52 @@
         }
       }
     },
-    "zig@0.15.2": {
-      "last_modified": "2025-12-31T03:27:36Z",
-      "resolved": "github:NixOS/nixpkgs/f665af0cdb70ed27e1bd8f9fdfecaf451260fc55#zig",
+    "nodejs@20": {
+      "last_modified": "2026-03-27T11:17:38Z",
+      "plugin_version": "0.0.2",
+      "resolved": "github:NixOS/nixpkgs/832efc09b4caf6b4569fbf9dc01bec3082a00611#nodejs_20",
       "source": "devbox-search",
-      "version": "0.15.2",
+      "version": "20.20.2",
       "systems": {
         "aarch64-darwin": {
           "outputs": [
             {
               "name": "out",
-              "path": "/nix/store/25brjshr934nir8lqc4ln8dkkamfh47c-zig-0.15.2",
+              "path": "/nix/store/vamh3ysrfc0qz2mdhh6klyi5ngaffl0q-nodejs-20.20.2",
               "default": true
-            },
-            {
-              "name": "doc",
-              "path": "/nix/store/9b8glc1ai9ngsap9rijbhwza06q8p31b-zig-0.15.2-doc"
             }
           ],
-          "store_path": "/nix/store/25brjshr934nir8lqc4ln8dkkamfh47c-zig-0.15.2"
+          "store_path": "/nix/store/vamh3ysrfc0qz2mdhh6klyi5ngaffl0q-nodejs-20.20.2"
         },
         "aarch64-linux": {
           "outputs": [
             {
               "name": "out",
-              "path": "/nix/store/xm69ln5lm3vgdws6n03zb12v8b7ljf07-zig-0.15.2",
+              "path": "/nix/store/b1i1izsybrhzifbrr84nbmw62fl07ia2-nodejs-20.20.2",
               "default": true
-            },
-            {
-              "name": "doc",
-              "path": "/nix/store/g18kxrlss8c1l4n2mlq9yxma5bcfmgxk-zig-0.15.2-doc"
             }
           ],
-          "store_path": "/nix/store/xm69ln5lm3vgdws6n03zb12v8b7ljf07-zig-0.15.2"
+          "store_path": "/nix/store/b1i1izsybrhzifbrr84nbmw62fl07ia2-nodejs-20.20.2"
         },
         "x86_64-darwin": {
           "outputs": [
             {
               "name": "out",
-              "path": "/nix/store/f93gbwjzmh91qky6rl0claa93n6szm0c-zig-0.15.2",
+              "path": "/nix/store/yg5qivw8g8gxpc536kwc0fg73nviiv9l-nodejs-20.20.2",
               "default": true
-            },
-            {
-              "name": "doc",
-              "path": "/nix/store/irfn2j7gz3i3iymfb7lljmaz2m9i17qk-zig-0.15.2-doc"
             }
           ],
-          "store_path": "/nix/store/f93gbwjzmh91qky6rl0claa93n6szm0c-zig-0.15.2"
+          "store_path": "/nix/store/yg5qivw8g8gxpc536kwc0fg73nviiv9l-nodejs-20.20.2"
         },
         "x86_64-linux": {
           "outputs": [
             {
               "name": "out",
-              "path": "/nix/store/jkfs8578bsdnaa0fm82k52kbm1j54i42-zig-0.15.2",
+              "path": "/nix/store/1gw2r0h59vr5dzcilhg1xvzjqgn84f8b-nodejs-20.20.2",
               "default": true
-            },
-            {
-              "name": "doc",
-              "path": "/nix/store/glwa8xiavmhng8b08faijwa3971ld3aa-zig-0.15.2-doc"
             }
           ],
-          "store_path": "/nix/store/jkfs8578bsdnaa0fm82k52kbm1j54i42-zig-0.15.2"
+          "store_path": "/nix/store/1gw2r0h59vr5dzcilhg1xvzjqgn84f8b-nodejs-20.20.2"
         }
       }
     }

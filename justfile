@@ -1,25 +1,16 @@
 home_dir := if env_var_or_default('HOME', '') != '' { env_var('HOME') } else { env_var('USERPROFILE') }
-optimize := env_var_or_default('OPTIMIZE', 'Debug')
 
 # Build carl
 build:
-    zig build -Doptimize={{optimize}}
+    npm run build
 
 # Run tests
 test:
-    zig build test
+    npm test
 
 # Run carl with arguments
 run *args:
-    zig build run -- {{args}}
-
-# Run all Carl checks against the current repo
-check-all:
-    zig build run -- check_all
-
-# Copy Carl rules and skills into ~/.augment/rules/
-sync-augment:
-    zig build run -- sync_augment
+    npm start -- {{args}}
 
 # Install persona scripts to ~/.local/bin
 install-personas:
@@ -37,5 +28,5 @@ install-personas:
        bin/lewis-jira bin/lewis-pr \
        {{home_dir}}/.local/bin/
 
-# Build and sync Carl into Augment
-install: build sync-augment install-personas
+# Build carl and install personas
+install: build install-personas

@@ -1,12 +1,12 @@
 {
   "$schema": "https://raw.githubusercontent.com/jetify-com/devbox/0.16.0/.schema/devbox.schema.json",
   "packages": [
-    "zig@0.15.2",
+    "nodejs@20",
     "just@latest"
   ],
   "shell": {
     "init_hook": [
-      "echo 'Carl development environment ready. Zig 0.15.2 available.'"
+      "echo 'Carl development environment ready. Node.js 20 available.'"
     ],
     "scripts": {
       "build": [
@@ -18,11 +18,8 @@
       "run": [
         "just run -- \"$@\""
       ],
-      "sync-augment": [
-        "just sync-augment"
-      ],
       "install": [
-        "OPTIMIZE=ReleaseSafe just install"
+        "just install"
       ]
     }
   }
