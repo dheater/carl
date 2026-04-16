@@ -63,9 +63,9 @@ describe('Workflow Loop', () => {
 
     const state = stateManager.load();
     expect(state.status).toBe('awaiting_approval');
-    expect(state.current_phase).toBe('commit-review-gate');
-    expect(state.history).toHaveLength(3); // lewis-qa, lewis, commit-review-gate
-    expect(mockPrompt).toHaveBeenCalledTimes(3);
+    expect(state.current_phase).toBe('lewis');
+    expect(state.history).toHaveLength(2); // lewis-qa, lewis
+    expect(mockPrompt).toHaveBeenCalledTimes(2);
   });
 
   test('completes workflow after the last phase', async () => {
@@ -76,12 +76,38 @@ describe('Workflow Loop', () => {
     expect(state.status).toBe('awaiting_approval');
     expect(state.current_phase).toBe('commit-review-gate');
 
-    // Approve the final gate
     const { approveCommand } = require('./commands');
     approveCommand(tmpDir);
 
     const finalState = stateManager.load();
     expect(finalState.status).toBe('completed');
     expect(finalState.current_phase).toBe('commit-review-gate');
+  });
+
+  test('grey blocker transitions back to dani', async () => {
+    stateManager.update({ current_phase: 'grey', status: 'running' });
+    mockPrompt.mockResolvedValueOnce('I am blocked: missing PRD info');
+
+    // It will run grey, get blocked, transition to dani, run dani, then dani-tickets, grey, etc.
+    // To prevent infinite loop in tests, let's mock the second prompt (dani) to throw so it stops,
+    // or we can just let it run but we need to limit the mockPrompt resolved values or mock getNextPhase.
+    // Wait, let's mock prompt to throw after dani to stop the loop.
+    mockPrompt.mockRejectedValueOnce(new Error('stop loop'));
+
+    await expect(runLoop(stateManager)).rejects.toThrow('stop loop');
+
+    const state = stateManager.load();
+    // grey (blocked) -> dani (throws)
+    expect(state.history).toHaveLength(2);
+    expect(state.history![0]).toEqual(expect.objectContaining({
+      phase: 'grey',
+      status: 'blocked',
+      outputs: 'I am blocked: missing PRD info'
+    }));
+    expect(state.history![1]).toEqual(expect.objectContaining({
+      phase: 'dani',
+      status: 'failed',
+    }));
+    expect(state.current_phase).toBe('dani');
   });
 });

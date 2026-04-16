@@ -1,5 +1,5 @@
 import { StateManager } from './state';
-import { getNextPhase, getPriorPhase } from './graph';
+import { getNextPhase, getFallbackPhase } from './graph';
 
 export function approveCommand(workspaceRoot: string): void {
   const stateManager = new StateManager(workspaceRoot);
@@ -23,7 +23,7 @@ export function rejectCommand(workspaceRoot: string, reason: string): void {
   }
 
   const history = state.history || [];
-  const priorPhase = getPriorPhase(state.current_phase) || 'dani';
+  const priorPhase = getFallbackPhase(state.current_phase);
 
   history.push({
     phase: state.current_phase,

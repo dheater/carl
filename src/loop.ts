@@ -1,5 +1,5 @@
 import { StateManager } from "./state";
-import { getNextPhase } from "./graph";
+import { getNextPhase, getFallbackPhase } from "./graph";
 import * as path from "path";
 import * as fs from "fs";
 
@@ -37,15 +37,27 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
       const instruction = `Follow the ${phaseName} skill.`;
       const response = await client.prompt(instruction, { isAnswerOnly: true });
 
+      const isBlocked = phaseName === 'grey' && /blocked:/i.test(response);
+
       const history = state.history || [];
       history.push({
         phase: phaseName,
         model: model,
-        status: 'success',
+        status: isBlocked ? 'blocked' : 'success',
         outputs: response
       });
 
-      const isGate = phaseName.endsWith('-gate');
+      if (isBlocked) {
+        const fallback = getFallbackPhase(phaseName);
+        state = stateManager.update({
+          history,
+          current_phase: fallback,
+        });
+        console.log(`Phase ${phaseName} reported a blocker. Handing back to ${fallback}.`);
+        continue;
+      }
+
+      const isGate = phaseName.endsWith('-gate') || phaseName === 'lewis';
       const nextPhase = getNextPhase(phaseName);
 
       if (isGate) {

@@ -45,8 +45,8 @@ describe('Commands', () => {
 
     const state = stateManager.load();
     expect(state.status).toBe('running');
-    expect(state.current_phase).toBe('grey'); // The one before qa-gate
-    
+    expect(state.current_phase).toBe('dani'); // The one before qa-gate is dani according to fallback logic
+
     // History should have the rejection logged
     expect(state.history).toHaveLength(3);
     expect(state.history![2]).toEqual({
@@ -57,20 +57,37 @@ describe('Commands', () => {
     });
   });
 
-  test('rejectCommand handles short history', () => {
+  test('rejectCommand on qa-gate transitions back to dani', () => {
     stateManager.update({
       current_phase: 'qa-gate',
       status: 'awaiting_approval',
-      history: [
-        { phase: 'qa-gate', model: 'sonnet4.5', status: 'success', outputs: 'please approve' }
-      ]
     });
-
-    rejectCommand(tmpDir, 'No reason');
-
+    rejectCommand(tmpDir, 'qa failed');
     const state = stateManager.load();
+    expect(state.current_phase).toBe('dani');
     expect(state.status).toBe('running');
-    expect(state.current_phase).toBe('grey'); // Configured prior phase
+  });
+
+  test('rejectCommand on lewis transitions back to grey', () => {
+    stateManager.update({
+      current_phase: 'lewis',
+      status: 'awaiting_approval',
+    });
+    rejectCommand(tmpDir, 'lewis rejected');
+    const state = stateManager.load();
+    expect(state.current_phase).toBe('grey');
+    expect(state.status).toBe('running');
+  });
+
+  test('rejectCommand on commit-review-gate transitions back to grey', () => {
+    stateManager.update({
+      current_phase: 'commit-review-gate',
+      status: 'awaiting_approval',
+    });
+    rejectCommand(tmpDir, 'commit rejected');
+    const state = stateManager.load();
+    expect(state.current_phase).toBe('grey');
+    expect(state.status).toBe('running');
   });
 
   test('rejectCommand throws if not awaiting_approval', () => {

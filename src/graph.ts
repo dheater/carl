@@ -16,10 +16,17 @@ export function getNextPhase(currentPhase: string): string | null {
   return HAPPY_PATH_GRAPH[index + 1];
 }
 
-export function getPriorPhase(currentPhase: string): string | null {
-  const index = HAPPY_PATH_GRAPH.indexOf(currentPhase);
-  if (index <= 0) {
-    return null;
+export function getFallbackPhase(currentPhase: string): string {
+  switch (currentPhase) {
+    case 'qa-gate':
+      return 'dani';
+    case 'lewis-qa':
+    case 'lewis':
+    case 'commit-review-gate':
+      return 'grey';
+    case 'grey':
+      return 'dani';
+    default:
+      return 'dani';
   }
-  return HAPPY_PATH_GRAPH[index - 1];
 }
