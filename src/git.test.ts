@@ -1,4 +1,4 @@
-import { detectGit, getGitStatus } from "./git";
+import { detectGit, getGitStatus, getCurrentBranch } from "./git";
 import { execSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
@@ -68,6 +68,37 @@ describe("Git operations", () => {
       expect(status.isRepo).toBe(true);
       expect(status.trackedChanged).toEqual([]);
       expect(status.untracked).toEqual([]);
+    });
+  });
+
+  describe("getCurrentBranch", () => {
+    test("returns branch name when in a git repo", () => {
+      mockExecSync.mockReturnValue("main\n" as any);
+      expect(getCurrentBranch("/tmp/test")).toBe("main");
+      expect(mockExecSync).toHaveBeenCalledWith(
+        "git rev-parse --abbrev-ref HEAD",
+        expect.objectContaining({ cwd: "/tmp/test", stdio: "pipe" }),
+      );
+    });
+
+    test("returns ticket branch name with trimming", () => {
+      mockExecSync.mockReturnValue("CLIENTS-934-download-fixes\n" as any);
+      const branch = getCurrentBranch("/tmp/test");
+      expect(branch).toBe("CLIENTS-934-download-fixes");
+    });
+
+    test("returns null when git fails", () => {
+      mockExecSync.mockImplementation(() => {
+        throw new Error("not a git repo");
+      });
+      expect(getCurrentBranch("/tmp/test")).toBeNull();
+    });
+
+    test("returns null when called without workspaceRoot", () => {
+      mockExecSync.mockImplementation(() => {
+        throw new Error("git failed");
+      });
+      expect(getCurrentBranch()).toBeNull();
     });
   });
 });

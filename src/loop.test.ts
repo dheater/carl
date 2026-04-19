@@ -372,3 +372,94 @@ describe("Skill files - deterministic format/lint integration", () => {
     expect(content).toMatch(/format/i);
   });
 });
+
+// Tests for t-1: buildSkillInstruction includes branch context and proposed commit message section
+describe("buildSkillInstruction for reviewer with branch context", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-skill-test-"));
+    // Create required skill files
+    const skillsDir = path.join(tmpDir, "skills");
+    fs.mkdirSync(skillsDir);
+    fs.writeFileSync(
+      path.join(skillsDir, "reviewer.md"),
+      "# Reviewer skill\n\nValidate the work.",
+    );
+    fs.writeFileSync(
+      path.join(skillsDir, "developer.md"),
+      "# Developer skill\n\nImplement the code.",
+    );
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    jest.clearAllMocks();
+  });
+
+  test("reviewer instructions include Proposed commit message section with branch context for ticket branch", async () => {
+    // Mock git functions for this test
+    const gitModule = require("./git");
+    (gitModule.getCurrentBranch as jest.Mock) = jest
+      .fn()
+      .mockReturnValue("CLIENTS-934-download-fixes");
+    (gitModule.getGitStatus as jest.Mock) = jest.fn().mockReturnValue({
+      isRepo: true,
+      trackedChanged: ["src/index.ts"],
+      untracked: [],
+    });
+
+    const loopModule = require("./loop");
+    const instruction = loopModule.buildSkillInstruction("reviewer", tmpDir);
+
+    // AC 1: Instructions include "## Proposed commit message" heading
+    expect(instruction).toMatch(/## Proposed commit message/i);
+
+    // AC 2: Instructions tell agent to produce subject + body for code changes
+    expect(instruction).toMatch(/subject.*body|commit subject|commit message/i);
+    expect(instruction).toMatch(/code.*changes|behavior.*changes/i);
+
+    // AC 3: Instructions explicitly tell agent to avoid mentioning gates/phases/checklists in the commit message itself
+    expect(instruction).toMatch(
+      /no mentions?.*gates|phases|checklists|not.*workflow.*meta/i,
+    );
+
+    // AC 4: Instructions include branch name "CLIENTS-934-download-fixes"
+    expect(instruction).toMatch(/CLIENTS-934-download-fixes/);
+
+    // AC 5: Instructions show current branch context clearly
+    expect(instruction).toMatch(/current branch/i);
+  });
+
+  test("reviewer instructions use conventional-commit prefix for non-ticket branch", async () => {
+    const gitModule = require("./git");
+    (gitModule.getCurrentBranch as jest.Mock) = jest
+      .fn()
+      .mockReturnValue("main");
+    (gitModule.getGitStatus as jest.Mock) = jest.fn().mockReturnValue({
+      isRepo: true,
+      trackedChanged: ["src/index.ts"],
+      untracked: [],
+    });
+
+    const loopModule = require("./loop");
+    const instruction = loopModule.buildSkillInstruction("reviewer", tmpDir);
+
+    // AC: For non-ticket branch, guidance calls for conventional-commit prefix
+    expect(instruction).toMatch(/fix:|chore:|feat:|docs:|refactor:|style:/i);
+    expect(instruction).toMatch(/conventional.?commit/i);
+  });
+
+  test("reviewer instructions for non-reviewer phases are not affected", async () => {
+    const gitModule = require("./git");
+    (gitModule.getCurrentBranch as jest.Mock) = jest
+      .fn()
+      .mockReturnValue("CLIENTS-934-download-fixes");
+
+    const loopModule = require("./loop");
+    const instruction = loopModule.buildSkillInstruction("developer", tmpDir);
+
+    // Developer instructions should NOT include proposed commit message section
+    expect(instruction).not.toMatch(/## Proposed commit message/i);
+  });
+});

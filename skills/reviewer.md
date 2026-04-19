@@ -17,7 +17,7 @@ next_skills:
 
 ## Starting a session
 
-Present three sections: a validation summary, an automated evidence summary, and a human validation checklist.
+Present four sections: a validation summary, an automated evidence summary, a human validation checklist, and a proposed commit message section.
 
 ### 1. Validation — did we build the right thing?
 
@@ -71,7 +71,28 @@ Save and close to approve. Write `reject: <what failed and what you observed>` o
 
 Each step must be runnable and have an observable, unambiguous expected outcome. Avoid vague steps like "check that it works."
 
-### 4. Approval
+### 4. Proposed commit message
+
+Before human approval, produce a `## Proposed commit message` section with a real commit subject and optional short body:
+
+```
+## Proposed commit message
+
+CLIENTS-934: Fix download timeout handling
+
+Increase default timeout from 30s to 60s in HTTP client.
+```
+
+**Subject line** (required):
+- On a **ticket branch** (e.g., `CLIENTS-934-download-fixes`): Include the ticket prefix and a summary of code changes (e.g., `CLIENTS-934: Fix download timeout handling`)
+- On a **non-ticket branch** (e.g., `main`, `master`): Use a conventional-commit prefix (`fix:`, `chore:`, `feat:`, `docs:`, etc.) with a summary of code changes (e.g., `fix: Download timeout handling`)
+- **Never mention** gates, phases, or process checklists in the commit subject or body — focus only on what code changed and why
+
+**Body** (optional): A short paragraph explaining the why and what if needed.
+
+The system will extract this section when committing with human approval.
+
+### 5. Approval
 
 The workflow reads the file when the human saves and closes:
 

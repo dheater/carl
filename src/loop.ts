@@ -8,7 +8,7 @@ import {
 } from "./graph";
 import { blue, yellow } from "./colors";
 import { runJustFormat, runJustLint } from "./just";
-import { getGitStatus } from "./git";
+import { getGitStatus, getCurrentBranch } from "./git";
 import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
@@ -57,7 +57,7 @@ function parsePrerequisites(skillContent: string): string[] {
   return (block[1].match(/\S+/g) ?? []).filter((s) => s !== "-");
 }
 
-function buildSkillInstruction(
+export function buildSkillInstruction(
   phaseName: string,
   workspaceRoot?: string,
 ): string {
@@ -76,8 +76,47 @@ function buildSkillInstruction(
     }
   }
 
-  // For reviewer phase, include deterministic context: git status and lint results
+  // For reviewer phase, include deterministic context: git status, branch context, lint results, and proposed commit message section
   if (phaseName === "reviewer" && workspaceRoot) {
+    // Add branch context section
+    const branch = getCurrentBranch(workspaceRoot);
+    if (branch) {
+      instruction += `\n\n---\n\n# Current branch\n\n\`${branch}\`\n\n`;
+    }
+
+    // Add proposed commit message guidance section
+    instruction += "\n\n---\n\n# Proposed commit message\n\n";
+    instruction +=
+      "After you finish your validation, provide a `## Proposed commit message` section " +
+      "with a real commit subject and optional short body. This message should:\n\n";
+    instruction += "- **Subject line** (required): ";
+    if (branch && branch !== "main" && branch !== "master") {
+      // Ticket branch: use ticket-prefix format
+      instruction +=
+        "Start with the ticket prefix extracted from the current branch name (e.g., `CLIENTS-934:`). " +
+        "Follow it with a concise summary of code/behavior changes, not workflow meta (no mentions of gates, phases, or checklists).\n\n";
+    } else {
+      // Non-ticket branch: use conventional commit
+      instruction +=
+        "Use a conventional-commit style prefix (`fix:`, `chore:`, `feat:`, `docs:`, `refactor:`, `style:`, etc.) " +
+        "followed by a concise summary of code/behavior changes, not workflow meta (no mentions of gates, phases, or checklists).\n\n";
+    }
+    instruction +=
+      "- **Body** (optional): A short paragraph explaining the why and what if needed, keeping focus on code changes.\n\n";
+    instruction += "Example:\n\n";
+    instruction += "```\n";
+    instruction += "## Proposed commit message\n\n";
+    if (branch && branch !== "main" && branch !== "master") {
+      instruction += "CLIENTS-934: Fix download timeout handling\n\n";
+      instruction +=
+        "Increase default timeout from 30s to 60s in HTTP client.\n";
+    } else {
+      instruction += "fix: Download timeout handling\n\n";
+      instruction +=
+        "Increase default timeout from 30s to 60s in HTTP client.\n";
+    }
+    instruction += "```\n";
+
     // Add files changed section
     const gitStatus = getGitStatus(workspaceRoot);
     if (gitStatus.isRepo) {

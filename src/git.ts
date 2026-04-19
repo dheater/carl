@@ -18,6 +18,19 @@ export function detectGit(): boolean {
   }
 }
 
+export function getCurrentBranch(workspaceRoot?: string): string | null {
+  try {
+    const output = execSync("git rev-parse --abbrev-ref HEAD", {
+      cwd: workspaceRoot,
+      stdio: "pipe",
+      encoding: "utf-8",
+    });
+    return output.trim();
+  } catch {
+    return null;
+  }
+}
+
 export function getGitStatus(workspaceRoot: string): GitStatus {
   try {
     const isRepo = detectGit();

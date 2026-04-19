@@ -1,6 +1,6 @@
 import { execSync, spawnSync } from "child_process";
 import * as readline from "readline";
-import { detectGit, getGitStatus } from "./git";
+import { detectGit, getGitStatus, getCurrentBranch } from "./git";
 
 export interface CommitOptions {
   workspaceRoot: string;
@@ -35,6 +35,61 @@ export function promptForCommit(
       resolve(answer.toLowerCase() === "y");
     });
   });
+}
+
+export function parseProposedCommitMessage(text: string): string | null {
+  // Find the "## Proposed commit message" section
+  const match = text.match(
+    /##\s+Proposed commit message\s*\n([\s\S]*?)(?=\n##|\Z)/i,
+  );
+  if (!match) {
+    return null;
+  }
+
+  const section = match[1];
+  // Get non-empty lines from the section
+  const lines = section
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter((line) => line.length > 0);
+
+  if (lines.length === 0) {
+    return null;
+  }
+
+  // Return all non-empty lines from the section
+  return lines.join("\n");
+}
+
+export function buildCommitMessageFromReviewerOutput(
+  reviewerMessage: string,
+  currentBranch: string,
+): string {
+  // Try to extract the proposed commit message section
+  const proposedMsg = parseProposedCommitMessage(reviewerMessage);
+
+  if (proposedMsg) {
+    return proposedMsg;
+  }
+
+  // Fallback: Use branch-specific default if no proposed section found
+  // Detect if this is a ticket branch (contains dash and non-numeric prefix)
+  const isTicketBranch =
+    currentBranch &&
+    /^[A-Z]+-\d+/.test(currentBranch) &&
+    currentBranch !== "main" &&
+    currentBranch !== "master";
+
+  if (isTicketBranch) {
+    // Extract ticket prefix (e.g., "CLIENTS-934" from "CLIENTS-934-download-fixes")
+    const ticketMatch = currentBranch.match(/^([A-Z]+-\d+)/);
+    if (ticketMatch) {
+      return `${ticketMatch[1]}: Sprint changes`;
+    }
+  }
+
+  // Default fallback for non-ticket branches
+  return "chore: Sprint changes";
 }
 
 export function stageAndCommit(
@@ -89,8 +144,15 @@ export async function handleReviewerCommit(
     return;
   }
 
+  // Parse the proposed commit message from reviewer output
+  const currentBranch = getCurrentBranch(workspaceRoot);
+  const commitMessage = buildCommitMessageFromReviewerOutput(
+    reviewerMessage,
+    currentBranch || "main",
+  );
+
   // Stage tracked changes and commit using git editor
-  const success = stageAndCommit(workspaceRoot, reviewerMessage);
+  const success = stageAndCommit(workspaceRoot, commitMessage);
   if (success) {
     console.log("  [System] Changes committed successfully.");
   } else {
