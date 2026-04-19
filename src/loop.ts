@@ -21,6 +21,19 @@ let sharedClient: any | null = null;
 let sharedClientPhase: string | null = null;
 let sharedClientRunId: string | null = null;
 
+export async function closeSharedClient(): Promise<void> {
+  if (sharedClient) {
+    try {
+      await sharedClient.close();
+    } catch {
+      // Best-effort close; errors here shouldn't prevent workflow completion
+    }
+    sharedClient = null;
+    sharedClientPhase = null;
+    sharedClientRunId = null;
+  }
+}
+
 function loadSkillFile(name: string): string {
   const candidates = [
     path.join(CARL_SKILLS_DIR, `${name}.md`),

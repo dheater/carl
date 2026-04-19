@@ -129,9 +129,7 @@ describe("End-to-End Workflow Harness", () => {
     expect(phases.indexOf("developer")).toBeLessThan(
       phases.indexOf("verifier"),
     );
-    expect(phases.indexOf("verifier")).toBeLessThan(
-      phases.indexOf("reviewer"),
-    );
+    expect(phases.indexOf("verifier")).toBeLessThan(phases.indexOf("reviewer"));
 
     expect(state.current_phase).toBe("reviewer");
     expect(state.status).toBe("awaiting_approval");
@@ -190,9 +188,7 @@ describe("End-to-End Workflow Harness", () => {
     const slicePlan =
       "# Feature X\n\n## [ ] t-1: Build thing\n\nAC:\n- It works\n";
     mockPrompt.mockReset();
-    mockPrompt
-      .mockResolvedValueOnce(slicePlan)
-      .mockResolvedValue("success");
+    mockPrompt.mockResolvedValueOnce(slicePlan).mockResolvedValue("success");
 
     await runLoop(stateManager);
     approveCommand(tmpDir);
@@ -200,6 +196,67 @@ describe("End-to-End Workflow Harness", () => {
     const ticketsPath = path.join(tmpDir, ".agent", "tickets.md");
     expect(fs.existsSync(ticketsPath)).toBe(true);
     expect(fs.readFileSync(ticketsPath, "utf-8")).toBe(slicePlan);
+  });
+
+  test("workflow completion closes shared client and clears resources", async () => {
+    mockPrompt
+      .mockResolvedValueOnce(
+        "# Tickets\n\n## [ ] t-1: Sample ticket\n\nAC:\n- Sample acceptance criteria",
+      )
+      .mockResolvedValueOnce("developer output")
+      .mockResolvedValue("success");
+
+    // Run to architect and approve
+    await runLoop(stateManager);
+    let state = stateManager.load();
+    expect(state.current_phase).toBe("architect");
+    expect(state.status).toBe("awaiting_approval");
+
+    approveCommand(tmpDir);
+
+    // Run to reviewer and approve (should close client on completion)
+    await runLoop(stateManager);
+    state = stateManager.load();
+    expect(state.current_phase).toBe("reviewer");
+    expect(state.status).toBe("awaiting_approval");
+
+    // Approve reviewer to mark as completed
+    approveCommand(tmpDir);
+    state = stateManager.load();
+    expect(state.status).toBe("completed");
+
+    // Now try a second workflow. It should succeed without "already active" error.
+    stateManager.create(tmpDir, "second run prompt");
+    const newState = stateManager.load();
+    expect(newState.run_id).not.toBe(state.run_id); // Different run
+    expect(newState.status).toBe("running");
+  });
+
+  test("approveCommand at reviewer phase marks workflow as completed", async () => {
+    mockPrompt
+      .mockResolvedValueOnce(
+        "# Tickets\n\n## [ ] t-1: Sample ticket\n\nAC:\n- Sample acceptance criteria",
+      )
+      .mockResolvedValueOnce("developer output")
+      .mockResolvedValue("reviewer approval message");
+
+    // Run to architect and approve
+    await runLoop(stateManager);
+    approveCommand(tmpDir);
+
+    // Run to reviewer and approve
+    await runLoop(stateManager);
+    let state = stateManager.load();
+    expect(state.current_phase).toBe("reviewer");
+    expect(state.status).toBe("awaiting_approval");
+
+    // Approve reviewer
+    approveCommand(tmpDir);
+    state = stateManager.load();
+
+    // Should be marked as completed
+    expect(state.status).toBe("completed");
+    expect(state.current_phase).toBe("reviewer");
   });
 
   test("architect approval is refused when the last architect output is not a slice plan", async () => {

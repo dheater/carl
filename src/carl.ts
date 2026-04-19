@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
 import { StateManager } from "./state";
-import { runLoop } from "./loop";
+import { runLoop, closeSharedClient } from "./loop";
 import { approveCommand, rejectCommand, replyCommand } from "./commands"; // used by runWithEditor
+import { handleReviewerCommit } from "./commit";
 import { openEditorForGate, collectPrompt } from "./editor";
 import { red, blue } from "./colors";
 
@@ -10,45 +11,61 @@ async function runWithEditor(
   stateManager: StateManager,
   workspaceRoot: string,
 ): Promise<void> {
-  while (true) {
-    await runLoop(stateManager);
-    const state = stateManager.load();
+  try {
+    while (true) {
+      await runLoop(stateManager);
+      const state = stateManager.load();
 
-    if (state.status !== "awaiting_approval") break;
+      if (state.status !== "awaiting_approval") break;
 
-    const phase = state.current_phase;
-    const lastOutput =
-      state.history
-        ?.slice()
-        .reverse()
-        .find((h) => h.phase === phase && h.status !== "rejected")?.outputs ??
-      "";
-    console.log(
-      `\n  [System] ${phase} is waiting for your input. Opening editor...\n`,
-    );
-    const result = openEditorForGate(phase, lastOutput);
-
-    if (result.action === "approve") {
-      approveCommand(workspaceRoot);
-      const next = stateManager.load();
-      if (next.status === "completed") {
-        console.log("\n  [System] Workflow complete. Sprint approved.\n");
-        break;
-      }
-      // continue loop to run the next phase
-    } else if (result.action === "reject") {
-      rejectCommand(workspaceRoot, result.reason, result.target);
-      const after = stateManager.load();
+      const phase = state.current_phase;
+      const lastOutput =
+        state.history
+          ?.slice()
+          .reverse()
+          .find((h) => h.phase === phase && h.status !== "rejected")?.outputs ??
+        "";
       console.log(
-        blue(
-          `  [System] ${phase} rejected. Returning to ${after.current_phase}.`,
-        ),
+        `\n  [System] ${phase} is waiting for your input. Opening editor...\n`,
       );
-      // continue loop — workflow resumes at the fallback phase (or explicit target)
-    } else {
-      replyCommand(workspaceRoot, result.message);
-      // continue loop — re-runs current phase with reply injected
+      const result = openEditorForGate(phase, lastOutput);
+
+      if (result.action === "approve") {
+        approveCommand(workspaceRoot);
+        const next = stateManager.load();
+        if (next.status === "completed") {
+          // If we just completed at reviewer phase, offer to commit
+          if (phase === "reviewer") {
+            const reviewerOutput =
+              (next.history || [])
+                .slice()
+                .reverse()
+                .find(
+                  (h: any) => h.phase === "reviewer" && h.status === "success",
+                )?.outputs ?? "Summary: Code review completed";
+            await handleReviewerCommit(workspaceRoot, reviewerOutput);
+          }
+          console.log("\n  [System] Workflow complete. Sprint approved.\n");
+          break;
+        }
+        // continue loop to run the next phase
+      } else if (result.action === "reject") {
+        rejectCommand(workspaceRoot, result.reason, result.target);
+        const after = stateManager.load();
+        console.log(
+          blue(
+            `  [System] ${phase} rejected. Returning to ${after.current_phase}.`,
+          ),
+        );
+        // continue loop — workflow resumes at the fallback phase (or explicit target)
+      } else {
+        replyCommand(workspaceRoot, result.message);
+        // continue loop — re-runs current phase with reply injected
+      }
     }
+  } finally {
+    // Close any lingering handles on normal completion or error
+    await closeSharedClient();
   }
 }
 
@@ -113,6 +130,7 @@ async function main() {
         console.log(
           `Workflow already completed (phase: ${state.current_phase}). Use 'carl start "<prompt>"' to begin a new run, or 'carl reset' to clear state.`,
         );
+        await closeSharedClient();
         process.exit(0);
       }
       console.log(`Resuming workflow from phase: ${state.current_phase}`);
@@ -130,8 +148,25 @@ async function main() {
           `\n  [System] ${phase} is waiting for your input. Opening editor...\n`,
         );
         const result = openEditorForGate(phase, lastOutput);
-        if (result.action === "approve") approveCommand(workspaceRoot);
-        else if (result.action === "reject") {
+        if (result.action === "approve") {
+          approveCommand(workspaceRoot);
+          // Check if this approval completed the workflow at reviewer phase
+          const updatedState = stateManager.load();
+          if (updatedState.status === "completed" && phase === "reviewer") {
+            // Trigger commit step before exiting
+            const reviewerOutput =
+              (updatedState.history || [])
+                .slice()
+                .reverse()
+                .find(
+                  (h: any) => h.phase === "reviewer" && h.status === "success",
+                )?.outputs ?? "Summary: Code review completed";
+            await handleReviewerCommit(workspaceRoot, reviewerOutput);
+            console.log("\n  [System] Workflow complete. Sprint approved.\n");
+            await closeSharedClient();
+            return;
+          }
+        } else if (result.action === "reject") {
           rejectCommand(workspaceRoot, result.reason, result.target);
           const after = stateManager.load();
           console.log(
@@ -144,6 +179,7 @@ async function main() {
       await runWithEditor(stateManager, workspaceRoot);
     } catch (error: any) {
       console.error(red(`Workflow loop failed: ${error.message}`));
+      await closeSharedClient();
       process.exit(1);
     }
   } else if (command === "reset") {
