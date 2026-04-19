@@ -92,18 +92,7 @@ Need functionality?
 
 ## Offline, Reproducible Builds
 
-**Requirements:**
-- Pin versions (lock files, vendored sources)
-- Local caches (Nix store, Zig cache, Artifactory)
-- One-time fetch to populate cache → thereafter offline
-- No network fetch during build (after cache populated)
-
-**CI validation:**
-```bash
-# Validate offline build path
-rm -rf ~/.cache
-./build.sh --offline  # Must succeed after initial cache
-```
+Pin versions (lock files, vendored sources). Local caches (Nix/Zig/Artifactory). No network fetch during build after cache populated.
 
 ---
 
@@ -113,22 +102,13 @@ rm -rf ~/.cache
 - [ ] Can duplicate (≤200 LOC)? Can vendor? Essential?
 - [ ] Fits budget (≤5)? Stable? Supports platforms? Offline build?
 
-**Before creating seam (write one-pager):**
-- Purpose, operations, invariants, error rules, threading/lifetime
+**Before creating seam:** Write a one-pager: purpose, operations, invariants, error rules, threading/lifetime.
 
 ---
 
 ## Enforcement
 
-**Automated:** `carl check_deps`, `carl check_offline_build` (not yet implemented)
+**Automated:** `carl check_deps`
 
 **Code review:** Dependency justified? Alternatives considered? One-pager for seams? Budget respected?
-
----
-
-## References
-
-- `plans/dependencies-and-seams-charter.md`
-- `carl/rules/subtract-first.md`
-- `carl/rules/api-stability.md`
 

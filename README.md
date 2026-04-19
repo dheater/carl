@@ -35,7 +35,7 @@ architect → developer → reviewer
 
 `architect` and `reviewer` are human-approval gates. On a gate, `carl` opens an editor with the agent's output. How you close the editor is how you respond:
 
-- Save unchanged, save an empty buffer, or save the single word `approve` → **approve**
+- Save unchanged, save an empty buffer, or save a single line containing `approve` or `approved` (case-insensitive, with optional surrounding whitespace) → **approve**
 - Save any other content → **reply** (the agent reads your feedback and re-runs the phase)
 - Save `reject: <reason>` → **reject** (fall back to the previous phase)
 

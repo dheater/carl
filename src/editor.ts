@@ -75,6 +75,14 @@ export function openEditorForGate(
   const content = fs.readFileSync(tmpFile, "utf-8");
   fs.unlinkSync(tmpFile);
 
+  return parseEditorGateApproval(content, template);
+}
+
+// Test helper: exposed for unit tests
+export function parseEditorGateApproval(
+  content: string,
+  template: string,
+): EditorAction {
   const nonCommentLines = content
     .split("\n")
     .filter((l) => !l.trimStart().startsWith("#"));
@@ -89,9 +97,17 @@ export function openEditorForGate(
     return { action: "reject", reason, ...(target ? { target } : {}) };
   }
 
-  // Explicit approve signal: "approve" or "approve: ..." on its own line (unindented)
+  // Explicit approve signal: "approve" or "approved" with optional surrounding whitespace
+  // Also supports "approve: ..." syntax for backwards compatibility
   const approveMatch = nonCommentLines
-    .map((l) => l.match(/^approve(?::\s*(.*))?$/i))
+    .map((l) => {
+      const trimmed = l.trim();
+      // Match "approve" or "approved" as sole content (case-insensitive)
+      if (/^approved?(?::\s*.*)?$/i.test(trimmed)) {
+        return trimmed;
+      }
+      return null;
+    })
     .find(Boolean);
   if (approveMatch) {
     return { action: "approve" };

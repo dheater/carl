@@ -67,37 +67,21 @@ Multiple temporary allocations with same lifetime?
 
 ### errdefer for Cleanup
 
-**Use in init functions. Automatic cleanup on error.**
+Use in init functions with multiple resources. Automatic cleanup on error, compiler-verified.
 
 ```zig
-// ✅ DO
 pub fn init(allocator: std.mem.Allocator) !AppContext {
     try sdl.init(sdl.SDL_INIT_VIDEO);
     errdefer sdl.quit();
-
     const window = try sdl.createWindow("App", 1200, 800, 0);
     errdefer sdl.destroyWindow(window);
-
     const renderer = try sdl.createRenderer(window, null);
     errdefer sdl.destroyRenderer(renderer);
-
     return AppContext{ .window = window, .renderer = renderer };
-}
-
-// ❌ DON'T - Manual cleanup on every error path
-pub fn init(allocator: std.mem.Allocator) !AppContext {
-    try sdl.init(sdl.SDL_INIT_VIDEO);
-    const window = sdl.createWindow("App", 1200, 800, 0) catch |err| {
-        sdl.quit();
-        return err;
-    };
-    // Fragile: Every new resource requires updating all error paths
 }
 ```
 
-**When to use:** Init functions with multiple resources, cleanup order matters, multiple error paths
-
-**When NOT to use:** Single allocation (use `defer`), no errors (use `defer`)
+**When NOT to use:** Single allocation or no errors (use `defer` instead).
 
 ### Error Unions
 
@@ -153,7 +137,6 @@ defer allocator.free(address_z);
 - [ ] Allocator passed explicitly?
 - [ ] errdefer for multi-resource init?
 - [ ] Type annotations instead of nested casts?
-- [ ] Semantic variable names?
 
 ---
 
@@ -162,11 +145,4 @@ defer allocator.free(address_z);
 **Automated:** `zig build` (compiler catches most issues)
 
 **Code review:** Allocation strategy, errdefer usage, type casting clarity
-
----
-
-## References
-
-- [Zig 0.15.1 Docs](https://ziglang.org/documentation/0.15.1/)
-- `carl/rules/subtract-first.md`
 

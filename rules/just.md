@@ -117,14 +117,5 @@ Environment variable?
 
 ## Enforcement
 
-**Code review:** Check for unnecessary bash, bash-isms, missing doc comments
-
-**Test:** Run on different shells to verify POSIX compatibility
-
----
-
-## References
-
-- [Just Manual](https://just.systems/man/en/)
-- `carl/rules/subtract-first.md`
+**Code review:** Unnecessary bash? Bash-isms? Missing doc comments? Run on multiple shells to verify POSIX compatibility.
 

@@ -82,33 +82,13 @@ test "connect idempotent" {
 
 ## Property-Based Testing
 
-**One property > 100 examples**
-
-```zig
-// ✅ DO: Property test
-test "base64 round-trip" {
-    var prng = std.rand.DefaultPrng.init(0);
-    var i: usize = 0;
-    while (i < 1000) : (i += 1) {
-        var input: [256]u8 = undefined;
-        prng.random().bytes(&input);
-        try std.testing.expectEqualSlices(u8, &input, try decode(try encode(&input)));
-    }
-}
-```
-
-**Properties:** Round-trip, inverse, commutativity, associativity
+One property > 100 examples. Properties: round-trip, inverse, commutativity, associativity.
 
 ---
 
 ## Test at Seams
 
-| ❌ DON'T | ✅ DO |
-|----------|-------|
-| Test internal buffer management | Test public API (create, connect, send) |
-| Test private helper functions | Test observable behavior at boundaries |
-
-**Why:** Seam tests survive refactoring
+Test public API and observable behavior at boundaries, not internals. Seam tests survive refactoring.
 
 ---
 
@@ -118,24 +98,13 @@ test "base64 round-trip" {
 - [ ] Sanitizers enabled? (ASan/UBSan/TSan)
 - [ ] Fuzz targets for parsers?
 - [ ] Golden tests for invariants?
-- [ ] Property tests where applicable?
 - [ ] Error paths tested?
 
 ---
 
 ## Enforcement
 
-**Automated:**
-- `carl check_tests` - Detect test file presence (FAIL if 0 test files)
-- `carl check-ci-config` - Verify sanitizers in CI (TODO)
-- `carl check-fuzz-coverage` - Verify fuzz targets (TODO)
+**Automated:** `carl check_tests` (FAIL if 0 test files)
 
 **Code review:** Tests added? Sanitizers enabled? Fuzz targets for parsers?
-
----
-
-## References
-
-- `plans/native-c-api-stability-plan.md`
-- `carl/rules/api-stability.md`
 

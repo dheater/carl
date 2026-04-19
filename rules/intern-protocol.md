@@ -47,26 +47,7 @@ AI: Stopping. I've been trying to parse this with regex.
     Simpler: Use the existing parser library.
 ```
 
-## Anti-Patterns
+**Don't:** Defend the current approach, suggest "one more thing to try", add complexity, ignore the signal.
 
-**Don't:**
-- Defend the current approach
-- Suggest "one more thing to try"
-- Add more complexity
-- Ignore the reset signal
-
-**Do:**
-- Acknowledge the failure
-- State the actual problem
-- Propose a simpler solution
-- Ask for confirmation before proceeding
-
-## Integration with Carl
-
-The intern protocol embodies Carl's core principles:
-- **Subtract first** - Remove complexity when stuck
-- **Simplify ruthlessly** - Simpler solutions over clever ones
-- **Question everything** - Challenge assumptions when failing
-
-**Use this when Carl's principles aren't being followed.**
+**Do:** Acknowledge the failure, state the actual problem, propose a simpler solution, ask for confirmation.
 

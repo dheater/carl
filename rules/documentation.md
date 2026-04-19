@@ -116,90 +116,23 @@ Two-plane design:
 
 ## Time Estimates
 
-⚠️ **NEVER generate time estimates or timelines.**
-
-**Why:**
-- AI models are bad at estimating (off by 2-10x)
-- Creates false expectations
-- Humans are better at this
-
-**❌ DON'T:**
-```markdown
-**Total effort:** ~470 hours (12 weeks)
-**Implementation time:** 2-3 days
-```
-
-**✅ DO:**
-```markdown
-**Scope:** 4 concrete improvements
-**Complexity:** Medium
-**Dependencies:** None
-```
-
-**If user asks for estimates:**
-- Acknowledge you're bad at this
-- Provide complexity (low/medium/high)
-- Suggest consulting domain experts
-- Provide scope/dependencies instead
-
-**Exception:** Historical data (actual time spent) is OK.
+⚠️ **NEVER generate time estimates or timelines.** AI estimates are off by 2-10x. If asked: provide complexity (low/medium/high) and scope/dependencies instead. Historical actual data is OK.
 
 ---
 
 ## Agent Notes
 
-**Location:** `.agent/notes/` (gitignored)
-
-**Purpose:** Temporary notes, summaries, analysis
-
-**Format:**
-```
-.agent/notes/
-  2025-01-12-refactor-summary.md
-  investigation-async-io.md
-```
-
-**No structure required** - these are ephemeral.
+**Location:** `.agent/notes/` (gitignored). Temporary notes, summaries, analysis. No structure required.
 
 ---
 
 ## Enforcement
 
-**Automated (limited):**
-- `carl check_docs` - Detects new .md files in uncommitted changes
-  - Only checks git diff (not overall doc quality)
-  - Can't assess if docs are overwhelming or helpful
-  - Use as indicator for "did AI create unsolicited docs"
+**Automated:** `carl check_docs` — detects new .md files in uncommitted changes (indicator only).
 
-**AI Review (recommended):**
-- Trigger: "review project" or "review code" prompt
-- AI can assess:
-  - Is documentation overwhelming or helpful?
-  - Does README explain too much or too little?
-  - Are there redundant .md files?
-  - Can docs be consolidated or deleted?
-
-**Manual:**
-- Code review: Challenge every new .md file
-  - Did user request this?
-  - Can we delete it?
-  - Can we simplify it?
-
----
-
-## Before Creating Any .md File
-
-**Self-check:**
-1. Did user explicitly ask for docs? If NO → Don't create
-2. Is this agent notes? If YES → Use `.agent/notes/`
-3. Is this user docs? If YES → Verify user requested it
-4. Can we improve code instead? If YES → Refactor, don't document
-
----
-
-## References
-
-- Self-documenting code (see subtract-first.md)
-- Code comments for details (see comments.md)
-- Agent notes location (see file-organization.md)
+**Before creating any .md file:**
+1. Did user explicitly ask? If NO → Don't create
+2. Agent notes? → Use `.agent/notes/`
+3. User docs? → Verify user requested it
+4. Can we improve code instead? → Refactor, don't document
 

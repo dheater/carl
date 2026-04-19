@@ -95,38 +95,15 @@ carl check-slos --baseline baseline.json --current current.json
 
 ## Performance Debugging
 
-**Profile before architectural changes:**
-```bash
-perf record -g ./app --benchmark && perf report
-valgrind --tool=massif ./app --benchmark
-zig build -Dsanitize=address
-```
-
-**Document wins:**
-```
-Optimization: Hash map instead of linear search
-Before: p95=150ms, CPU=95%
-After: p95=12ms, CPU=45%
-Improvement: 12.5x latency, 2.1x CPU
-```
-
-**Avoid premature optimization:** Profile → identify bottleneck → optimize specific path
+Profile before architectural changes. Document wins with before/after numbers. Avoid premature optimization: profile → identify bottleneck → optimize specific path.
 
 ---
 
 ## Checklists
 
-**Adding SLOs:**
-- [ ] Metrics identified, thresholds set
-- [ ] Repro harness (<5 min, representative)
-- [ ] Baseline captured, CI publishes metrics
+**Adding SLOs:** Metrics identified, thresholds set, repro harness (<5 min), baseline captured, CI publishes metrics.
 
-**Optimizing:**
-- [ ] Profiled, bottleneck identified
-- [ ] Baseline captured, improvement documented
-- [ ] No regressions in other metrics
-
-
+**Optimizing:** Profiled, bottleneck identified, baseline captured, improvement documented, no regressions.
 
 ---
 
@@ -135,11 +112,4 @@ Improvement: 12.5x latency, 2.1x CPU
 **Automated:** `carl check-slos`, `carl check-benchmark`
 
 **Code review:** Performance claims have numbers? Baseline captured? Profiling done?
-
----
-
-## References
-
-- `plans/metrics-and-slos.md`
-- `carl/rules/subtract-first.md`
 

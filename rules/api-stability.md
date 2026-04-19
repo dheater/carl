@@ -31,29 +31,19 @@ Applications may use CalVer (`YYYY.MM.PATCH`) - no public API to break.
 
 ## Versioning
 
-**Libraries:** SemVer `MAJOR.MINOR.PATCH` with `-beta.N` / `-rc.N`
-- MAJOR: Breaking changes (rare, clean break)
-- MINOR: New features (backward compatible)
-- PATCH: Bug fixes
+**Libraries:** SemVer `MAJOR.MINOR.PATCH`. MAJOR: breaking (rare, clean break). MINOR: backward-compatible features. PATCH: bug fixes.
 
-**Applications:** CalVer `YYYY.MM.PATCH` (no public API)
+**Applications:** CalVer `YYYY.MM.PATCH` (no public API).
 
-**Evolution:** Add-only (new APIs/options/fields). Never change defaults.
-
-**Deprecations:** Warn first, remove in next major version
-
-**LTS:** 24-36 months per major version
+**Evolution:** Add-only. Never change defaults. Deprecate first, remove in next major. LTS: 24-36 months per major.
 
 ## Enforcement
 
-**ABI checks:**
-- Linux: `abidiff old.so new.so` (fail CI on breaks)
-- macOS: `nm -g new.dylib | diff - expected_symbols.txt`
-- Windows: `.def` file or decorated exports
+**ABI checks:** Linux: `abidiff old.so new.so` | macOS: `nm -g new.dylib | diff - expected_symbols.txt` | Windows: `.def` file
 
 **Header checks:** `clang -Xclang -ast-dump=json public.h` (diff against baseline)
 
-**CI:** Build LTS + HEAD, run ABI diff, header diff, sanitizers, fuzz
+**CI:** Build LTS + HEAD, ABI diff, header diff, sanitizers, fuzz
 
 ## Checklist
 

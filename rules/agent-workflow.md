@@ -51,35 +51,13 @@ Use deterministic tools for deterministic work. Use AI for judgment. Pause for a
 
 ## Workflow
 
-For substantial work:
-1. Clarify the problem
-2. Research constraints
-3. Explore interfaces if needed
-4. Write PRD or plan if user wants a durable artifact
-5. Slice vertically
-6. Execute with TDD
-7. Run QA
-8. Ask for approval before commit/PR/posting
+For substantial work: clarify → research → explore → plan → slice vertically → TDD → QA → approval gate.
 
 ---
 
 ## Enforcement
 
-**Apply during:**
-- Planning
-- Implementation
-- Review
-- Ticket/PR preparation
-
 **Fail conditions:**
 - Claimed verification without running commands
 - Committed or posted without approval
 - Used AI as substitute for deterministic checks
-
----
-
-## References
-
-- `rules/testing.md`
-- `rules/documentation.md`
-- `skills/tdd-vertical-slices.md`

@@ -136,43 +136,11 @@ public:
 
 ## Compiler Flags
 
-### Recommended Warning Flags
+**Common:** `-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wshadow -Wcast-qual -Wcast-align`
 
-**C and C++ (common):**
-```
--Wall                # Enable most warnings
--Wextra              # Additional warnings beyond -Wall
--Wpedantic           # Strict ISO C/C++ compliance
--Wconversion         # Implicit type conversions that may change value
--Wsign-conversion    # Implicit conversions between signed/unsigned
--Wshadow             # Variable shadowing
--Wcast-qual          # Casting away const/volatile qualifiers
--Wcast-align         # Pointer casts with increased alignment requirements
-```
+**C-only:** `-Wstrict-prototypes -Wmissing-prototypes`
 
-**C-specific:**
-```
--Wstrict-prototypes  # Functions declared without argument types
--Wmissing-prototypes # Global functions without prior prototypes
-```
+**C++-only:** `-Wnon-virtual-dtor -Wold-style-cast -Woverloaded-virtual -Wdeprecated-copy-dtor`
 
-**C++-specific:**
-```
--Wnon-virtual-dtor      # Non-virtual destructor in class with virtual functions
--Wold-style-cast        # C-style casts in C++ code
--Woverloaded-virtual    # Overloaded virtual function hides base class virtual
--Wdeprecated-copy-dtor  # Deprecated implicit copy constructor/assignment
-```
-
-**Usage:**
-- Enable all warnings in development builds
-- Treat warnings as errors in CI: `-Werror`
-- Disable specific warnings only when necessary: `-Wno-unused-parameter`
-
----
-
-## References
-
-- [C++ Core Guidelines](https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines)
-- `carl/rules/api-stability.md`, `carl/rules/dependencies.md`
+Enable all in dev. Treat as errors in CI (`-Werror`). Disable specific only when necessary.
 

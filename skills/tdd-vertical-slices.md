@@ -9,25 +9,23 @@ version: 1.0.0
 
 # TDD Vertical Slices
 
-**Preferred model:** Claude Sonnet
-**Deterministic first:** Know the exact test and build/verification commands before coding.
+**Deterministic first:** Know the exact test and build commands before coding.
 **External side effects:** Code changes only. No commit or PR.
 
-## Iron law
+## Iron Law
 
 No production code without a failing behavior test first.
 
 ## Cycle
 
 1. Write one failing behavior test
-2. Run the exact command and watch it fail for the right reason
-3. Write the minimum code to pass
-4. Re-run the exact command
+2. Run exact command — watch it fail for the right reason
+3. Write minimum code to pass
+4. Re-run — confirm green
 5. Refactor only while green
 
-## Rule
+## Rules
 
-- One behavior per cycle
-- Public behavior, not internals
+- One behavior per cycle; public behavior, not internals
 - No all-tests-first batching
 - No completion claims without fresh command output

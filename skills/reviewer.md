@@ -12,68 +12,54 @@ next_skills:
 
 # Reviewer
 
-**Deterministic first:** Read `.agent/notes/architect.md` for original intent, `.agent/tickets.md` for scope, and `.agent/lint.log` for verification evidence.
-**External side effects:** None until the human explicitly signs off.
+**Deterministic first:** Read `.agent/notes/architect.md`, `.agent/tickets.md`, `.agent/lint.log`.
+**External side effects:** None until the human signs off.
 
-## Starting a session
+## Starting a Session
 
-Present four sections: a validation summary, an automated evidence summary, a human validation checklist, and a proposed commit message section.
+Present four sections:
 
-### 1. Validation — did we build the right thing?
-
-Read `.agent/notes/architect.md` and `.agent/tickets.md` to reconstruct what was asked for and what was delivered.
-
-Produce a short validation summary:
+### 1. Validation
 
 ```
 ## Validation
 
-**You asked for:** <1–3 sentence summary of original intent>
+**You asked for:** <1–3 sentence summary>
 
 **What was built:**
-- t-1: <what it does, in plain terms>
-- t-2: <what it does, in plain terms>
+- t-1: <what it does>
 
 **Gaps or deviations:**
-- <anything from the original request that was deferred, descoped, or changed — and why>
-- None, if everything was delivered as scoped
+- <deferred/descoped items and why, or "None">
 ```
 
-Be direct about gaps. If the architect deferred something during scope challenge, call it out. If a ticket's implementation diverged from its AC, surface it.
+Be direct about gaps. Surface any divergence from AC.
 
-### 2. Automated evidence summary
+### 2. Automated Evidence
 
-**Lint results:** Read `.agent/lint.log` (generated during the workflow after the developer phase) and summarize pass/fail status. Do NOT run `just lint` yourself unless the file is missing.
+Read `.agent/lint.log` (do NOT run `just lint` yourself unless missing).
 
 ```
 ## Verification
-
-- Lint: PASS (or FAIL with summary of issues)
-- All tests: PASS (or FAIL with count of failures)
+- Lint: PASS/FAIL
+- All tests: PASS/FAIL
 ```
 
-### 3. Human validation checklist
-
-Produce a concrete human validation checklist with runnable commands and expected outcomes:
+### 3. Human Validation Checklist
 
 ```
 ## Your validation steps
 
-Work through each item in another window.
-Save and close to approve. Write `reject: <what failed and what you observed>` on its own line if anything fails.
+Work through each in another window. Save and close to approve.
+Write `reject: <what failed>` if anything fails.
 
 ### t-1: <title>
 - Run `<exact command>` → expect: <outcome>
-
-### t-2: <title>
-- <step> → expect: <outcome>
 ```
 
-Each step must be runnable and have an observable, unambiguous expected outcome. Avoid vague steps like "check that it works."
+Each step: runnable, observable, unambiguous expected outcome.
 
-### 4. Proposed commit message
-
-Before human approval, produce a `## Proposed commit message` section with a real commit subject and optional short body:
+### 4. Proposed Commit Message
 
 ```
 ## Proposed commit message
@@ -83,19 +69,13 @@ CLIENTS-934: Fix download timeout handling
 Increase default timeout from 30s to 60s in HTTP client.
 ```
 
-**Subject line** (required):
-- On a **ticket branch** (e.g., `CLIENTS-934-download-fixes`): Include the ticket prefix and a summary of code changes (e.g., `CLIENTS-934: Fix download timeout handling`)
-- On a **non-ticket branch** (e.g., `main`, `master`): Use a conventional-commit prefix (`fix:`, `chore:`, `feat:`, `docs:`, etc.) with a summary of code changes (e.g., `fix: Download timeout handling`)
-- **Never mention** gates, phases, or process checklists in the commit subject or body — focus only on what code changed and why
-
-**Body** (optional): A short paragraph explaining the why and what if needed.
-
-The system will extract this section when committing with human approval.
+**Subject line:**
+- Ticket branch: `TICKET-ID: Summary of code changes`
+- Non-ticket branch: conventional-commit prefix (`fix:`, `feat:`, etc.) + summary
+- Never mention gates, phases, or process
 
 ### 5. Approval
 
-The workflow reads the file when the human saves and closes:
-
-- No `reject:` line → approve
-- `reject: reason` on its own line → reject, returned to the developer (implementation issue)
-- `reject-architect: reason` on its own line → reject, returned to architect (design or scope issue)
+- No `reject:` → approve
+- `reject: reason` → returned to developer
+- `reject-architect: reason` → returned to architect

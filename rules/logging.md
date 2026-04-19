@@ -100,34 +100,6 @@ LOG_TRACE("Forwarding %zu bytes", len);
 
 ---
 
-## Querying
-
-```bash
-# Find failures
-grep "SSH_AUTH_FAILED" logs.txt
-grep "username=john.doe" logs.txt
-grep "error_code=" logs.txt
-
-# Trace session
-SESSION=$(grep "PORT_FORWARD_FAILED" logs.txt | grep -o "session_id=[^ ]*" | head -1)
-grep "$SESSION" logs.txt
-
-# Extract metrics
-awk '/^[A-Z_]+$/ {print}' logs.txt | sort | uniq -c
-```
-
----
-
-## Correlation
-
-**Success:** No `session_id`, just `timestamp` + `event_id` (lightweight)
-
-**Failure:** Include `session_id` + full context
-
-**Query:** Find failure → extract `session_id` → grep for related events by timestamp
-
----
-
 ## Checklist
 
 - [ ] Event name `SCREAMING_SNAKE_CASE`?
@@ -140,13 +112,7 @@ awk '/^[A-Z_]+$/ {print}' logs.txt | sort | uniq -c
 
 ## Enforcement
 
-**Automated:** `carl lint-logs`, check for unstructured errors
+**Automated:** `carl lint-logs`
 
 **Code review:** Structured format? Success minimal? Data plane uses trace?
-
----
-
-## References
-
-- `carl/rules/helpful-errors.md`
 

@@ -75,13 +75,7 @@ int lib_get_capabilities(LibCaps* caps);
 
 ## Build & Test
 
-**Pin toolchains:** Document exact versions (Zig 0.13.0, LLVM 17.0.6)
-
-**Reproducible builds:** Local caches (Nix/Zig/Artifactory). One-time fetch, then offline.
-
-**CI matrix:** Test oldest + latest per platform (Linux, Windows, macOS) × (x86_64, arm64)
-
-**Smoke tests:** `./binary --version`, publish dependency trees (`ldd`, `otool -L`, `dumpbin`)
+Pin toolchains (document exact versions). Reproducible builds via local caches (offline after initial fetch). CI matrix: oldest + latest per platform × architecture.
 
 ---
 
@@ -91,7 +85,6 @@ int lib_get_capabilities(LibCaps* caps);
 - [ ] No private/unstable APIs?
 - [ ] Toolchain pinned, offline build works?
 - [ ] Feature detection for optional capabilities?
-- [ ] Dependency tree published?
 
 ---
 
@@ -100,12 +93,4 @@ int lib_get_capabilities(LibCaps* caps);
 **Automated:** `carl check-glibc-compat`, `carl check-offline-build`, `carl ci-matrix`
 
 **Code review:** Platform-specific code justified? Feature detection used? Toolchain pinned?
-
----
-
-## References
-
-- `plans/portability-and-platform-stability.md`
-- `carl/rules/dependencies.md`
-- `carl/rules/api-stability.md`
 

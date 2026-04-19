@@ -60,42 +60,17 @@ int lib_get_last_error(lib_ctx ctx, LibError* err);
 
 ## Fail Fast vs Recovery
 
-**Default: Fail fast**
-```zig
-fn connect(host: []const u8) !Connection {
-    return Connection{ .socket = try openSocket(host) };
-}
-```
-**Why:** Easier to debug, no hidden state corruption, caller controls retry
+**Default: Fail fast.** Easier to debug, caller controls retry.
 
-**Recovery: Explicit, bounded, testable**
-```zig
-fn connectWithRetry(host: []const u8, max_attempts: u32) !Connection {
-    var attempts: u32 = 0;
-    while (attempts < max_attempts) : (attempts += 1) {
-        if (connect(host)) |conn| return conn else |err| {
-            if (attempts + 1 >= max_attempts) return err;
-            std.time.sleep(std.time.ns_per_s * attempts);
-        }
-    }
-    return error.MaxRetriesExceeded;
-}
-```
-
-**Add recovery only if:** Specific recurring failure, bounded attempts/timeout, explicit backoff, testable, caller can opt out
+**Recovery only if:** specific recurring failure, bounded attempts/timeout, explicit backoff, testable, caller can opt out.
 
 ---
 
 ## Checklists
 
-**Error messages:**
-- [ ] What failed? Why? How to fix? Context included?
-- [ ] User can fix without reading source?
-- [ ] Error code stable?
+**Error messages:** What failed? Why? How to fix? Context? User can fix without reading source? Error code stable?
 
-**Error recovery:**
-- [ ] Specific recurring failure? Bounded? Explicit backoff?
-- [ ] Testable? Caller can opt out? Fails fast if exhausted?
+**Error recovery:** Specific recurring failure? Bounded? Explicit backoff? Testable? Caller can opt out? Fails fast if exhausted?
 
 ---
 
@@ -104,11 +79,4 @@ fn connectWithRetry(host: []const u8, max_attempts: u32) !Connection {
 **Automated:** `carl check-error-codes`, `carl lint-errors`
 
 **Code review:** Errors helpful? Teach? Can fix without reading source?
-
----
-
-## References
-
-- `plans/native-c-api-stability-plan.md`
-- `carl/rules/subtract-first.md`
 
