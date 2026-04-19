@@ -7,6 +7,7 @@ import {
   GATE_PHASES,
 } from "./graph";
 import { blue, yellow } from "./colors";
+import { runJustFormat, runJustLint } from "./just";
 import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
@@ -55,7 +56,7 @@ function parsePrerequisites(skillContent: string): string[] {
   return (block[1].match(/\S+/g) ?? []).filter((s) => s !== "-");
 }
 
-function buildSkillInstruction(phaseName: string): string {
+function buildSkillInstruction(phaseName: string, workspaceRoot?: string): string {
   const skillContent = loadSkillFile(phaseName);
   let instruction = skillContent
     ? `# Your skill for this session\n\n${skillContent}`
@@ -68,6 +69,15 @@ function buildSkillInstruction(phaseName: string): string {
     const prereqContent = loadSkillFile(prereq);
     if (prereqContent) {
       instruction += `\n\n---\n\n# Supporting skill: ${prereq}\n\n${prereqContent}`;
+    }
+  }
+
+  // For reviewer phase, include lint results if available
+  if (phaseName === "reviewer" && workspaceRoot) {
+    const lintLogPath = path.join(workspaceRoot, ".agent", "lint.log");
+    if (fs.existsSync(lintLogPath)) {
+      const lintContent = fs.readFileSync(lintLogPath, "utf-8");
+      instruction += `\n\n---\n\n# Lint results\n\n\`\`\`\n${lintContent}\n\`\`\``;
     }
   }
 
@@ -190,7 +200,7 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
     });
 
     try {
-      let instruction = buildSkillInstruction(phaseName);
+      let instruction = buildSkillInstruction(phaseName, state.workspace_path);
 
       const history = state.history || [];
       const lastEntry = history.length > 0 ? history[history.length - 1] : null;
@@ -322,6 +332,15 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
       } else if (nextPhase) {
         const phaseDuration = Date.now() - phaseStartTime;
         console.log(`[Timing] Phase ${phaseName} duration ${phaseDuration}ms`);
+
+        // After developer completes, run deterministic format/lint before verifier
+        if (phaseName === "developer") {
+          console.log(`[System] Running deterministic format and lint checks...`);
+          runJustFormat(state.workspace_path);
+          runJustLint(state.workspace_path);
+          console.log(`[System] Format and lint checks completed.`);
+        }
+
         state = stateManager.update({ history, current_phase: nextPhase });
         console.log(
           `Phase ${phaseName} completed successfully. Advancing to ${nextPhase}.`,

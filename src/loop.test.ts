@@ -340,3 +340,37 @@ describe("Workflow Loop", () => {
     expect(Auggie.create).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("Skill files - deterministic format/lint integration", () => {
+  test("skills/verifier.md mentions .agent/lint.log", () => {
+    const verifierPath = path.join(__dirname, "..", "skills", "verifier.md");
+    const content = fs.readFileSync(verifierPath, "utf-8");
+    expect(content).toMatch(/\.agent\/lint\.log/);
+  });
+
+  test("skills/verifier.md does not instruct verifier to run just format/lint as primary behavior", () => {
+    const verifierPath = path.join(__dirname, "..", "skills", "verifier.md");
+    const content = fs.readFileSync(verifierPath, "utf-8");
+
+    // Check that "just format" or "just lint" only appears in context of lint.log or fallback
+    const lines = content.split("\n");
+    let foundJustLint = false;
+    for (const line of lines) {
+      // If line contains "just format" or "just lint"
+      if (/(just\s+format|just\s+lint)/i.test(line)) {
+        foundJustLint = true;
+        // It should be in fallback context or lint.log context, not as primary directive
+        expect(line).toMatch(/fallback|optional|\.agent\/lint\.log/i);
+      }
+    }
+    expect(foundJustLint).toBe(true); // Make sure we actually found and checked the lines
+  });
+
+  test("skills/developer.md notes that carl will re-run format/lint", () => {
+    const developerPath = path.join(__dirname, "..", "skills", "developer.md");
+    const content = fs.readFileSync(developerPath, "utf-8");
+    // Check that it mentions workflow re-running format/lint
+    expect(content).toMatch(/workflow.*re-run.*deterministically/i);
+    expect(content).toMatch(/format/i);
+  });
+});

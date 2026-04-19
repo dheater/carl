@@ -50,7 +50,7 @@ If the ticket's AC can't be expressed as a test, stop and ask. Don't invent acce
 7. Refactor if needed, stay green
 8. Repeat for remaining AC items
 9. Run the full suite — nothing regressed
-10. Run `just format` and `just lint` in your dev environment (where `just` is installed). Fix any formatting, type, or style issues until both commands succeed.
+10. In your local dev environment, run `just format` and `just lint` (where `just` is installed) to verify formatting and lint locally. Fix any issues. Note: the workflow will re-run these deterministically between your phase and the reviewer gate, so you are not responsible for enforcing them in production — but local validation prevents surprises.
 11. Present a summary of the change and pause for human commit approval. After the commit is approved and made:
     - If unchecked tickets remain, continue to the next one
     - If all tickets are checked, declare sprint complete and suggest verifier for sprint-end review
@@ -61,7 +61,7 @@ If the ticket's AC can't be expressed as a test, stop and ask. Don't invent acce
 - Full test suite passes
 - No production code without test coverage
 - Each ticket committed with human approval before moving to the next
-- `just format` and `just lint` both succeed with no remaining formatting or lint errors before handing off to the verifier
+- Local validation: `just format` and `just lint` both succeed in your dev environment (the workflow will re-run these deterministically afterward, so this is local verification only)
 
 ## Mikado escalation
 

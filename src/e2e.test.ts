@@ -2,6 +2,7 @@ import { runLoop } from "./loop";
 import { StateManager } from "./state";
 import { approveCommand, rejectCommand } from "./commands";
 import { HAPPY_PATH_GRAPH } from "./graph";
+import { runJustFormat, runJustLint } from "./just";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
@@ -11,6 +12,8 @@ jest.mock("@augmentcode/auggie-sdk", () => ({
     create: jest.fn(),
   },
 }));
+
+jest.mock("./just");
 
 const { Auggie } = require("@augmentcode/auggie-sdk");
 
@@ -282,5 +285,135 @@ describe("End-to-End Workflow Harness", () => {
     const after = stateManager.load();
     expect(after.status).toBe("awaiting_approval");
     expect(after.current_phase).toBe("architect");
+  });
+
+  test("runJustFormat and runJustLint are called after developer phase", async () => {
+    const mockRunJustFormat = runJustFormat as jest.MockedFunction<typeof runJustFormat>;
+    const mockRunJustLint = runJustLint as jest.MockedFunction<typeof runJustLint>;
+
+    // Initialize state and files
+    const { Auggie } = require("@augmentcode/auggie-sdk");
+    let callCount = 0;
+    (Auggie.create as jest.Mock).mockResolvedValue({
+      prompt: jest.fn().mockImplementation(() => {
+        const phaseIndex = callCount;
+        callCount++;
+        const outputs = [
+          "# Tickets\n\n## [ ] t-1: Sample\n\nAC:\n- Sample", // architect
+          "mocked developer response", // developer
+          "mocked verifier response", // verifier
+          "mocked reviewer response", // reviewer
+        ];
+        return Promise.resolve(outputs[phaseIndex] || "response");
+      }),
+      close: jest.fn().mockResolvedValue(undefined),
+      onSessionUpdate: jest.fn(),
+    });
+
+    // Run architect phase
+    await runLoop(stateManager);
+    let state = stateManager.load();
+    expect(state.current_phase).toBe("architect");
+
+    // Approve architect
+    approveCommand(tmpDir);
+
+    // Run developer → verifier → reviewer (mocked)
+    await runLoop(stateManager);
+    state = stateManager.load();
+
+    // Verify that runJustFormat and runJustLint were called with the workspace root
+    expect(mockRunJustFormat).toHaveBeenCalledWith(tmpDir);
+    expect(mockRunJustLint).toHaveBeenCalledWith(tmpDir);
+
+    // Verify we reached the reviewer gate
+    expect(state.current_phase).toBe("reviewer");
+    expect(state.status).toBe("awaiting_approval");
+  });
+
+  test("workflow reaches reviewer gate even when lint returns non-zero exitCode", async () => {
+    const mockRunJustLint = runJustLint as jest.MockedFunction<typeof runJustLint>;
+
+    // Mock runJustLint to return failure status
+    mockRunJustLint.mockReturnValue({
+      exitCode: 1,
+      stdout: "",
+      stderr: "lint failed",
+    });
+
+    const { Auggie } = require("@augmentcode/auggie-sdk");
+    let callCount = 0;
+    (Auggie.create as jest.Mock).mockResolvedValue({
+      prompt: jest.fn().mockImplementation(() => {
+        const phaseIndex = callCount;
+        callCount++;
+        const outputs = [
+          "# Tickets\n\n## [ ] t-1: Sample\n\nAC:\n- Sample", // architect
+          "mocked developer response", // developer
+          "mocked verifier response", // verifier
+          "mocked reviewer response", // reviewer
+        ];
+        return Promise.resolve(outputs[phaseIndex] || "response");
+      }),
+      close: jest.fn().mockResolvedValue(undefined),
+      onSessionUpdate: jest.fn(),
+    });
+
+    // Run architect
+    await runLoop(stateManager);
+    approveCommand(tmpDir);
+
+    // Run to reviewer (lint failure should not block)
+    await runLoop(stateManager);
+    const state = stateManager.load();
+
+    // Workflow should still reach reviewer despite lint failure
+    expect(state.current_phase).toBe("reviewer");
+    expect(state.status).toBe("awaiting_approval");
+  });
+
+  test("reviewer instruction includes .agent/lint.log content when present", async () => {
+    const mockRunJustLint = runJustLint as jest.MockedFunction<typeof runJustLint>;
+    const lintLogContent = "Command: just lint\n\nStdout:\nNo issues found";
+
+    // Create lint.log file
+    const agentDir = path.join(tmpDir, ".agent");
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.writeFileSync(path.join(agentDir, "lint.log"), lintLogContent);
+
+    mockRunJustLint.mockReturnValue({
+      exitCode: 0,
+      stdout: lintLogContent,
+      stderr: "",
+    });
+
+    const { Auggie } = require("@augmentcode/auggie-sdk");
+    let callCount = 0;
+    let reviewerInstruction = "";
+    (Auggie.create as jest.Mock).mockResolvedValue({
+      prompt: jest.fn().mockImplementation((instruction: string) => {
+        if (callCount === 3) { // reviewer phase (0: architect, 1: developer, 2: verifier, 3: reviewer)
+          reviewerInstruction = instruction;
+        }
+        callCount++;
+        const outputs = [
+          "# Tickets\n\n## [ ] t-1: Sample\n\nAC:\n- Sample",
+          "mocked developer response",
+          "mocked verifier response",
+          "mocked reviewer response",
+        ];
+        return Promise.resolve(outputs[Math.min(callCount - 1, 3)] || "response");
+      }),
+      close: jest.fn().mockResolvedValue(undefined),
+      onSessionUpdate: jest.fn(),
+    });
+
+    await runLoop(stateManager);
+    approveCommand(tmpDir);
+    await runLoop(stateManager);
+
+    // Verify reviewer instruction includes lint.log content
+    expect(reviewerInstruction).toContain("Lint results");
+    expect(reviewerInstruction).toContain(lintLogContent);
   });
 });
