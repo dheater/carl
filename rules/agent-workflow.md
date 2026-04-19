@@ -80,8 +80,6 @@ For substantial work:
 
 ## References
 
-- `rules/git-policy.md`
 - `rules/testing.md`
 - `rules/documentation.md`
-- `skills/design-grill.md`
 - `skills/tdd-vertical-slices.md`

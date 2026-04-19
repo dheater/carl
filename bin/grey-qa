@@ -1,3 +1,0 @@
-#!/usr/bin/env sh
-# Run verification checks and assemble evidence before sign-off
-exec auggie --model sonnet4.6 -i "Follow the qa-gate skill." "$@"

@@ -1,41 +1,62 @@
-import { runLoop } from './loop';
-import { StateManager } from './state';
-import { approveCommand, rejectCommand } from './commands';
-import { Auggie } from '@augmentcode/auggie-sdk';
-import { HAPPY_PATH_GRAPH } from './graph';
-import * as fs from 'fs';
-import * as path from 'path';
-import * as os from 'os';
+import { runLoop } from "./loop";
+import { StateManager } from "./state";
+import { approveCommand, rejectCommand } from "./commands";
+import { HAPPY_PATH_GRAPH } from "./graph";
+import * as fs from "fs";
+import * as path from "path";
+import * as os from "os";
 
-jest.mock('@augmentcode/auggie-sdk', () => ({
+jest.mock("@augmentcode/auggie-sdk", () => ({
   Auggie: {
     create: jest.fn(),
   },
 }));
 
-describe('End-to-End Workflow Harness', () => {
+const { Auggie } = require("@augmentcode/auggie-sdk");
+
+describe("End-to-End Workflow Harness", () => {
   let tmpDir: string;
   let stateManager: StateManager;
   let mockPrompt: jest.Mock;
   let mockClose: jest.Mock;
 
+  let mockOnSessionUpdate: jest.Mock;
+
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'carl-e2e-test-'));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-e2e-test-"));
     stateManager = new StateManager(tmpDir);
     stateManager.create(tmpDir);
 
-    const skillsDir = path.join(tmpDir, 'skills');
+    const skillsDir = path.join(tmpDir, "skills");
     fs.mkdirSync(skillsDir);
     for (const phase of HAPPY_PATH_GRAPH) {
-      fs.writeFileSync(path.join(skillsDir, `${phase}.md`), `dummy ${phase} skill`);
+      fs.writeFileSync(
+        path.join(skillsDir, `${phase}.md`),
+        `dummy ${phase} skill`,
+      );
     }
 
-    mockPrompt = jest.fn().mockResolvedValue('mocked response');
+    // Track which phase is calling us by counting calls in sequence: architect, developer, verifier, reviewer.
+    // Architect output must be a valid tickets file so approveCommand's guard passes.
+    let callCount = 0;
+    mockPrompt = jest.fn().mockImplementation((instruction: string) => {
+      const phaseIndex = callCount;
+      callCount++;
+      const phaseOutputs = [
+        "# Tickets\n\n## [ ] t-1: Sample ticket\n\nAC:\n- Sample acceptance criteria", // architect
+        "mocked developer response", // developer
+        "mocked verifier response", // verifier
+        "mocked reviewer response", // reviewer
+      ];
+      return Promise.resolve(phaseOutputs[phaseIndex] || "mocked response");
+    });
     mockClose = jest.fn().mockResolvedValue(undefined);
+    mockOnSessionUpdate = jest.fn();
 
     (Auggie.create as jest.Mock).mockResolvedValue({
       prompt: mockPrompt,
       close: mockClose,
+      onSessionUpdate: mockOnSessionUpdate,
     });
   });
 
@@ -44,80 +65,165 @@ describe('End-to-End Workflow Harness', () => {
     jest.clearAllMocks();
   });
 
-  test('happy-path workflow completes without manual agent restart between phases', async () => {
-    // 1. Run loop until first gate (qa-gate)
+  test("happy-path workflow completes without manual agent restart between phases", async () => {
+    // 1. Run loop until first gate (architect)
     await runLoop(stateManager);
     let state = stateManager.load();
-    expect(state.current_phase).toBe('qa-gate');
-    expect(state.status).toBe('awaiting_approval');
+    expect(state.current_phase).toBe("architect");
+    expect(state.status).toBe("awaiting_approval");
 
-    // 2. Approve qa-gate
+    // 2. Approve architect
     approveCommand(tmpDir);
 
-    // 3. Run loop until next gate (lewis)
+    // 3. Run loop until next gate (reviewer)
     await runLoop(stateManager);
     state = stateManager.load();
-    expect(state.current_phase).toBe('lewis');
-    expect(state.status).toBe('awaiting_approval');
+    expect(state.current_phase).toBe("reviewer");
+    expect(state.status).toBe("awaiting_approval");
 
-    // 4. Approve lewis
-    approveCommand(tmpDir);
-
-    // 5. Run loop until next gate (commit-review-gate)
-    await runLoop(stateManager);
-    state = stateManager.load();
-    expect(state.current_phase).toBe('commit-review-gate');
-    expect(state.status).toBe('awaiting_approval');
-
-    // 6. Approve final gate, which should complete the workflow
+    // 4. Approve final gate, which should complete the workflow
     approveCommand(tmpDir);
     state = stateManager.load();
-    expect(state.current_phase).toBe('commit-review-gate');
-    expect(state.status).toBe('completed');
+    expect(state.current_phase).toBe("reviewer");
+    expect(state.status).toBe("completed");
   });
 
-  test('handback workflow survives a backward transition and subsequent resume', async () => {
-    // We will simulate a grey blocker to test backward transition to dani
-    mockPrompt.mockImplementation(async (instruction: string) => {
-      if (instruction.includes('grey')) {
-        return 'blocked: waiting on API token';
-      }
-      return 'success';
-    });
+  test("architect approval -> developer handoff without skipping", async () => {
+    // After an architect approval, the workflow must run developer -> verifier -> reviewer
+    // with no phase skipped.
 
-    // Run loop. It will hit grey, get blocked, and transition back to dani.
-    // To prevent infinite loop in tests, we need the NEXT run of grey to succeed.
     mockPrompt
-      .mockResolvedValueOnce('dani output')
-      .mockResolvedValueOnce('dani-tickets output')
-      .mockResolvedValueOnce('blocked: need API token') // 1st grey fails
-      .mockResolvedValueOnce('dani output retry')
-      .mockResolvedValueOnce('dani-tickets output retry')
-      .mockResolvedValue('success'); // 2nd grey and subsequent passes
+      .mockResolvedValueOnce(
+        "# Tickets\n\n## [ ] t-1: Sample ticket\n\nAC:\n- Sample acceptance criteria",
+      )
+      .mockResolvedValueOnce("developer output")
+      .mockResolvedValue("success");
 
     await runLoop(stateManager);
+    let state = stateManager.load();
+    expect(state.status).toBe("awaiting_approval");
+    expect(state.current_phase).toBe("architect");
+    expect(state.history).toHaveLength(1);
+    expect(state.history![0].phase).toBe("architect");
 
-    const state = stateManager.load();
-    expect(state.status).toBe('awaiting_approval');
-    expect(state.current_phase).toBe('qa-gate');
+    approveCommand(tmpDir);
+
+    await runLoop(stateManager);
+    state = stateManager.load();
+
+    const developerEntry = state.history!.find((h) => h.phase === "developer");
+    const verifierEntry = state.history!.find((h) => h.phase === "verifier");
+    const reviewerEntry = state.history!.find((h) => h.phase === "reviewer");
+
+    expect(developerEntry).toBeDefined();
+    expect(developerEntry!.status).toBe("success");
+    expect(verifierEntry).toBeDefined();
+    expect(verifierEntry!.status).toBe("success");
+    expect(reviewerEntry).toBeDefined();
+
+    // Verify ordering: architect < developer < verifier < reviewer
+    const phases = state.history!.map((h) => h.phase);
+    expect(phases.indexOf("architect")).toBeLessThan(
+      phases.indexOf("developer"),
+    );
+    expect(phases.indexOf("developer")).toBeLessThan(
+      phases.indexOf("verifier"),
+    );
+    expect(phases.indexOf("verifier")).toBeLessThan(
+      phases.indexOf("reviewer"),
+    );
+
+    expect(state.current_phase).toBe("reviewer");
+    expect(state.status).toBe("awaiting_approval");
+  });
+
+  test("handback workflow survives a backward transition and subsequent resume", async () => {
+    mockPrompt
+      .mockResolvedValueOnce("# Tickets\n\n## [ ] t-1: Sample\n\nAC:\n- Test") // architect
+      .mockResolvedValueOnce("blocked: need API token") // developer blocks
+      .mockResolvedValueOnce("# Tickets\n\n## [ ] t-1: Sample\n\nAC:\n- Test") // architect retry
+      .mockResolvedValue("success"); // developer, verifier, reviewer; then after reject: developer, verifier, reviewer
+
+    // 1. Run loop to architect
+    await runLoop(stateManager);
+    let state = stateManager.load();
+    expect(state.status).toBe("awaiting_approval");
+    expect(state.current_phase).toBe("architect");
+
+    // 2. Approve architect, run to developer (gets blocked), returns to architect (pauses)
+    approveCommand(tmpDir);
+    await runLoop(stateManager);
+    state = stateManager.load();
+    expect(state.status).toBe("awaiting_approval");
+    expect(state.current_phase).toBe("architect");
+
+    // 3. Approve architect again, runs developer, verifier, reviewer (pauses at reviewer)
+    approveCommand(tmpDir);
+    await runLoop(stateManager);
+    state = stateManager.load();
+    expect(state.status).toBe("awaiting_approval");
+    expect(state.current_phase).toBe("reviewer");
 
     // Verify the blocker was preserved in the history
-    const blockedGreyEntry = state.history!.find(h => h.phase === 'grey' && h.status === 'blocked');
-    expect(blockedGreyEntry).toBeDefined();
-    expect(blockedGreyEntry!.outputs).toContain('blocked: need API token');
+    const blockedDeveloperEntry = state.history!.find(
+      (h) => h.phase === "developer" && h.status === "blocked",
+    );
+    expect(blockedDeveloperEntry).toBeDefined();
+    expect(blockedDeveloperEntry!.outputs).toContain("blocked: need API token");
 
-    // Reject qa-gate to test handback to dani
-    rejectCommand(tmpDir, 'qa failed');
-    
-    // Now state should be running at dani
+    // Reject reviewer to test handback to developer
+    rejectCommand(tmpDir, "qa failed");
+
+    // Now state should be running at developer
     const rejectedState = stateManager.load();
-    expect(rejectedState.current_phase).toBe('dani');
-    expect(rejectedState.status).toBe('running');
+    expect(rejectedState.current_phase).toBe("developer");
+    expect(rejectedState.status).toBe("running");
 
-    // Run loop again to reach qa-gate
+    // Run loop again to reach reviewer gate
     await runLoop(stateManager);
     const resumedState = stateManager.load();
-    expect(resumedState.current_phase).toBe('qa-gate');
-    expect(resumedState.status).toBe('awaiting_approval');
+    expect(resumedState.current_phase).toBe("reviewer");
+    expect(resumedState.status).toBe("awaiting_approval");
+  });
+
+  test("architect approval writes the last architect output to .agent/tickets.md", async () => {
+    const slicePlan =
+      "# Feature X\n\n## [ ] t-1: Build thing\n\nAC:\n- It works\n";
+    mockPrompt.mockReset();
+    mockPrompt
+      .mockResolvedValueOnce(slicePlan)
+      .mockResolvedValue("success");
+
+    await runLoop(stateManager);
+    approveCommand(tmpDir);
+
+    const ticketsPath = path.join(tmpDir, ".agent", "tickets.md");
+    expect(fs.existsSync(ticketsPath)).toBe(true);
+    expect(fs.readFileSync(ticketsPath, "utf-8")).toBe(slicePlan);
+  });
+
+  test("architect approval is refused when the last architect output is not a slice plan", async () => {
+    mockPrompt.mockReset();
+    mockPrompt.mockResolvedValueOnce(
+      "Scope challenge: here are some questions. Do you accept the narrower scope?",
+    );
+
+    await runLoop(stateManager);
+    const state = stateManager.load();
+    expect(state.status).toBe("awaiting_approval");
+    expect(state.current_phase).toBe("architect");
+
+    expect(() => approveCommand(tmpDir)).toThrow(
+      /has not yet produced a slice plan/i,
+    );
+
+    // tickets.md must not have been created
+    const ticketsPath = path.join(tmpDir, ".agent", "tickets.md");
+    expect(fs.existsSync(ticketsPath)).toBe(false);
+
+    // state is untouched — still awaiting at architect
+    const after = stateManager.load();
+    expect(after.status).toBe("awaiting_approval");
+    expect(after.current_phase).toBe("architect");
   });
 });

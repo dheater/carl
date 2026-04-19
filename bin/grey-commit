@@ -1,3 +1,0 @@
-#!/usr/bin/env sh
-# Gather diff evidence and draft a commit message for approval
-exec auggie --model haiku4.5 -i "Follow the commit-review-gate skill." "$@"

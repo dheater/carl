@@ -4,6 +4,17 @@ home_dir := if env_var_or_default('HOME', '') != '' { env_var('HOME') } else { e
 build:
     npm run build
 
+# Format the code
+format:
+    npx prettier --write "src/**/*.ts"
+
+
+# Lint the code (type-check + formatting check, no extra dependencies)
+lint:
+	npx tsc --noEmit
+	npx prettier --check "src/**/*.ts"
+
+
 # Run tests
 test:
     npm test
@@ -12,21 +23,8 @@ test:
 run *args:
     npm start -- {{args}}
 
-# Install persona scripts to ~/.local/bin
-install-personas:
-    chmod +x bin/vera bin/dani bin/grey bin/lewis \
-             bin/dani-research bin/dani-prd-to-plan bin/dani-prd \
-             bin/dani-grill bin/dani-interface bin/dani-triage \
-             bin/vera-prototype \
-             bin/grey-commit bin/grey-qa \
-             bin/lewis-jira bin/lewis-pr
-    cp bin/vera bin/dani bin/grey bin/lewis \
-       bin/dani-research bin/dani-prd-to-plan bin/dani-prd \
-       bin/dani-grill bin/dani-interface bin/dani-triage \
-       bin/vera-prototype \
-       bin/grey-commit bin/grey-qa \
-       bin/lewis-jira bin/lewis-pr \
-       {{home_dir}}/.local/bin/
-
-# Build carl and install personas
-install: build install-personas
+# Build and install carl CLI to ~/.local/bin
+install: build
+    @echo '#!/usr/bin/env bash' > {{home_dir}}/.local/bin/carl
+    @echo 'exec node "'`pwd`'/dist/carl.js" "$@"' >> {{home_dir}}/.local/bin/carl
+    @chmod +x {{home_dir}}/.local/bin/carl

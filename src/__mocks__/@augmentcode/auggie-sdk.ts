@@ -1,3 +1,3 @@
 export const Auggie = {
-  create: jest.fn()
+  create: jest.fn(),
 };

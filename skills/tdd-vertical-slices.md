@@ -5,9 +5,6 @@ description: Implement approved work one failing behavior test at a time with ex
 when_to_use: when implementing an approved slice, bugfix, or refactor and disciplined test-driven execution is needed
 model: sonnet4.6
 version: 1.0.0
-next_skills:
-  - commit-review-gate
-  - qa-gate
 ---
 
 # TDD Vertical Slices
@@ -34,8 +31,3 @@ No production code without a failing behavior test first.
 - Public behavior, not internals
 - No all-tests-first batching
 - No completion claims without fresh command output
-
-## Next skill
-
-- `commit-review-gate`
-- `qa-gate`

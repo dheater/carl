@@ -1,40 +1,59 @@
-import { runLoop } from './loop';
-import { StateManager } from './state';
-import { Auggie } from '@augmentcode/auggie-sdk';
-import { HAPPY_PATH_GRAPH } from './graph';
-import * as fs from 'fs';
-import * as path from 'path';
-import * as os from 'os';
+import { runLoop } from "./loop";
+import { StateManager } from "./state";
+import { HAPPY_PATH_GRAPH } from "./graph";
+import * as fs from "fs";
+import * as path from "path";
+import * as os from "os";
 
-jest.mock('@augmentcode/auggie-sdk', () => ({
+jest.mock("@augmentcode/auggie-sdk", () => ({
   Auggie: {
     create: jest.fn(),
   },
+  DirectContext: {
+    // Default: no prior context file, fresh context with empty search results
+    create: jest.fn().mockResolvedValue({
+      search: jest.fn().mockResolvedValue(""),
+      addToIndex: jest
+        .fn()
+        .mockResolvedValue({ newlyUploaded: [], alreadyUploaded: [] }),
+      exportToFile: jest.fn().mockResolvedValue(undefined),
+    }),
+    importFromFile: jest.fn().mockRejectedValue(new Error("no context file")),
+  },
 }));
 
-describe('Workflow Loop', () => {
+const { Auggie, DirectContext } = require("@augmentcode/auggie-sdk");
+
+describe("Workflow Loop", () => {
   let tmpDir: string;
   let stateManager: StateManager;
   let mockPrompt: jest.Mock;
   let mockClose: jest.Mock;
 
+  let mockOnSessionUpdate: jest.Mock;
+
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'carl-test-'));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-test-"));
     stateManager = new StateManager(tmpDir);
     stateManager.create(tmpDir);
 
-    const skillsDir = path.join(tmpDir, 'skills');
+    const skillsDir = path.join(tmpDir, "skills");
     fs.mkdirSync(skillsDir);
     for (const phase of HAPPY_PATH_GRAPH) {
-      fs.writeFileSync(path.join(skillsDir, `${phase}.md`), `dummy ${phase} skill`);
+      fs.writeFileSync(
+        path.join(skillsDir, `${phase}.md`),
+        `dummy ${phase} skill`,
+      );
     }
 
-    mockPrompt = jest.fn().mockResolvedValue('mocked response');
+    mockPrompt = jest.fn().mockResolvedValue("mocked response");
     mockClose = jest.fn().mockResolvedValue(undefined);
+    mockOnSessionUpdate = jest.fn();
 
     (Auggie.create as jest.Mock).mockResolvedValue({
       prompt: mockPrompt,
       close: mockClose,
+      onSessionUpdate: mockOnSessionUpdate,
     });
   });
 
@@ -43,111 +62,281 @@ describe('Workflow Loop', () => {
     jest.clearAllMocks();
   });
 
-  test('runs the full happy path until the first gate and pauses', async () => {
+  test("runs the full happy path until the first gate and pauses", async () => {
     await runLoop(stateManager);
 
     const state = stateManager.load();
-    expect(state.status).toBe('awaiting_approval');
-    expect(state.current_phase).toBe('qa-gate');
-    // History should have 4 entries: dani, dani-tickets, grey, qa-gate
-    expect(state.history).toHaveLength(4);
-    expect(state.history![3].phase).toBe('qa-gate');
-    
-    // Check Auggie calls
-    expect(mockPrompt).toHaveBeenCalledTimes(4);
+    expect(state.status).toBe("awaiting_approval");
+    expect(state.current_phase).toBe("architect");
+    // History should have 1 entry: architect
+    expect(state.history).toHaveLength(1);
+    expect(state.history![0].phase).toBe("architect");
 
-    expect(Auggie.create).toHaveBeenNthCalledWith(1, expect.objectContaining({
-      workspaceRoot: tmpDir,
-      model: 'gpt5.4', // dani
-      allowIndexing: true,
-    }));
-    expect(Auggie.create).toHaveBeenNthCalledWith(2, expect.objectContaining({
-      model: 'gpt5.4', // dani-tickets
-    }));
-    expect(Auggie.create).toHaveBeenNthCalledWith(3, expect.objectContaining({
-      model: 'haiku4.5', // grey
-    }));
-    expect(Auggie.create).toHaveBeenNthCalledWith(4, expect.objectContaining({
-      model: 'haiku4.5', // qa-gate
-    }));
+    // Check Auggie calls
+    expect(mockPrompt).toHaveBeenCalledTimes(1);
+
+    expect(Auggie.create).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        workspaceRoot: tmpDir,
+        model: "gpt5.1", // architect
+        allowIndexing: true,
+      }),
+    );
   });
 
-  test('resumes from a gate when status is running', async () => {
-    stateManager.update({ current_phase: 'lewis-qa', status: 'running' });
+  test("resumes from a gate when status is running", async () => {
+    stateManager.update({ current_phase: "verifier", status: "running" });
     await runLoop(stateManager);
 
     const state = stateManager.load();
-    expect(state.status).toBe('awaiting_approval');
-    expect(state.current_phase).toBe('lewis');
-    expect(state.history).toHaveLength(2); // lewis-qa, lewis
+    expect(state.status).toBe("awaiting_approval");
+    expect(state.current_phase).toBe("reviewer");
+    expect(state.history).toHaveLength(2); // verifier, reviewer
     expect(mockPrompt).toHaveBeenCalledTimes(2);
 
-    expect(Auggie.create).toHaveBeenNthCalledWith(1, expect.objectContaining({
-      model: 'gemini-3.1-pro-preview', // lewis-qa
-    }));
-    expect(Auggie.create).toHaveBeenNthCalledWith(2, expect.objectContaining({
-      model: 'gemini-3.1-pro-preview', // lewis
-    }));
+    expect(Auggie.create).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        model: "haiku4.5", // verifier
+      }),
+    );
+    expect(Auggie.create).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        model: "gemini-3.1-pro-preview", // reviewer
+      }),
+    );
   });
 
-  test('fails if artifacts diverge', async () => {
+  test("developer blocker transitions back to architect", async () => {
+    stateManager.update({ current_phase: "developer", status: "running" });
+    mockPrompt.mockResolvedValueOnce("blocked: missing PRD info");
+
+    // It will run developer, get blocked, transition to architect, run architect, then developer, etc.
+    // To prevent infinite loop in tests, let's mock the second prompt (architect) to throw so it stops.
+    mockPrompt.mockRejectedValueOnce(new Error("stop loop"));
+
+    await expect(runLoop(stateManager)).rejects.toThrow("stop loop");
+
+    const state = stateManager.load();
+    // developer (blocked) -> architect (throws)
+    expect(state.history).toHaveLength(2);
+    expect(state.history![0]).toEqual(
+      expect.objectContaining({
+        phase: "developer",
+        status: "blocked",
+        outputs: "blocked: missing PRD info",
+      }),
+    );
+    expect(state.history![1]).toEqual(
+      expect.objectContaining({
+        phase: "architect",
+        status: "failed",
+      }),
+    );
+    expect(state.current_phase).toBe("architect");
+  });
+
+  test("verifier BLOCKER: prefix is detected as blocked", async () => {
+    stateManager.update({ current_phase: "verifier", status: "running" });
+    mockPrompt.mockResolvedValueOnce("BLOCKER: no implementation exists yet");
+    mockPrompt.mockRejectedValueOnce(new Error("stop loop"));
+
+    await expect(runLoop(stateManager)).rejects.toThrow("stop loop");
+
+    const state = stateManager.load();
+    expect(state.history![0]).toEqual(
+      expect.objectContaining({
+        phase: "verifier",
+        status: "blocked",
+      }),
+    );
+  });
+
+  test("injects pending_reply into instruction and clears it", async () => {
     stateManager.update({
-      current_phase: 'dani',
-      status: 'running',
-      artifacts: {
-        tickets: [{ id: 't-1', title: 'Test', description: '', ac: [], status: 'todo' }]
-      }
+      current_phase: "architect",
+      status: "running",
+      initial_prompt: "build a feature",
+      pending_reply: "use the repo root as scope",
     });
 
-    const agentDir = path.join(tmpDir, '.agent');
-    if (!fs.existsSync(agentDir)) fs.mkdirSync(agentDir, { recursive: true });
+    mockPrompt.mockResolvedValueOnce("plan output");
 
-    // Diverging file content
-    fs.writeFileSync(path.join(agentDir, 'tickets.md'), '# Different Content');
-
-    await expect(runLoop(stateManager)).rejects.toThrow(/diverges from authoritative state/);
-  });
-
-  test('completes workflow after the last phase', async () => {
-    stateManager.update({ current_phase: 'commit-review-gate', status: 'running' });
     await runLoop(stateManager);
 
+    expect(mockPrompt).toHaveBeenCalledWith(
+      expect.stringContaining("# Human reply\n\nuse the repo root as scope"),
+      expect.any(Object),
+    );
+
+    // pending_reply must be cleared after use
     const state = stateManager.load();
-    expect(state.status).toBe('awaiting_approval');
-    expect(state.current_phase).toBe('commit-review-gate');
-
-    const { approveCommand } = require('./commands');
-    approveCommand(tmpDir);
-
-    const finalState = stateManager.load();
-    expect(finalState.status).toBe('completed');
-    expect(finalState.current_phase).toBe('commit-review-gate');
+    expect(state.pending_reply).toBeUndefined();
   });
 
-  test('grey blocker transitions back to dani', async () => {
-    stateManager.update({ current_phase: 'grey', status: 'running' });
-    mockPrompt.mockResolvedValueOnce('I am blocked: missing PRD info');
+  test("passes rejection reason as feedback on retry", async () => {
+    stateManager.update({
+      current_phase: "architect",
+      status: "running",
+      initial_prompt: "build a feature",
+      history: [
+        {
+          phase: "architect",
+          model: "system",
+          status: "rejected",
+          outputs: "Approval rejected: too complex",
+        },
+      ],
+    });
 
-    // It will run grey, get blocked, transition to dani, run dani, then dani-tickets, grey, etc.
-    // To prevent infinite loop in tests, let's mock the second prompt (dani) to throw so it stops,
-    // or we can just let it run but we need to limit the mockPrompt resolved values or mock getNextPhase.
-    // Wait, let's mock prompt to throw after dani to stop the loop.
-    mockPrompt.mockRejectedValueOnce(new Error('stop loop'));
+    mockPrompt.mockResolvedValueOnce("retry output");
 
-    await expect(runLoop(stateManager)).rejects.toThrow('stop loop');
+    await runLoop(stateManager);
 
-    const state = stateManager.load();
-    // grey (blocked) -> dani (throws)
-    expect(state.history).toHaveLength(2);
-    expect(state.history![0]).toEqual(expect.objectContaining({
-      phase: 'grey',
-      status: 'blocked',
-      outputs: 'I am blocked: missing PRD info'
-    }));
-    expect(state.history![1]).toEqual(expect.objectContaining({
-      phase: 'dani',
-      status: 'failed',
-    }));
-    expect(state.current_phase).toBe('dani');
+    // Initial prompt is NOT re-injected on retry — prior architect history already carries context
+    expect(mockPrompt).not.toHaveBeenCalledWith(
+      expect.stringContaining("User request"),
+      expect.any(Object),
+    );
+    expect(mockPrompt).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "# Rejection feedback\n\nApproval rejected: too complex\n\nPlease incorporate this feedback and try again.",
+      ),
+      expect.any(Object),
+    );
+  });
+
+  test("injects context search result on reply when context engine has prior output", async () => {
+    const priorQuestions = "What is the scope? What language do you prefer?";
+    const mockContextInstance = {
+      search: jest.fn().mockResolvedValue(priorQuestions),
+      addToIndex: jest
+        .fn()
+        .mockResolvedValue({ newlyUploaded: [], alreadyUploaded: [] }),
+      exportToFile: jest.fn().mockResolvedValue(undefined),
+    };
+    (DirectContext.create as jest.Mock).mockResolvedValueOnce(
+      mockContextInstance,
+    );
+
+    stateManager.update({
+      current_phase: "architect",
+      status: "running",
+      pending_reply: "repo root, standard tooling",
+    });
+    mockPrompt.mockResolvedValueOnce("plan with context");
+
+    await runLoop(stateManager);
+
+    // Context search result replaces raw prior output
+    expect(mockPrompt).toHaveBeenCalledWith(
+      expect.stringContaining("# Prior context\n\n" + priorQuestions),
+      expect.any(Object),
+    );
+    expect(mockPrompt).toHaveBeenCalledWith(
+      expect.stringContaining("# Human reply\n\nrepo root, standard tooling"),
+      expect.any(Object),
+    );
+    // Raw prior output section is NOT used when context search returns results
+    expect(mockPrompt).not.toHaveBeenCalledWith(
+      expect.stringContaining("# Your previous output"),
+      expect.any(Object),
+    );
+    // Context is indexed and persisted after the run
+    expect(mockContextInstance.addToIndex).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: expect.stringContaining("agent-log/architect-"),
+        }),
+      ]),
+    );
+    expect(mockContextInstance.exportToFile).toHaveBeenCalled();
+  });
+
+  test("injects cross-phase context when a fresh phase starts after a different phase", async () => {
+    const developerOutput = "Developer implemented t-1: added auth middleware";
+    const mockContextInstance = {
+      search: jest.fn().mockResolvedValue(developerOutput),
+      addToIndex: jest
+        .fn()
+        .mockResolvedValue({ newlyUploaded: [], alreadyUploaded: [] }),
+      exportToFile: jest.fn().mockResolvedValue(undefined),
+    };
+    (DirectContext.create as jest.Mock).mockResolvedValueOnce(
+      mockContextInstance,
+    );
+
+    stateManager.update({
+      current_phase: "verifier",
+      status: "running",
+      history: [
+        {
+          phase: "developer",
+          model: "haiku4.5",
+          status: "success",
+          outputs: developerOutput,
+        },
+      ],
+    });
+    mockPrompt.mockResolvedValueOnce("QA passed");
+
+    await runLoop(stateManager);
+
+    expect(mockPrompt).toHaveBeenCalledWith(
+      expect.stringContaining("# Prior workflow context\n\n" + developerOutput),
+      expect.any(Object),
+    );
+  });
+
+  test("falls back to raw prior output when context search returns empty", async () => {
+    // Default mock returns '' from search — verify fallback path
+    stateManager.update({
+      current_phase: "architect",
+      status: "running",
+      pending_reply: "use repo root",
+      history: [
+        {
+          phase: "architect",
+          model: "gpt5.1",
+          status: "success",
+          outputs: "Previous architect output with questions",
+        },
+      ],
+    });
+    mockPrompt.mockResolvedValueOnce("reply output");
+
+    await runLoop(stateManager);
+
+    // Falls back to raw prior output since context.search() returned ''
+    expect(mockPrompt).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "# Your previous output\n\nPrevious architect output with questions",
+      ),
+      expect.any(Object),
+    );
+  });
+
+  test("reuses Auggie session for the same phase across a reply gate round-trip", async () => {
+    const { replyCommand } = require("./commands");
+
+    // First run: architect gate
+    await runLoop(stateManager);
+    let state = stateManager.load();
+    expect(state.current_phase).toBe("architect");
+    expect(state.status).toBe("awaiting_approval");
+    expect(Auggie.create).toHaveBeenCalledTimes(1);
+
+    // Simulate a reply that keeps us in the architect phase
+    replyCommand(tmpDir, "clarification reply");
+
+    // Second run: architect again with pending_reply; should reuse session
+    await runLoop(stateManager);
+    state = stateManager.load();
+    expect(state.current_phase).toBe("architect");
+    expect(state.status).toBe("awaiting_approval");
+    // Auggie.create should not be called again for the same run + phase
+    expect(Auggie.create).toHaveBeenCalledTimes(1);
   });
 });

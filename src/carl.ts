@@ -1,8 +1,56 @@
 #!/usr/bin/env node
 
-import { StateManager } from './state';
-import { runLoop } from './loop';
-import { approveCommand, rejectCommand } from './commands';
+import { StateManager } from "./state";
+import { runLoop } from "./loop";
+import { approveCommand, rejectCommand, replyCommand } from "./commands"; // used by runWithEditor
+import { openEditorForGate, collectPrompt } from "./editor";
+import { red, blue } from "./colors";
+
+async function runWithEditor(
+  stateManager: StateManager,
+  workspaceRoot: string,
+): Promise<void> {
+  while (true) {
+    await runLoop(stateManager);
+    const state = stateManager.load();
+
+    if (state.status !== "awaiting_approval") break;
+
+    const phase = state.current_phase;
+    const lastOutput =
+      state.history
+        ?.slice()
+        .reverse()
+        .find((h) => h.phase === phase && h.status !== "rejected")?.outputs ??
+      "";
+    console.log(
+      `\n  [System] ${phase} is waiting for your input. Opening editor...\n`,
+    );
+    const result = openEditorForGate(phase, lastOutput);
+
+    if (result.action === "approve") {
+      approveCommand(workspaceRoot);
+      const next = stateManager.load();
+      if (next.status === "completed") {
+        console.log("\n  [System] Workflow complete. Sprint approved.\n");
+        break;
+      }
+      // continue loop to run the next phase
+    } else if (result.action === "reject") {
+      rejectCommand(workspaceRoot, result.reason, result.target);
+      const after = stateManager.load();
+      console.log(
+        blue(
+          `  [System] ${phase} rejected. Returning to ${after.current_phase}.`,
+        ),
+      );
+      // continue loop — workflow resumes at the fallback phase (or explicit target)
+    } else {
+      replyCommand(workspaceRoot, result.message);
+      // continue loop — re-runs current phase with reply injected
+    }
+  }
+}
 
 async function main() {
   const args = process.argv.slice(2);
@@ -11,18 +59,43 @@ async function main() {
   const workspaceRoot = process.cwd();
   const stateManager = new StateManager(workspaceRoot);
 
-  if (command === 'start') {
+  if (command === "start") {
+    let prompt = args.slice(1).join(" ");
     try {
-      const state = stateManager.create(workspaceRoot);
+      // Guard against wiping an in-progress run
+      try {
+        const existing = stateManager.load();
+        if (existing.status !== "completed") {
+          console.error(
+            red(
+              `A workflow is already active (run: ${existing.run_id}, status: ${existing.status}, phase: ${existing.current_phase}).`,
+            ),
+          );
+          console.error(red(`Use 'carl run' to continue it.`));
+          process.exit(1);
+        }
+      } catch {
+        // No existing state — safe to start
+      }
+
+      if (!prompt) {
+        const collected = collectPrompt();
+        if (!collected) {
+          console.log("No prompt provided. Cancelled.");
+          process.exit(0);
+        }
+        prompt = collected;
+      }
+
+      const state = stateManager.create(workspaceRoot, prompt);
       console.log(`Started workflow run: ${state.run_id}`);
-      console.log(`Workspace path: ${state.workspace_path}`);
-      console.log(`Current phase: ${state.current_phase}`);
-      console.log(`Status: ${state.status}`);
+
+      await runWithEditor(stateManager, workspaceRoot);
     } catch (error: any) {
-      console.error(error.message);
+      console.error(red(error.message));
       process.exit(1);
     }
-  } else if (command === 'status') {
+  } else if (command === "status") {
     try {
       const state = stateManager.load();
       console.log(`Run ID: ${state.run_id}`);
@@ -30,63 +103,79 @@ async function main() {
       console.log(`Current phase: ${state.current_phase}`);
       console.log(`Status: ${state.status}`);
     } catch (error: any) {
-      console.error(error.message);
+      console.error(red(error.message));
       process.exit(1);
     }
-  } else if (command === 'run') {
-    let state = stateManager.load();
-    if (state.status === 'awaiting_approval') {
-      console.error(`Workflow is awaiting approval. Cannot run until approval is recorded.`);
-      process.exit(1);
-    }
-
+  } else if (command === "run") {
     try {
-      console.log(`Starting automated workflow loop from phase: ${state.current_phase}`);
-      await runLoop(stateManager);
-    } catch (error: any) {
-      console.error(`Workflow loop failed: ${error.message}`);
-      process.exit(1);
-    }
-  } else if (command === 'approve') {
-    try {
-      approveCommand(workspaceRoot);
       const state = stateManager.load();
-      if (state.status === 'completed') {
-        console.log(`Approval recorded. Workflow completed.`);
-      } else {
-        console.log(`Approval recorded. Workflow resumed in phase: ${state.current_phase}`);
+      if (state.status === "completed") {
+        console.log(
+          `Workflow already completed (phase: ${state.current_phase}). Use 'carl start "<prompt>"' to begin a new run, or 'carl reset' to clear state.`,
+        );
+        process.exit(0);
       }
+      console.log(`Resuming workflow from phase: ${state.current_phase}`);
+
+      // If awaiting approval, runWithEditor opens the editor immediately
+      if (state.status === "awaiting_approval") {
+        const phase = state.current_phase;
+        const lastOutput =
+          state.history
+            ?.slice()
+            .reverse()
+            .find((h) => h.phase === phase && h.status !== "rejected")
+            ?.outputs ?? "";
+        console.log(
+          `\n  [System] ${phase} is waiting for your input. Opening editor...\n`,
+        );
+        const result = openEditorForGate(phase, lastOutput);
+        if (result.action === "approve") approveCommand(workspaceRoot);
+        else if (result.action === "reject") {
+          rejectCommand(workspaceRoot, result.reason, result.target);
+          const after = stateManager.load();
+          console.log(
+            blue(
+              `  [System] ${phase} rejected. Returning to ${after.current_phase}.`,
+            ),
+          );
+        } else replyCommand(workspaceRoot, result.message);
+      }
+      await runWithEditor(stateManager, workspaceRoot);
     } catch (error: any) {
-      console.error(error.message);
+      console.error(red(`Workflow loop failed: ${error.message}`));
       process.exit(1);
     }
-  } else if (command === 'reject') {
-    const reason = args.slice(1).join(' ');
-    if (!reason) {
-      console.error('Usage: carl reject <reason>');
-      process.exit(1);
-    }
+  } else if (command === "reset") {
     try {
-      rejectCommand(workspaceRoot, reason);
-      console.log(`Approval rejected. Reason: ${reason}.`);
-    } catch (error: any) {
-      console.error(error.message);
-      process.exit(1);
+      const existing = stateManager.load();
+      console.log(
+        `Abandoning run: ${existing.run_id} (phase: ${existing.current_phase}, status: ${existing.status})`,
+      );
+    } catch {
+      // No state to show
     }
+    stateManager.delete();
+    console.log(
+      "Run cleared. Use 'carl start \"<prompt>\"' to begin a new run.",
+    );
   } else {
-    console.error('Usage: carl <command>');
-    console.error('');
-    console.error('Commands:');
-    console.error('  start    Start a new workflow run');
-    console.error('  status   Show the status of the current workflow run');
-    console.error('  run      Run the workflow loop starting from the current phase');
-    console.error('  approve  Approve a paused workflow');
-    console.error('  reject   Reject a paused workflow with a <reason>');
+    console.error("Usage: carl <command>");
+    console.error("");
+    console.error("Commands:");
+    console.error(
+      "  start    Start a new workflow run (fails if one is already active)",
+    );
+    console.error(
+      "  run      Resume — opens editor at any gate waiting for input",
+    );
+    console.error("  status   Show the status of the current workflow run");
+    console.error("  reset    Abandon the current run and clear state");
     process.exit(1);
   }
 }
 
-main().catch(error => {
+main().catch((error) => {
   console.error(error);
   process.exit(1);
 });

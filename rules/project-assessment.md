@@ -80,10 +80,9 @@ Month 3: DEADLINE
 
 **Week 1 validation methods:**
 
-1. **Vera** - Simulate expert opinions (see `skills/vera.md`)
-2. **Prototype** - Build minimal version, test core idea
-3. **Competitive analysis** - Does existing solution win?
-4. **Data collection** - Measure key metrics
+1. **Prototype** - Build minimal version, test core idea
+2. **Competitive analysis** - Does existing solution win?
+3. **Data collection** - Measure key metrics
 
 **Questions:**
 - Does this solve a real problem?
@@ -190,5 +189,4 @@ zig build test -Dsanitize=address,undefined,thread
 - `rules/subtract-first.md` - Delete before adding
 - `rules/dependencies.md` - Dependency budget (≤5)
 - `rules/api-stability.md` - Stable APIs
-- `skills/vera.md` - Early validation technique
 
