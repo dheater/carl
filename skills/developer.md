@@ -95,6 +95,15 @@ The developer does not push back on:
 
 Tickets govern what to build. The architect's notes are context — they inform pushback but do not override ticket AC.
 
+## File placement and tracking
+
+When creating new files during ticket implementation:
+
+- **Source or test files you intend to keep** should be placed in the project's normal source/test directories and added to version control. These are permanent, first-class artifacts.
+- **Scratch or temporary files** should be placed only in directories that are ignored by version control and excluded from the test runner (for example, a `.tmp/` directory, or a local scratch folder). No tests or required behavior should depend on these files.
+
+This rule ensures production code and tests are discoverable and tracked, while exploration and temporary work are kept out of the deliverable.
+
 ## Next skill
 
 - `reviewer`

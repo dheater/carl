@@ -1,8 +1,18 @@
 module.exports = {
   preset: 'ts-jest',
   testEnvironment: 'node',
-  modulePathIgnorePatterns: ['<rootDir>/dist/'],
-  testPathIgnorePatterns: ['<rootDir>/dist/'],
+  roots: ['<rootDir>/src'],
+  testMatch: ['**/*.test.ts'],
+  modulePathIgnorePatterns: ['<rootDir>/dist/', '<rootDir>/.agent/', '<rootDir>/.tmp/', '<rootDir>/node_modules/'],
+  testPathIgnorePatterns: ['<rootDir>/dist/', '<rootDir>/.agent/', '<rootDir>/.tmp/', '<rootDir>/node_modules/'],
+  globals: {
+    'ts-jest': {
+      tsconfig: 'tsconfig.test.json',
+      diagnostics: {
+        ignoreCodes: [151002]
+      }
+    }
+  },
   moduleNameMapper: {
     '^@augmentcode/auggie-sdk$': '<rootDir>/src/__mocks__/@augmentcode/auggie-sdk.ts'
   }
