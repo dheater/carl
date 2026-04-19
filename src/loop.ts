@@ -8,6 +8,7 @@ import {
 } from "./graph";
 import { blue, yellow } from "./colors";
 import { runJustFormat, runJustLint } from "./just";
+import { getGitStatus } from "./git";
 import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
@@ -56,7 +57,10 @@ function parsePrerequisites(skillContent: string): string[] {
   return (block[1].match(/\S+/g) ?? []).filter((s) => s !== "-");
 }
 
-function buildSkillInstruction(phaseName: string, workspaceRoot?: string): string {
+function buildSkillInstruction(
+  phaseName: string,
+  workspaceRoot?: string,
+): string {
   const skillContent = loadSkillFile(phaseName);
   let instruction = skillContent
     ? `# Your skill for this session\n\n${skillContent}`
@@ -72,12 +76,42 @@ function buildSkillInstruction(phaseName: string, workspaceRoot?: string): strin
     }
   }
 
-  // For reviewer phase, include lint results if available
+  // For reviewer phase, include deterministic context: git status and lint results
   if (phaseName === "reviewer" && workspaceRoot) {
+    // Add files changed section
+    const gitStatus = getGitStatus(workspaceRoot);
+    if (gitStatus.isRepo) {
+      let filesSection = "\n\n---\n\n# Files changed\n\n";
+      if (gitStatus.trackedChanged.length > 0) {
+        filesSection += "## Tracked changes\n\n";
+        filesSection += gitStatus.trackedChanged
+          .map((f) => `- ${f}`)
+          .join("\n");
+        filesSection += "\n\n";
+      }
+      if (gitStatus.untracked.length > 0) {
+        filesSection +=
+          "## Untracked files (not staged for commit)\n\n" +
+          gitStatus.untracked.map((f) => `- ${f}`).join("\n");
+        filesSection += "\n\n";
+      }
+      if (
+        gitStatus.trackedChanged.length === 0 &&
+        gitStatus.untracked.length === 0
+      ) {
+        filesSection += "No files changed.\n\n";
+      }
+      instruction += filesSection;
+    } else {
+      instruction +=
+        "\n\n---\n\n# Files changed\n\nNot in a git repository.\n\n";
+    }
+
+    // Add lint results if available
     const lintLogPath = path.join(workspaceRoot, ".agent", "lint.log");
     if (fs.existsSync(lintLogPath)) {
       const lintContent = fs.readFileSync(lintLogPath, "utf-8");
-      instruction += `\n\n---\n\n# Lint results\n\n\`\`\`\n${lintContent}\n\`\`\``;
+      instruction += "# Lint results\n\n```\n" + lintContent + "\n```";
     }
   }
 
@@ -89,8 +123,6 @@ const PHASE_CONTEXT_QUERIES: Record<string, string> = {
   architect:
     "scope, clarifying questions, user answers, requirements, constraints",
   developer: "tickets, implementation tasks, technical approach",
-  verifier:
-    "implementation results, completed tickets, code changes, test commands",
   reviewer: "verification results, QA evidence, implementation summary",
 };
 
@@ -260,8 +292,7 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
       );
 
       const isBlocked =
-        (phaseName === "developer" || phaseName === "verifier") &&
-        /block(?:ed|er):/i.test(response);
+        phaseName === "developer" && /block(?:ed|er):/i.test(response);
 
       history.push({
         phase: phaseName,
@@ -279,12 +310,6 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
             fs.mkdirSync(notesDir, { recursive: true });
           fs.writeFileSync(
             path.join(notesDir, "architect.md"),
-            response,
-            "utf-8",
-          );
-        } else if (phaseName === "verifier") {
-          fs.writeFileSync(
-            path.join(agentDir, "qa-report.md"),
             response,
             "utf-8",
           );
@@ -333,9 +358,11 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
         const phaseDuration = Date.now() - phaseStartTime;
         console.log(`[Timing] Phase ${phaseName} duration ${phaseDuration}ms`);
 
-        // After developer completes, run deterministic format/lint before verifier
+        // After developer completes, run deterministic format/lint before reviewer
         if (phaseName === "developer") {
-          console.log(`[System] Running deterministic format and lint checks...`);
+          console.log(
+            `[System] Running deterministic format and lint checks...`,
+          );
           runJustFormat(state.workspace_path);
           runJustLint(state.workspace_path);
           console.log(`[System] Format and lint checks completed.`);

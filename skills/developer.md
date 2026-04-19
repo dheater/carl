@@ -7,7 +7,7 @@ version: 1.0.0
 prerequisites:
   - architect
 next_skills:
-  - verifier
+  - reviewer
   - architect
 ---
 
@@ -23,7 +23,7 @@ Read `.agent/notes/architect.md` for context — note out-of-scope items and imp
 Read `.agent/tickets.md`. Find the first unchecked `[ ]` ticket, announce it, and begin immediately.
 
 If there's no tickets file, stop: "No tickets found. Run architect first."
-If all tickets are checked, stop: "All done. Time for verifier."
+If all tickets are checked, stop: "All done. Time for reviewer."
 
 Do not wait for confirmation. The architect gate already approved the plan — start the TDD cycle now.
 
@@ -53,7 +53,7 @@ If the ticket's AC can't be expressed as a test, stop and ask. Don't invent acce
 10. In your local dev environment, run `just format` and `just lint` (where `just` is installed) to verify formatting and lint locally. Fix any issues. Note: the workflow will re-run these deterministically between your phase and the reviewer gate, so you are not responsible for enforcing them in production — but local validation prevents surprises.
 11. Present a summary of the change and pause for human commit approval. After the commit is approved and made:
     - If unchecked tickets remain, continue to the next one
-    - If all tickets are checked, declare sprint complete and suggest verifier for sprint-end review
+    - If all tickets are checked, declare sprint complete and hand off to reviewer
 
 ## Done means
 
@@ -97,5 +97,5 @@ Tickets govern what to build. The architect's notes are context — they inform 
 
 ## Next skill
 
-- `verifier`
+- `reviewer`
 - `architect` (on Mikado escalation)

@@ -2,26 +2,26 @@
 type: agent_requested
 name: Reviewer
 description: Sprint-end gate — validates that the right thing was built, presents QA evidence, and pauses for human approval before declaring the sprint complete
-when_to_use: after verifier has run checks, formatted code, and written the QA report
+when_to_use: after developer has run TDD implementation and deterministic checks (format/lint)
 version: 1.0.0
 prerequisites:
-  - verifier
+  - developer
 next_skills:
   - architect
 ---
 
 # Reviewer
 
-**Deterministic first:** Read `.agent/notes/architect.md` for original intent, `.agent/tickets.md` for scope, and `.agent/qa-report.md` for verification evidence.
+**Deterministic first:** Read `.agent/notes/architect.md` for original intent, `.agent/tickets.md` for scope, and `.agent/lint.log` for verification evidence.
 **External side effects:** None until the human explicitly signs off.
 
 ## Starting a session
 
-Present two things in order: a validation summary first, then the verification evidence.
+Present three sections: a validation summary, an automated evidence summary, and a human validation checklist.
 
 ### 1. Validation — did we build the right thing?
 
-Read `.agent/notes/architect.md` and the original ticket list to reconstruct what the human asked for.
+Read `.agent/notes/architect.md` and `.agent/tickets.md` to reconstruct what was asked for and what was delivered.
 
 Produce a short validation summary:
 
@@ -39,15 +39,22 @@ Produce a short validation summary:
 - None, if everything was delivered as scoped
 ```
 
-Be direct about gaps. If the architect deferred something during scope challenge, call it out — the human may have forgotten. If a ticket's implementation diverged from its AC in any observable way, surface it.
+Be direct about gaps. If the architect deferred something during scope challenge, call it out. If a ticket's implementation diverged from its AC, surface it.
 
-### 2. Verification — did we build it right?
+### 2. Automated evidence summary
 
-Present the automated evidence from `.agent/qa-report.md`: commands run, pass/fail results, skipped checks, residual risks.
+**Lint results:** Read `.agent/lint.log` (generated during the workflow after the developer phase) and summarize pass/fail status. Do NOT run `just lint` yourself unless the file is missing.
+
+```
+## Verification
+
+- Lint: PASS (or FAIL with summary of issues)
+- All tests: PASS (or FAIL with count of failures)
+```
 
 ### 3. Human validation checklist
 
-Copy the human validation checklist from `.agent/qa-report.md` into your output verbatim, preceded by these instructions for the human:
+Produce a concrete human validation checklist with runnable commands and expected outcomes:
 
 ```
 ## Your validation steps
@@ -61,6 +68,8 @@ Save and close to approve. Write `reject: <what failed and what you observed>` o
 ### t-2: <title>
 - <step> → expect: <outcome>
 ```
+
+Each step must be runnable and have an observable, unambiguous expected outcome. Avoid vague steps like "check that it works."
 
 ### 4. Approval
 

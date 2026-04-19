@@ -6,6 +6,7 @@ import { runJustFormat, runJustLint } from "./just";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
+import { execSync } from "child_process";
 
 jest.mock("@augmentcode/auggie-sdk", () => ({
   Auggie: {
@@ -14,6 +15,8 @@ jest.mock("@augmentcode/auggie-sdk", () => ({
 }));
 
 jest.mock("./just");
+
+jest.mock("child_process");
 
 const { Auggie } = require("@augmentcode/auggie-sdk");
 
@@ -39,7 +42,7 @@ describe("End-to-End Workflow Harness", () => {
       );
     }
 
-    // Track which phase is calling us by counting calls in sequence: architect, developer, verifier, reviewer.
+    // Track which phase is calling us by counting calls in sequence: architect, developer, reviewer.
     // Architect output must be a valid tickets file so approveCommand's guard passes.
     let callCount = 0;
     mockPrompt = jest.fn().mockImplementation((instruction: string) => {
@@ -48,7 +51,6 @@ describe("End-to-End Workflow Harness", () => {
       const phaseOutputs = [
         "# Tickets\n\n## [ ] t-1: Sample ticket\n\nAC:\n- Sample acceptance criteria", // architect
         "mocked developer response", // developer
-        "mocked verifier response", // verifier
         "mocked reviewer response", // reviewer
       ];
       return Promise.resolve(phaseOutputs[phaseIndex] || "mocked response");
@@ -92,7 +94,7 @@ describe("End-to-End Workflow Harness", () => {
   });
 
   test("architect approval -> developer handoff without skipping", async () => {
-    // After an architect approval, the workflow must run developer -> verifier -> reviewer
+    // After an architect approval, the workflow must run developer -> reviewer
     // with no phase skipped.
 
     mockPrompt
@@ -115,24 +117,20 @@ describe("End-to-End Workflow Harness", () => {
     state = stateManager.load();
 
     const developerEntry = state.history!.find((h) => h.phase === "developer");
-    const verifierEntry = state.history!.find((h) => h.phase === "verifier");
     const reviewerEntry = state.history!.find((h) => h.phase === "reviewer");
 
     expect(developerEntry).toBeDefined();
     expect(developerEntry!.status).toBe("success");
-    expect(verifierEntry).toBeDefined();
-    expect(verifierEntry!.status).toBe("success");
     expect(reviewerEntry).toBeDefined();
 
-    // Verify ordering: architect < developer < verifier < reviewer
+    // Verify ordering: architect < developer < reviewer
     const phases = state.history!.map((h) => h.phase);
     expect(phases.indexOf("architect")).toBeLessThan(
       phases.indexOf("developer"),
     );
     expect(phases.indexOf("developer")).toBeLessThan(
-      phases.indexOf("verifier"),
+      phases.indexOf("reviewer"),
     );
-    expect(phases.indexOf("verifier")).toBeLessThan(phases.indexOf("reviewer"));
 
     expect(state.current_phase).toBe("reviewer");
     expect(state.status).toBe("awaiting_approval");
@@ -143,7 +141,7 @@ describe("End-to-End Workflow Harness", () => {
       .mockResolvedValueOnce("# Tickets\n\n## [ ] t-1: Sample\n\nAC:\n- Test") // architect
       .mockResolvedValueOnce("blocked: need API token") // developer blocks
       .mockResolvedValueOnce("# Tickets\n\n## [ ] t-1: Sample\n\nAC:\n- Test") // architect retry
-      .mockResolvedValue("success"); // developer, verifier, reviewer; then after reject: developer, verifier, reviewer
+      .mockResolvedValue("success"); // developer, reviewer; then after reject: developer, reviewer
 
     // 1. Run loop to architect
     await runLoop(stateManager);
@@ -158,7 +156,7 @@ describe("End-to-End Workflow Harness", () => {
     expect(state.status).toBe("awaiting_approval");
     expect(state.current_phase).toBe("architect");
 
-    // 3. Approve architect again, runs developer, verifier, reviewer (pauses at reviewer)
+    // 3. Approve architect again, runs developer, reviewer (pauses at reviewer)
     approveCommand(tmpDir);
     await runLoop(stateManager);
     state = stateManager.load();
@@ -288,8 +286,12 @@ describe("End-to-End Workflow Harness", () => {
   });
 
   test("runJustFormat and runJustLint are called after developer phase", async () => {
-    const mockRunJustFormat = runJustFormat as jest.MockedFunction<typeof runJustFormat>;
-    const mockRunJustLint = runJustLint as jest.MockedFunction<typeof runJustLint>;
+    const mockRunJustFormat = runJustFormat as jest.MockedFunction<
+      typeof runJustFormat
+    >;
+    const mockRunJustLint = runJustLint as jest.MockedFunction<
+      typeof runJustLint
+    >;
 
     // Initialize state and files
     const { Auggie } = require("@augmentcode/auggie-sdk");
@@ -301,7 +303,6 @@ describe("End-to-End Workflow Harness", () => {
         const outputs = [
           "# Tickets\n\n## [ ] t-1: Sample\n\nAC:\n- Sample", // architect
           "mocked developer response", // developer
-          "mocked verifier response", // verifier
           "mocked reviewer response", // reviewer
         ];
         return Promise.resolve(outputs[phaseIndex] || "response");
@@ -318,7 +319,7 @@ describe("End-to-End Workflow Harness", () => {
     // Approve architect
     approveCommand(tmpDir);
 
-    // Run developer → verifier → reviewer (mocked)
+    // Run developer → reviewer (mocked)
     await runLoop(stateManager);
     state = stateManager.load();
 
@@ -332,7 +333,9 @@ describe("End-to-End Workflow Harness", () => {
   });
 
   test("workflow reaches reviewer gate even when lint returns non-zero exitCode", async () => {
-    const mockRunJustLint = runJustLint as jest.MockedFunction<typeof runJustLint>;
+    const mockRunJustLint = runJustLint as jest.MockedFunction<
+      typeof runJustLint
+    >;
 
     // Mock runJustLint to return failure status
     mockRunJustLint.mockReturnValue({
@@ -373,7 +376,9 @@ describe("End-to-End Workflow Harness", () => {
   });
 
   test("reviewer instruction includes .agent/lint.log content when present", async () => {
-    const mockRunJustLint = runJustLint as jest.MockedFunction<typeof runJustLint>;
+    const mockRunJustLint = runJustLint as jest.MockedFunction<
+      typeof runJustLint
+    >;
     const lintLogContent = "Command: just lint\n\nStdout:\nNo issues found";
 
     // Create lint.log file
@@ -392,17 +397,19 @@ describe("End-to-End Workflow Harness", () => {
     let reviewerInstruction = "";
     (Auggie.create as jest.Mock).mockResolvedValue({
       prompt: jest.fn().mockImplementation((instruction: string) => {
-        if (callCount === 3) { // reviewer phase (0: architect, 1: developer, 2: verifier, 3: reviewer)
+        if (callCount === 2) {
+          // reviewer phase (0: architect, 1: developer, 2: reviewer)
           reviewerInstruction = instruction;
         }
         callCount++;
         const outputs = [
           "# Tickets\n\n## [ ] t-1: Sample\n\nAC:\n- Sample",
           "mocked developer response",
-          "mocked verifier response",
           "mocked reviewer response",
         ];
-        return Promise.resolve(outputs[Math.min(callCount - 1, 3)] || "response");
+        return Promise.resolve(
+          outputs[Math.min(callCount - 1, 2)] || "response",
+        );
       }),
       close: jest.fn().mockResolvedValue(undefined),
       onSessionUpdate: jest.fn(),
@@ -415,5 +422,57 @@ describe("End-to-End Workflow Harness", () => {
     // Verify reviewer instruction includes lint.log content
     expect(reviewerInstruction).toContain("Lint results");
     expect(reviewerInstruction).toContain(lintLogContent);
+  });
+
+  test("reviewer instruction includes changed files section from git status", async () => {
+    const mockExecSync = execSync as jest.MockedFunction<typeof execSync>;
+    const { Auggie } = require("@augmentcode/auggie-sdk");
+
+    // Mock git commands
+    let callCount = 0;
+    let reviewerInstruction = "";
+    (Auggie.create as jest.Mock).mockResolvedValue({
+      prompt: jest.fn().mockImplementation((instruction: string) => {
+        if (callCount === 2) {
+          reviewerInstruction = instruction;
+        }
+        callCount++;
+        const outputs = [
+          "# Tickets\n\n## [ ] t-1: Test\n\nAC:\n- test",
+          "mocked developer response",
+          "mocked reviewer response",
+        ];
+        return Promise.resolve(
+          outputs[Math.min(callCount - 1, 2)] || "response",
+        );
+      }),
+      close: jest.fn().mockResolvedValue(undefined),
+      onSessionUpdate: jest.fn(),
+    });
+
+    // Mock execSync to simulate git status with changes
+    mockExecSync.mockImplementation((cmd: string, opts?: any) => {
+      if (cmd.includes("rev-parse")) return "true" as any;
+      if (cmd.includes("status --porcelain")) {
+        return " M src/modified.ts\nA  src/new.ts\n?? untracked.txt" as any;
+      }
+      return "" as any;
+    });
+
+    // Run workflow
+    await runLoop(stateManager);
+    let state = stateManager.load();
+    expect(state.current_phase).toBe("architect");
+
+    approveCommand(tmpDir);
+
+    await runLoop(stateManager);
+    state = stateManager.load();
+
+    // Verify reviewer instruction includes changed files section
+    expect(reviewerInstruction).toContain("Files changed");
+    expect(reviewerInstruction).toContain("src/modified.ts");
+    expect(reviewerInstruction).toContain("src/new.ts");
+    expect(reviewerInstruction).toContain("untracked.txt");
   });
 });

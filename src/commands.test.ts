@@ -85,20 +85,20 @@ describe("Commands", () => {
 
   test("rejectCommand changes status and history, returning to prior phase", () => {
     stateManager.update({
-      current_phase: "verifier",
+      current_phase: "reviewer",
       status: "awaiting_approval",
       history: [
         {
-          phase: "developer",
-          model: "sonnet4.6",
+          phase: "architect",
+          model: "gpt5.1",
           status: "success",
-          outputs: "ok",
+          outputs: "# Tickets\n\n## [ ] t-1\n\nAC:\n- test",
         },
         {
-          phase: "verifier",
-          model: "sonnet4.6",
+          phase: "developer",
+          model: "haiku4.5",
           status: "success",
-          outputs: "please approve",
+          outputs: "implemented feature",
         },
       ],
     });
@@ -107,12 +107,12 @@ describe("Commands", () => {
 
     const state = stateManager.load();
     expect(state.status).toBe("running");
-    expect(state.current_phase).toBe("developer"); // verifier fallback is developer
+    expect(state.current_phase).toBe("developer"); // reviewer fallback is developer
 
     // History should have the rejection logged
     expect(state.history).toHaveLength(3);
     expect(state.history![2]).toEqual({
-      phase: "verifier",
+      phase: "reviewer",
       model: "system",
       status: "rejected",
       outputs: "Approval rejected: Missing tests",

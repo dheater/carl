@@ -42,7 +42,7 @@ async function runWithEditor(
                 .reverse()
                 .find(
                   (h: any) => h.phase === "reviewer" && h.status === "success",
-                )?.outputs ?? "Summary: Code review completed";
+                )?.outputs ?? "";
             await handleReviewerCommit(workspaceRoot, reviewerOutput);
           }
           console.log("\n  [System] Workflow complete. Sprint approved.\n");
@@ -160,7 +160,7 @@ async function main() {
                 .reverse()
                 .find(
                   (h: any) => h.phase === "reviewer" && h.status === "success",
-                )?.outputs ?? "Summary: Code review completed";
+                )?.outputs ?? "";
             await handleReviewerCommit(workspaceRoot, reviewerOutput);
             console.log("\n  [System] Workflow complete. Sprint approved.\n");
             await closeSharedClient();

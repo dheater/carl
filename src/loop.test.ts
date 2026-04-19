@@ -85,20 +85,31 @@ describe("Workflow Loop", () => {
     );
   });
 
-  test("resumes from a gate when status is running", async () => {
-    stateManager.update({ current_phase: "verifier", status: "running" });
+  test("resumes from a non-gate phase and continues to next gate", async () => {
+    stateManager.update({
+      current_phase: "developer",
+      status: "running",
+      history: [
+        {
+          phase: "architect",
+          model: "gpt5.1",
+          status: "success",
+          outputs: "# Tickets\n\n## [ ] t-1: Test\n\nAC:\n- Test",
+        },
+      ],
+    });
     await runLoop(stateManager);
 
     const state = stateManager.load();
     expect(state.status).toBe("awaiting_approval");
     expect(state.current_phase).toBe("reviewer");
-    expect(state.history).toHaveLength(2); // verifier, reviewer
-    expect(mockPrompt).toHaveBeenCalledTimes(2);
+    expect(state.history).toHaveLength(3); // architect (prior), developer, reviewer (now at gate)
+    expect(mockPrompt).toHaveBeenCalledTimes(2); // developer and reviewer both run before gate pauses
 
     expect(Auggie.create).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
-        model: "haiku4.5", // verifier
+        model: "haiku4.5", // developer
       }),
     );
     expect(Auggie.create).toHaveBeenNthCalledWith(
@@ -138,17 +149,28 @@ describe("Workflow Loop", () => {
     expect(state.current_phase).toBe("architect");
   });
 
-  test("verifier BLOCKER: prefix is detected as blocked", async () => {
-    stateManager.update({ current_phase: "verifier", status: "running" });
-    mockPrompt.mockResolvedValueOnce("BLOCKER: no implementation exists yet");
+  test("developer BLOCKER: prefix is detected as blocked", async () => {
+    stateManager.update({
+      current_phase: "developer",
+      status: "running",
+      history: [
+        {
+          phase: "architect",
+          model: "gpt5.1",
+          status: "success",
+          outputs: "# Tickets\n\n## [ ] t-1: Sample\n\nAC:\n- Sample",
+        },
+      ],
+    });
+    mockPrompt.mockResolvedValueOnce("blocked: no implementation exists yet");
     mockPrompt.mockRejectedValueOnce(new Error("stop loop"));
 
     await expect(runLoop(stateManager)).rejects.toThrow("stop loop");
 
     const state = stateManager.load();
-    expect(state.history![0]).toEqual(
+    expect(state.history![1]).toEqual(
       expect.objectContaining({
-        phase: "verifier",
+        phase: "developer",
         status: "blocked",
       }),
     );
@@ -269,7 +291,7 @@ describe("Workflow Loop", () => {
     );
 
     stateManager.update({
-      current_phase: "verifier",
+      current_phase: "reviewer",
       status: "running",
       history: [
         {
@@ -280,7 +302,7 @@ describe("Workflow Loop", () => {
         },
       ],
     });
-    mockPrompt.mockResolvedValueOnce("QA passed");
+    mockPrompt.mockResolvedValueOnce("reviewer approved");
 
     await runLoop(stateManager);
 
@@ -342,30 +364,6 @@ describe("Workflow Loop", () => {
 });
 
 describe("Skill files - deterministic format/lint integration", () => {
-  test("skills/verifier.md mentions .agent/lint.log", () => {
-    const verifierPath = path.join(__dirname, "..", "skills", "verifier.md");
-    const content = fs.readFileSync(verifierPath, "utf-8");
-    expect(content).toMatch(/\.agent\/lint\.log/);
-  });
-
-  test("skills/verifier.md does not instruct verifier to run just format/lint as primary behavior", () => {
-    const verifierPath = path.join(__dirname, "..", "skills", "verifier.md");
-    const content = fs.readFileSync(verifierPath, "utf-8");
-
-    // Check that "just format" or "just lint" only appears in context of lint.log or fallback
-    const lines = content.split("\n");
-    let foundJustLint = false;
-    for (const line of lines) {
-      // If line contains "just format" or "just lint"
-      if (/(just\s+format|just\s+lint)/i.test(line)) {
-        foundJustLint = true;
-        // It should be in fallback context or lint.log context, not as primary directive
-        expect(line).toMatch(/fallback|optional|\.agent\/lint\.log/i);
-      }
-    }
-    expect(foundJustLint).toBe(true); // Make sure we actually found and checked the lines
-  });
-
   test("skills/developer.md notes that carl will re-run format/lint", () => {
     const developerPath = path.join(__dirname, "..", "skills", "developer.md");
     const content = fs.readFileSync(developerPath, "utf-8");
