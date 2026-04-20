@@ -3,7 +3,6 @@
 import { StateManager } from "./state";
 import { runLoop, closeSharedClient } from "./loop";
 import { approveCommand, rejectCommand, replyCommand } from "./commands"; // used by runWithEditor
-import { handleReviewerCommit } from "./commit";
 import { openEditorForGate, collectPrompt } from "./editor";
 import { red, blue } from "./colors";
 
@@ -34,17 +33,6 @@ async function runWithEditor(
         approveCommand(workspaceRoot);
         const next = stateManager.load();
         if (next.status === "completed") {
-          // If we just completed at reviewer phase, offer to commit
-          if (phase === "reviewer") {
-            const reviewerOutput =
-              (next.history || [])
-                .slice()
-                .reverse()
-                .find(
-                  (h: any) => h.phase === "reviewer" && h.status === "success",
-                )?.outputs ?? "";
-            await handleReviewerCommit(workspaceRoot, reviewerOutput);
-          }
           console.log("\n  [System] Workflow complete. Sprint approved.\n");
           break;
         }
@@ -153,15 +141,6 @@ async function main() {
           // Check if this approval completed the workflow at reviewer phase
           const updatedState = stateManager.load();
           if (updatedState.status === "completed" && phase === "reviewer") {
-            // Trigger commit step before exiting
-            const reviewerOutput =
-              (updatedState.history || [])
-                .slice()
-                .reverse()
-                .find(
-                  (h: any) => h.phase === "reviewer" && h.status === "success",
-                )?.outputs ?? "";
-            await handleReviewerCommit(workspaceRoot, reviewerOutput);
             console.log("\n  [System] Workflow complete. Sprint approved.\n");
             await closeSharedClient();
             return;

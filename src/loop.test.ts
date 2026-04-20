@@ -462,4 +462,22 @@ describe("buildSkillInstruction for reviewer with branch context", () => {
     // Developer instructions should NOT include proposed commit message section
     expect(instruction).not.toMatch(/## Proposed commit message/i);
   });
+
+  test("reviewer skill file includes manual code-review step with reject guidance", () => {
+    const skillsDir = path.join(__dirname, "..", "skills");
+    const reviewerPath = path.join(skillsDir, "reviewer.md");
+    const skillContent = fs.readFileSync(reviewerPath, "utf-8");
+
+    // AC: Skill includes guidance to review code outside Carl
+    expect(skillContent).toMatch(
+      /review.*code.*outside|code.*review.*own.*tool/i,
+    );
+    expect(skillContent).toMatch(/git.*ui|editor|diff/i);
+
+    // AC: Skill includes reject: <reason> guidance
+    expect(skillContent).toMatch(/reject:\s*<.*reason/i);
+
+    // AC: Skill mentions returning to developer
+    expect(skillContent).toMatch(/return.*developer|sent.*back.*developer/i);
+  });
 });

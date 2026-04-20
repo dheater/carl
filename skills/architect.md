@@ -18,17 +18,20 @@ next_skills:
 **Before anything else, ask clarifying questions.** Output a numbered list of specific unknowns grouped by topic. Ask the minimum needed. Stop and wait for answers.
 
 **Question formats (prefer keystroke-answerable):**
+
 - **Binary:** yes/no for single-choice questions
 - **Multiple choice:** `a)`, `b)`, `c)`, … with `other:` catch-all
 - **Free text:** only for genuinely open-ended answers
 
 Check what exists:
+
 - `.agent/tickets.md` — open `[ ]` tickets? `blocked:` tickets?
 - `.agent/notes/prd-*.md` — any PRD files?
 
 **If none exist, skip the menu and go directly to scope challenge.**
 
 **If 2+ options apply, present a menu:**
+
 ```
 What would you like to do?
   1. Start something new

@@ -1,54 +1,6 @@
 {
   "lockfile_version": "1",
   "packages": {
-    "gh@latest": {
-      "last_modified": "2026-03-27T11:17:38Z",
-      "resolved": "github:NixOS/nixpkgs/832efc09b4caf6b4569fbf9dc01bec3082a00611#gh",
-      "source": "devbox-search",
-      "version": "2.89.0",
-      "systems": {
-        "aarch64-darwin": {
-          "outputs": [
-            {
-              "name": "out",
-              "path": "/nix/store/ifqpbjcfx5snmahgny6lx40wxbh2yr7g-gh-2.89.0",
-              "default": true
-            }
-          ],
-          "store_path": "/nix/store/ifqpbjcfx5snmahgny6lx40wxbh2yr7g-gh-2.89.0"
-        },
-        "aarch64-linux": {
-          "outputs": [
-            {
-              "name": "out",
-              "path": "/nix/store/kx2h8n89f8c7a8js867836msdvsfif4j-gh-2.89.0",
-              "default": true
-            }
-          ],
-          "store_path": "/nix/store/kx2h8n89f8c7a8js867836msdvsfif4j-gh-2.89.0"
-        },
-        "x86_64-darwin": {
-          "outputs": [
-            {
-              "name": "out",
-              "path": "/nix/store/20pxzdzqba82zcy2zwqcsdn9imjrhg24-gh-2.89.0",
-              "default": true
-            }
-          ],
-          "store_path": "/nix/store/20pxzdzqba82zcy2zwqcsdn9imjrhg24-gh-2.89.0"
-        },
-        "x86_64-linux": {
-          "outputs": [
-            {
-              "name": "out",
-              "path": "/nix/store/1131yfwz32j7ad860qy9ksvbiid2hv0k-gh-2.89.0",
-              "default": true
-            }
-          ],
-          "store_path": "/nix/store/1131yfwz32j7ad860qy9ksvbiid2hv0k-gh-2.89.0"
-        }
-      }
-    },
     "git@latest": {
       "last_modified": "2026-03-21T07:29:51Z",
       "resolved": "github:NixOS/nixpkgs/09061f748ee21f68a089cd5d91ec1859cd93d0be#git",
@@ -206,54 +158,6 @@
             }
           ],
           "store_path": "/nix/store/y07l22fq8wvg4wdf6anb0s6cljmsfs73-just-1.49.0"
-        }
-      }
-    },
-    "mob@latest": {
-      "last_modified": "2026-03-21T07:29:51Z",
-      "resolved": "github:NixOS/nixpkgs/09061f748ee21f68a089cd5d91ec1859cd93d0be#mob",
-      "source": "devbox-search",
-      "version": "5.4.2",
-      "systems": {
-        "aarch64-darwin": {
-          "outputs": [
-            {
-              "name": "out",
-              "path": "/nix/store/xjwgghmiiym08g18nhj9y6zfwh79cckv-mob-5.4.2",
-              "default": true
-            }
-          ],
-          "store_path": "/nix/store/xjwgghmiiym08g18nhj9y6zfwh79cckv-mob-5.4.2"
-        },
-        "aarch64-linux": {
-          "outputs": [
-            {
-              "name": "out",
-              "path": "/nix/store/vh7zcnkf1y6yll7r113k8jkw5l1rngka-mob-5.4.2",
-              "default": true
-            }
-          ],
-          "store_path": "/nix/store/vh7zcnkf1y6yll7r113k8jkw5l1rngka-mob-5.4.2"
-        },
-        "x86_64-darwin": {
-          "outputs": [
-            {
-              "name": "out",
-              "path": "/nix/store/cxzpps0ym92yifd6sairb5sl1f2yrkf4-mob-5.4.2",
-              "default": true
-            }
-          ],
-          "store_path": "/nix/store/cxzpps0ym92yifd6sairb5sl1f2yrkf4-mob-5.4.2"
-        },
-        "x86_64-linux": {
-          "outputs": [
-            {
-              "name": "out",
-              "path": "/nix/store/5wpq8388ifa81gdx5qfvk79b47nmz1jr-mob-5.4.2",
-              "default": true
-            }
-          ],
-          "store_path": "/nix/store/5wpq8388ifa81gdx5qfvk79b47nmz1jr-mob-5.4.2"
         }
       }
     },

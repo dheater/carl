@@ -127,3 +127,72 @@ describe("runJustLint", () => {
     expect(result.exitCode).toBe(1);
   });
 });
+
+describe("runCanonicalTests", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-tests-"));
+  });
+
+  afterEach(() => {
+    jest.clearAllMocks();
+    if (fs.existsSync(tmpDir)) {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("with Justfile: runs 'just test' and returns usedJust=true", () => {
+    // Create a Justfile in the temp directory
+    fs.writeFileSync(path.join(tmpDir, "Justfile"), "test:\n  echo testing");
+
+    mockSpawnSync.mockReturnValue({
+      status: 0,
+      stdout: "tests pass",
+      stderr: "",
+    } as any);
+
+    const { runCanonicalTests } = require("./just");
+    const result = runCanonicalTests(tmpDir);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.usedJust).toBe(true);
+    expect(result.command).toBe("just test");
+  });
+
+  test("without Justfile but with package.json test script: runs npm test and returns usedJust=false", () => {
+    const packageJsonPath = path.join(tmpDir, "package.json");
+    fs.writeFileSync(
+      packageJsonPath,
+      JSON.stringify({ scripts: { test: "jest" } }),
+    );
+
+    mockSpawnSync.mockReturnValue({
+      status: 0,
+      stdout: "tests pass",
+      stderr: "",
+    } as any);
+
+    const { runCanonicalTests } = require("./just");
+    const result = runCanonicalTests(tmpDir);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.usedJust).toBe(false);
+    expect(result.command).toBe("npm test");
+  });
+
+  test("without Justfile or test script: returns non-zero exit code with instructive error", () => {
+    mockSpawnSync.mockReturnValue({
+      status: 0,
+      stdout: "",
+      stderr: "",
+    } as any);
+
+    const { runCanonicalTests } = require("./just");
+    const result = runCanonicalTests(tmpDir);
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.usedJust).toBe(false);
+    expect(result.stderr).toMatch(/just test|npm test/i);
+  });
+});

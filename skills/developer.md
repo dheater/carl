@@ -57,6 +57,22 @@ No production code without a failing test first. If AC can't be expressed as a t
 - Each ticket committed with human approval
 - `just format` and `just lint` succeed
 
+## Deterministic Format and Lint
+
+After a successful Developer phase, the workflow will re-run `just format` and `just lint` deterministically to ensure consistent code style. Your changes must pass these checks before advancing to code review.
+
+## File Placement and Tracking
+
+When you create new source or test files you intend to keep, add them to version control:
+- Put them under the project's normal directories (e.g., `src/`, `test/`)
+- They must be tracked in git and kept passing under the test runner
+
+When you need ephemeral experiments or scratch content:
+- Put them under `.tmp/` (gitignored) or similar temporary directories.
+- Scratch or temporary files must be ignored by version control (via `.gitignore`), and
+- Scratch or temporary files must be excluded from the test runner (via Jest config or similar).
+- Never rely on temporary files for passing tests or production behavior.
+
 ## Mikado Escalation
 
 When a ticket can't be completed because something is missing:

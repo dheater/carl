@@ -53,6 +53,11 @@ Read `.agent/lint.log` (do NOT run `just lint` yourself unless missing).
 Work through each in another window. Save and close to approve.
 Write `reject: <what failed>` if anything fails.
 
+### Code review
+- **Review the code or diff in your own tools** (git UI, terminal `git diff`, IDE, etc.) outside of Carl. Verify the logic, style, and approach match expectations.
+- **If you want code changes**, close this editor with a line like `reject: <reason>` (e.g., `reject: missing error handling for network timeout`) to send the work back to the developer.
+- **If you're satisfied**, proceed to approve.
+
 ### t-1: <title>
 - Run `<exact command>` → expect: <outcome>
 ```
@@ -70,6 +75,7 @@ Increase default timeout from 30s to 60s in HTTP client.
 ```
 
 **Subject line:**
+
 - Ticket branch: `TICKET-ID: Summary of code changes`
 - Non-ticket branch: conventional-commit prefix (`fix:`, `feat:`, etc.) + summary
 - Never mention gates, phases, or process
