@@ -12,7 +12,7 @@ next_skills:
 
 # Reviewer
 
-**Deterministic first:** Read `.agent/notes/architect.md`, `.agent/tickets.md`, `.agent/lint.log`.
+**Deterministic first:** Read `.agent/notes/architect.md`, `.agent/tickets.md`, `.agent/tests-summary.json`, and `.agent/tests.log` before evaluating work.
 **External side effects:** None until the human signs off.
 
 ## Starting a Session
@@ -35,14 +35,20 @@ Present four sections:
 
 Be direct about gaps. Surface any divergence from AC.
 
-### 2. Automated Evidence
+### 2. Deterministic Test & Lint Evidence
 
-Read `.agent/lint.log` (do NOT run `just lint` yourself unless missing).
+Read the deterministic artifacts produced after developer phase completion:
+
+- **`.agent/tests-summary.json`** — Machine-readable summary of test results (status, pass count, fail count)
+- **`.agent/tests.log`** — Full test output from `just test`
+
+Do NOT run `just test` or `just lint` yourself. The developer phase ran these deterministically and produced evidence. Read and verify the artifacts instead.
 
 ```
 ## Verification
-- Lint: PASS/FAIL
-- All tests: PASS/FAIL
+- Tests: PASS (from .agent/tests-summary.json)
+- Lint: PASS (implicit - developer gate enforces this)
+- Test artifacts location: .agent/tests-summary.json, .agent/tests.log
 ```
 
 ### 3. Human Validation Checklist
@@ -80,8 +86,14 @@ Increase default timeout from 30s to 60s in HTTP client.
 - Non-ticket branch: conventional-commit prefix (`fix:`, `feat:`, etc.) + summary
 - Never mention gates, phases, or process
 
-### 5. Approval
+### 5. Approval Routes
 
-- No `reject:` → approve
-- `reject: reason` → returned to developer
-- `reject-architect: reason` → returned to architect
+**Approve (acceptance):**
+- No `reject:` line → approve and declare sprint complete
+
+**Reject (escalate to architect for re-planning):**
+- `reject: reason` → work returns to architect phase for re-scoping and re-planning
+  - Example: `reject: implementation doesn't match AC for error handling`
+  - The architect will review the failure and propose revised approach
+
+**Why architect?** When reviewer rejects, the problem is typically in scope or design (architect's domain), not just code changes (developer's domain). Architect needs to re-evaluate the approach and slice plan.

@@ -11,7 +11,7 @@ export function getNextPhase(currentPhase: string): string | null {
 export function getFallbackPhase(currentPhase: string): string {
   switch (currentPhase) {
     case "reviewer":
-      return "developer";
+      return "architect";
     case "developer":
       return "architect";
     default:

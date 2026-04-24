@@ -14,7 +14,22 @@ jest.mock("@augmentcode/auggie-sdk", () => ({
   },
 }));
 
-jest.mock("./just");
+jest.mock("./just", () => ({
+  runJustFormat: jest.fn(),
+  runJustLint: jest.fn(() => ({
+    exitCode: 0,
+    stdout: "Lint passed",
+    stderr: "",
+    status: "PASS",
+  })),
+  runCanonicalTests: jest.fn(() => ({
+    exitCode: 0,
+    stdout: "All tests passed",
+    stderr: "",
+    command: "just test",
+    usedJust: true,
+  })),
+}));
 
 jest.mock("child_process");
 
@@ -170,18 +185,28 @@ describe("End-to-End Workflow Harness", () => {
     expect(blockedDeveloperEntry).toBeDefined();
     expect(blockedDeveloperEntry!.outputs).toContain("blocked: need API token");
 
-    // Reject reviewer to test handback to developer
+    // Reject reviewer to test handback to architect
     rejectCommand(tmpDir, "qa failed");
 
-    // Now state should be running at developer
+    // Now state should be running at architect
     const rejectedState = stateManager.load();
-    expect(rejectedState.current_phase).toBe("developer");
+    expect(rejectedState.current_phase).toBe("architect");
     expect(rejectedState.status).toBe("running");
 
-    // Run loop again to reach reviewer gate
+    // Verify rejection was recorded
+    const reviewerRejection = rejectedState.history!.find(
+      (h) => h.phase === "reviewer" && h.status === "rejected",
+    );
+    expect(reviewerRejection).toBeDefined();
+    expect(reviewerRejection!.outputs).toContain("qa failed");
+
+    // Run loop again: architect responds and pauses at gate
+    mockPrompt.mockResolvedValueOnce(
+      "# Tickets\n\n## [ ] t-1: Revised\n\nAC:\n- Updated",
+    );
     await runLoop(stateManager);
     const resumedState = stateManager.load();
-    expect(resumedState.current_phase).toBe("reviewer");
+    expect(resumedState.current_phase).toBe("architect");
     expect(resumedState.status).toBe("awaiting_approval");
   });
 
@@ -342,6 +367,7 @@ describe("End-to-End Workflow Harness", () => {
       exitCode: 1,
       stdout: "",
       stderr: "lint failed",
+      status: "FAIL",
     });
 
     const { Auggie } = require("@augmentcode/auggie-sdk");
@@ -390,6 +416,7 @@ describe("End-to-End Workflow Harness", () => {
       exitCode: 0,
       stdout: lintLogContent,
       stderr: "",
+      status: "PASS",
     });
 
     const { Auggie } = require("@augmentcode/auggie-sdk");

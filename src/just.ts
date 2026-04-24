@@ -13,6 +13,11 @@ export interface TestResult extends JustResult {
   usedJust: boolean;
 }
 
+export interface LintResult extends JustResult {
+  status: "PASS" | "FAIL" | "SKIP";
+  statusReason?: string;
+}
+
 /**
  * Run a Just target in the given workspace, preferring devbox if available.
  *
@@ -63,12 +68,13 @@ export function runJustFormat(workspaceRoot: string): JustResult {
 
 /**
  * Run the Just "lint" target and write output to .agent/lint.log.
+ * Returns a LintResult with explicit status: PASS, FAIL, or SKIP (if no lint rule exists).
  * Non-fatal: does not throw even if lint fails.
  *
  * @param workspaceRoot The root directory of the workspace
- * @returns A structured result with exitCode, stdout, and stderr
+ * @returns A LintResult with status (PASS/FAIL/SKIP), exitCode, stdout, and stderr
  */
-export function runJustLint(workspaceRoot: string): JustResult {
+export function runJustLint(workspaceRoot: string): LintResult {
   const result = runJust(workspaceRoot, "lint");
 
   // Write lint output to .agent/lint.log
@@ -84,10 +90,42 @@ export function runJustLint(workspaceRoot: string): JustResult {
   const hasDevbox = fs.existsSync(devboxPath);
   const command = hasDevbox ? "devbox run just lint" : "just lint";
 
-  const logContent = `Command: ${command}\n\nStdout:\n${result.stdout}\n\nStderr:\n${result.stderr}`;
+  // Detect if "lint" rule doesn't exist in Justfile
+  // Common error: "error: recipe 'lint' not found"
+  const ruleNotFound =
+    result.stderr.includes("recipe 'lint' not found") ||
+    result.stderr.includes("unknown recipe") ||
+    (result.exitCode === 127 && result.stderr.includes("just"));
+
+  let status: "PASS" | "FAIL" | "SKIP";
+  let statusReason: string | undefined;
+
+  if (ruleNotFound) {
+    status = "SKIP";
+    statusReason = "No lint rule defined in Justfile";
+  } else if (result.exitCode === 0) {
+    status = "PASS";
+  } else {
+    status = "FAIL";
+  }
+
+  const logContent = `Command: ${command}
+Status: ${status}${statusReason ? ` (${statusReason})` : ""}
+
+Stdout:
+${result.stdout}
+
+Stderr:
+${result.stderr}`;
   fs.writeFileSync(lintLogPath, logContent, "utf-8");
 
-  return result;
+  return {
+    exitCode: result.exitCode,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    status,
+    statusReason,
+  };
 }
 
 /**

@@ -100,7 +100,7 @@ describe("runJustLint", () => {
     }
   });
 
-  test("creates .agent/lint.log with command and output", () => {
+  test("creates .agent/lint.log with command and status", () => {
     mockSpawnSync.mockReturnValue({
       status: 0,
       stdout: "lint output",
@@ -113,18 +113,59 @@ describe("runJustLint", () => {
     expect(fs.existsSync(logPath)).toBe(true);
     const content = fs.readFileSync(logPath, "utf-8");
     expect(content).toContain("lint output");
+    expect(content).toContain("Status: PASS");
   });
 
-  test("returns result without throwing on lint failure", () => {
+  test("returns status PASS on exit code 0", () => {
+    mockSpawnSync.mockReturnValue({
+      status: 0,
+      stdout: "lint output",
+      stderr: "",
+    } as any);
+
+    const result = runJustLint(tmpDir);
+    expect(result.status).toBe("PASS");
+    expect(result.exitCode).toBe(0);
+  });
+
+  test("returns status FAIL on non-zero exit code with actual error", () => {
     mockSpawnSync.mockReturnValue({
       status: 1,
       stdout: "",
-      stderr: "lint failed",
+      stderr: "lint errors found",
     } as any);
 
-    expect(() => runJustLint(tmpDir)).not.toThrow();
     const result = runJustLint(tmpDir);
+    expect(result.status).toBe("FAIL");
     expect(result.exitCode).toBe(1);
+  });
+
+  test("returns status SKIP when lint rule does not exist", () => {
+    mockSpawnSync.mockReturnValue({
+      status: 127,
+      stdout: "",
+      stderr: "error: recipe 'lint' not found",
+    } as any);
+
+    const result = runJustLint(tmpDir);
+    expect(result.status).toBe("SKIP");
+    expect(result.statusReason).toBe("No lint rule defined in Justfile");
+    expect(result.exitCode).toBe(127);
+  });
+
+  test("writes SKIP status to lint.log when rule not found", () => {
+    mockSpawnSync.mockReturnValue({
+      status: 127,
+      stdout: "",
+      stderr: "error: recipe 'lint' not found",
+    } as any);
+
+    runJustLint(tmpDir);
+
+    const logPath = path.join(tmpDir, ".agent", "lint.log");
+    const content = fs.readFileSync(logPath, "utf-8");
+    expect(content).toContain("Status: SKIP");
+    expect(content).toContain("No lint rule defined in Justfile");
   });
 });
 

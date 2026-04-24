@@ -107,7 +107,7 @@ describe("Commands", () => {
 
     const state = stateManager.load();
     expect(state.status).toBe("running");
-    expect(state.current_phase).toBe("developer"); // reviewer fallback is developer
+    expect(state.current_phase).toBe("architect"); // reviewer fallback is architect
 
     // History should have the rejection logged
     expect(state.history).toHaveLength(3);

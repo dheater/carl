@@ -73,6 +73,18 @@ When you need ephemeral experiments or scratch content:
 - Scratch or temporary files must be excluded from the test runner (via Jest config or similar).
 - Never rely on temporary files for passing tests or production behavior.
 
+## Temporary Test Files
+
+During development (TDD), you may create temporary tests that help you reason through a problem. Before handing off work for approval:
+
+- **Keep permanent tests** in files named `*.test.ts` (or your project's test naming convention)
+- **Mark temporary tests** as dev-only by using the `*.dev.test.ts` naming convention
+- **Remove or rename** all `*.dev.test.ts` files before approval
+  - Either delete them if they're truly temporary, or
+  - Rename to `*.test.ts` if they should be kept as permanent regression tests
+
+The workflow will enforce this by blocking advancement to the reviewer gate if any `*.dev.test.ts` files are present. This ensures only production-grade test coverage reaches approval.
+
 ## Mikado Escalation
 
 When a ticket can't be completed because something is missing:

@@ -23,6 +23,7 @@ export interface RunState {
   history?: PhaseResult[];
   initial_prompt?: string;
   pending_reply?: string;
+  developer_test_failures?: number;
 }
 
 export class StateManager {

@@ -7,7 +7,7 @@ import {
   GATE_PHASES,
 } from "./graph";
 import { blue, yellow } from "./colors";
-import { runJustFormat, runJustLint } from "./just";
+import { runJustFormat, runJustLint, runCanonicalTests } from "./just";
 import { getGitStatus, getCurrentBranch } from "./git";
 import * as path from "path";
 import * as fs from "fs";
@@ -45,6 +45,67 @@ function loadSkillFile(name: string): string {
     if (fs.existsSync(p)) return fs.readFileSync(p, "utf-8");
   }
   return "";
+}
+
+function writeTestArtifacts(
+  workspaceRoot: string,
+  result: ReturnType<typeof runCanonicalTests>,
+): void {
+  const agentDir = path.join(workspaceRoot, ".agent");
+  if (!fs.existsSync(agentDir)) {
+    fs.mkdirSync(agentDir, { recursive: true });
+  }
+
+  // Write test summary JSON
+  const summary = {
+    command: result.command,
+    status: result.exitCode === 0 ? "PASS" : "FAIL",
+    timestamp: new Date().toISOString(),
+  };
+  const summaryPath = path.join(agentDir, "tests-summary.json");
+  fs.writeFileSync(summaryPath, JSON.stringify(summary, null, 2), "utf-8");
+
+  // Write test log on failure
+  if (result.exitCode !== 0) {
+    const logContent = `Command: ${result.command}\n\nStdout:\n${result.stdout}\n\nStderr:\n${result.stderr}`;
+    const logPath = path.join(agentDir, "tests.log");
+    fs.writeFileSync(logPath, logContent, "utf-8");
+  }
+}
+
+function findDevOnlyTestFiles(workspaceRoot: string): string[] {
+  const results: string[] = [];
+
+  function walkDir(dir: string, relativeBase: string = ""): void {
+    try {
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+        const relativePath = relativeBase
+          ? path.join(relativeBase, entry.name)
+          : entry.name;
+
+        if (entry.isDirectory()) {
+          // Skip common directories that shouldn't be searched
+          if (
+            ["node_modules", ".git", "dist", ".agent", ".tmp"].includes(
+              entry.name,
+            )
+          ) {
+            continue;
+          }
+          walkDir(fullPath, relativePath);
+        } else if (entry.name.match(/\.dev\.test\.ts$/)) {
+          results.push(relativePath);
+        }
+      }
+    } catch {
+      // Ignore errors reading directories
+    }
+  }
+
+  walkDir(workspaceRoot);
+  return results;
 }
 
 function parsePrerequisites(skillContent: string): string[] {
@@ -151,6 +212,32 @@ export function buildSkillInstruction(
     if (fs.existsSync(lintLogPath)) {
       const lintContent = fs.readFileSync(lintLogPath, "utf-8");
       instruction += "# Lint results\n\n```\n" + lintContent + "\n```";
+    }
+
+    // Add test results if available
+    const testSummaryPath = path.join(
+      workspaceRoot,
+      ".agent",
+      "tests-summary.json",
+    );
+    if (fs.existsSync(testSummaryPath)) {
+      try {
+        const summary = JSON.parse(fs.readFileSync(testSummaryPath, "utf-8"));
+        instruction += "\n\n# Tests/Verification\n\n";
+        instruction += `Test command: \`${summary.command}\`\n\n`;
+        instruction += `**Status:** ${summary.status}\n\n`;
+
+        // If tests failed, include log snippet
+        if (summary.status === "FAIL") {
+          const testLogPath = path.join(workspaceRoot, ".agent", "tests.log");
+          if (fs.existsSync(testLogPath)) {
+            const logContent = fs.readFileSync(testLogPath, "utf-8");
+            instruction += "**Output:**\n\n```\n" + logContent + "\n```";
+          }
+        }
+      } catch {
+        // Ignore parse errors; just skip test results section
+      }
     }
   }
 
@@ -397,17 +484,101 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
         const phaseDuration = Date.now() - phaseStartTime;
         console.log(`[Timing] Phase ${phaseName} duration ${phaseDuration}ms`);
 
-        // After developer completes, run deterministic format/lint before reviewer
+        // After developer completes, run deterministic format/lint and tests before reviewer
         if (phaseName === "developer") {
           console.log(
             `[System] Running deterministic format and lint checks...`,
           );
           runJustFormat(state.workspace_path);
-          runJustLint(state.workspace_path);
-          console.log(`[System] Format and lint checks completed.`);
+          const lintResult = runJustLint(state.workspace_path);
+          console.log(
+            `[System] Lint check completed: ${lintResult.status}${lintResult.statusReason ? ` (${lintResult.statusReason})` : ""}`,
+          );
+
+          console.log(`[System] Running deterministic test suite...`);
+          const testResult = runCanonicalTests(state.workspace_path);
+          writeTestArtifacts(state.workspace_path, testResult);
+          console.log(`[System] Test run completed.`);
+
+          // Handle test failure gating logic
+          if (testResult.exitCode !== 0) {
+            const currentFailures = (state.developer_test_failures ?? 0) + 1;
+            const failureMessage =
+              currentFailures === 1
+                ? `Tests failed (${testResult.command}). Staying in developer phase for retry.`
+                : `Tests failed again (${testResult.command}). Escalating to architect due to persistent test failures.`;
+
+            history.push({
+              phase: "developer",
+              model: getPhaseModel(phaseName),
+              status: "blocked",
+              outputs: failureMessage,
+            });
+
+            if (currentFailures >= 2) {
+              // Escalate to architect
+              state = stateManager.update({
+                history,
+                current_phase: "architect",
+                status: "running",
+                developer_test_failures: currentFailures,
+              });
+              console.log(
+                blue(
+                  `Tests have failed ${currentFailures} times. Escalating to architect for scope/AC adjustment.`,
+                ),
+              );
+              return;
+            } else {
+              // Stay in developer phase
+              state = stateManager.update({
+                history,
+                developer_test_failures: currentFailures,
+              });
+              console.log(
+                blue(
+                  `Tests failed (${currentFailures} strike). Staying in developer phase.`,
+                ),
+              );
+              return;
+            }
+          }
+          // Tests passed, reset counter
+          state = { ...state, developer_test_failures: 0 };
+
+          // Hygiene check: detect dev-only test files
+          console.log(`[System] Checking for dev-only test files...`);
+          const devOnlyFiles = findDevOnlyTestFiles(state.workspace_path);
+          if (devOnlyFiles.length > 0) {
+            const filesStr =
+              devOnlyFiles.slice(0, 3).join(", ") +
+              (devOnlyFiles.length > 3 ? ", ..." : "");
+            const hygienicityFailureMessage = `Dev-only test files found (*.dev.test.ts): ${filesStr}. Please remove or rename these files before approval.`;
+
+            history.push({
+              phase: "developer",
+              model: getPhaseModel(phaseName),
+              status: "blocked",
+              outputs: hygienicityFailureMessage,
+            });
+
+            const currentFailures = (state.developer_test_failures ?? 0) + 1;
+            state = stateManager.update({
+              history,
+              developer_test_failures: currentFailures,
+            });
+            console.log(
+              blue(`Dev-only test files detected. Staying in developer phase.`),
+            );
+            return;
+          }
         }
 
-        state = stateManager.update({ history, current_phase: nextPhase });
+        state = stateManager.update({
+          history,
+          current_phase: nextPhase,
+          developer_test_failures: state.developer_test_failures,
+        });
         console.log(
           `Phase ${phaseName} completed successfully. Advancing to ${nextPhase}.`,
         );
