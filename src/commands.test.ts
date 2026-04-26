@@ -265,7 +265,7 @@ describe("Commands", () => {
 
     const state = stateManager.load();
     expect(state.status).toBe("running");
-	    expect(state.current_phase).toBe("architect");
+    expect(state.current_phase).toBe("architect");
 
     expect(state.history).toHaveLength(3);
     expect(state.history![2]).toEqual({

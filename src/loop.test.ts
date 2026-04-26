@@ -101,16 +101,16 @@ describe("Workflow Loop", () => {
       }),
     );
 
-    const timingPath = path.join(tmpDir, ".carl", "timing.jsonl");
-    expect(fs.existsSync(timingPath)).toBe(true);
+    const eventsPath = path.join(tmpDir, ".carl", "events.jsonl");
+    expect(fs.existsSync(eventsPath)).toBe(true);
 
-    const timingEvents = fs
-      .readFileSync(timingPath, "utf-8")
+    const eventsData = fs
+      .readFileSync(eventsPath, "utf-8")
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line));
 
-    expect(timingEvents).toEqual(
+    expect(eventsData).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           run_id: state.run_id,
@@ -1871,12 +1871,12 @@ describe("t-4: Regression tests for logging schema and context removal", () => {
 
     await runLoop(stateManager);
 
-    // Read timing log
-    const timingPath = path.join(tmpDir, ".carl", "timing.jsonl");
-    expect(fs.existsSync(timingPath)).toBe(true);
+    // Read events log
+    const eventsPath = path.join(tmpDir, ".carl", "events.jsonl");
+    expect(fs.existsSync(eventsPath)).toBe(true);
 
     const lines = fs
-      .readFileSync(timingPath, "utf-8")
+      .readFileSync(eventsPath, "utf-8")
       .trim()
       .split("\n")
       .filter((line) => line.length > 0);
@@ -1932,9 +1932,9 @@ describe("t-4: Regression tests for logging schema and context removal", () => {
     // Run developer phase
     await runLoop(stateManager);
 
-    const timingPath = path.join(tmpDir, ".carl", "timing.jsonl");
+    const eventsPath = path.join(tmpDir, ".carl", "events.jsonl");
     const events = fs
-      .readFileSync(timingPath, "utf-8")
+      .readFileSync(eventsPath, "utf-8")
       .trim()
       .split("\n")
       .filter((line) => line.length > 0)
@@ -1994,9 +1994,9 @@ describe("t-4: Regression tests for logging schema and context removal", () => {
 
     await runLoop(stateManager);
 
-    const timingPath = path.join(tmpDir, ".carl", "timing.jsonl");
+    const eventsPath = path.join(tmpDir, ".carl", "events.jsonl");
     const events = fs
-      .readFileSync(timingPath, "utf-8")
+      .readFileSync(eventsPath, "utf-8")
       .trim()
       .split("\n")
       .filter((line) => line.length > 0)
@@ -2020,6 +2020,254 @@ describe("t-4: Regression tests for logging schema and context removal", () => {
         expect(architectPromptEvent.meta.response_chars).toBeGreaterThan(0);
       }
     }
+  });
+
+  test("prompt events include usage metadata when SDK provides it", async () => {
+    const architectResponse = "# Tickets\n\n## [ ] t-1: Test\n\nAC:\n- Test";
+    mockPrompt.mockResolvedValueOnce({
+      text: architectResponse,
+      usage: {
+        input_tokens: 150,
+        output_tokens: 50,
+        total_tokens: 200,
+        credits: 5,
+      },
+      model: "gpt5.1",
+    });
+
+    await runLoop(stateManager);
+
+    const eventsPath = path.join(tmpDir, ".carl", "events.jsonl");
+    const events = fs
+      .readFileSync(eventsPath, "utf-8")
+      .trim()
+      .split("\n")
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line));
+
+    // Find architect prompt event
+    const promptEvent = events.find(
+      (e: any) => e.event === "prompt" && e.phase === "architect",
+    );
+    expect(promptEvent).toBeDefined();
+    expect(promptEvent.meta).toBeDefined();
+    expect(promptEvent.meta.usage).toBeDefined();
+    expect(promptEvent.meta.usage.source).toBe("auggie");
+    expect(promptEvent.meta.usage.input_tokens).toBe(150);
+    expect(promptEvent.meta.usage.output_tokens).toBe(50);
+    expect(promptEvent.meta.usage.total_tokens).toBe(200);
+    expect(promptEvent.meta.usage.credits).toBe(5);
+  });
+});
+
+describe("t-101: Regression test for `.carl/events.jsonl` event shape", () => {
+  let tmpDir: string;
+  let stateManager: StateManager;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-test-t101-"));
+    stateManager = new StateManager(tmpDir);
+    stateManager.create(tmpDir);
+
+    const skillsDir = path.join(tmpDir, "skills");
+    fs.mkdirSync(skillsDir);
+    for (const phase of HAPPY_PATH_GRAPH) {
+      fs.writeFileSync(
+        path.join(skillsDir, `${phase}.md`),
+        `dummy ${phase} skill`,
+      );
+    }
+
+    const mockPrompt = jest.fn().mockResolvedValue("# Tickets");
+    const mockClose = jest.fn().mockResolvedValue(undefined);
+    const mockOnSessionUpdate = jest.fn();
+
+    (Auggie.create as jest.Mock).mockResolvedValue({
+      prompt: mockPrompt,
+      close: mockClose,
+      onSessionUpdate: mockOnSessionUpdate,
+    });
+  });
+
+  afterEach(async () => {
+    await closeSharedClient();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    jest.clearAllMocks();
+  });
+
+  test("creates `.carl/events.jsonl` with required fields and does not create `.carl/timing.jsonl`", async () => {
+    await runLoop(stateManager);
+
+    // Assert: `.carl/events.jsonl` exists
+    const eventsPath = path.join(tmpDir, ".carl", "events.jsonl");
+    expect(fs.existsSync(eventsPath)).toBe(true);
+
+    // Assert: `.carl/timing.jsonl` is NOT created
+    const timingPath = path.join(tmpDir, ".carl", "timing.jsonl");
+    expect(fs.existsSync(timingPath)).toBe(false);
+
+    // Assert: at least one line parses as JSON
+    const eventsData = fs
+      .readFileSync(eventsPath, "utf-8")
+      .trim()
+      .split("\n")
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line));
+
+    expect(eventsData.length).toBeGreaterThan(0);
+
+    // Assert: all events have required fields
+    for (const event of eventsData) {
+      expect(event).toHaveProperty("timestamp");
+      expect(event).toHaveProperty("run_id");
+      expect(event).toHaveProperty("event");
+      expect(event).toHaveProperty("phase");
+      expect(event).toHaveProperty("model");
+    }
+
+    // Assert: events include expected event types
+    const eventTypes = new Set(eventsData.map((e: any) => e.event));
+    expect(eventTypes.has("Auggie.create")).toBe(true);
+    expect(eventTypes.has("prompt")).toBe(true);
+    expect(eventTypes.has("phase")).toBe(true);
+  });
+});
+
+describe("t-102: Regression tests for usage metadata and developer/test-writer split", () => {
+  let tmpDir: string;
+  let stateManager: StateManager;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-test-t102-"));
+    stateManager = new StateManager(tmpDir);
+    stateManager.create(tmpDir);
+
+    const skillsDir = path.join(tmpDir, "skills");
+    fs.mkdirSync(skillsDir);
+    for (const phase of HAPPY_PATH_GRAPH) {
+      fs.writeFileSync(
+        path.join(skillsDir, `${phase}.md`),
+        `dummy ${phase} skill`,
+      );
+    }
+  });
+
+  afterEach(async () => {
+    await closeSharedClient();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    jest.clearAllMocks();
+  });
+
+  test("developer/test-writer split: logs only coder usage, not test-writer usage", async () => {
+    const mockPrompt = jest.fn();
+    const mockClose = jest.fn().mockResolvedValue(undefined);
+    const mockOnSessionUpdate = jest.fn();
+
+    // Mock coder response with usage
+    const coderResponse = {
+      text: "implemented feature",
+      usage: {
+        input_tokens: 100,
+        output_tokens: 50,
+        total_tokens: 150,
+        credits: 3,
+      },
+    };
+
+    // Mock test-writer response with different usage (should NOT be logged in same event)
+    const testWriterResponse = {
+      text: "added tests",
+      usage: {
+        input_tokens: 200,
+        output_tokens: 100,
+        total_tokens: 300,
+        credits: 6,
+      },
+    };
+
+    // Queue responses: coder, test-writer, verifier, reviewer (gate)
+    mockPrompt.mockResolvedValueOnce(coderResponse);
+    mockPrompt.mockResolvedValueOnce(testWriterResponse);
+    mockPrompt.mockResolvedValueOnce("verified"); // verifier
+    mockPrompt.mockResolvedValueOnce("approved"); // reviewer
+
+    (Auggie.create as jest.Mock).mockResolvedValue({
+      prompt: mockPrompt,
+      close: mockClose,
+      onSessionUpdate: mockOnSessionUpdate,
+    });
+
+    // Create dev and test tickets so both run
+    const agentDir = path.join(tmpDir, ".agent");
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(agentDir, "dev-tickets.md"),
+      "-[ ] t-1: Open ticket",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(agentDir, "test-tickets.md"),
+      "-[ ] tt-1: Open test ticket",
+      "utf-8",
+    );
+
+    // Mock test suite to pass
+    const { runCanonicalTests } = require("./just");
+    (runCanonicalTests as jest.Mock).mockReturnValue({
+      exitCode: 0,
+      stdout: "All tests passed",
+      stderr: "",
+      command: "just test",
+      usedJust: true,
+    });
+
+    // Set state to developer phase (after architect)
+    stateManager.update({
+      current_phase: "developer",
+      status: "running",
+      history: [
+        {
+          phase: "architect",
+          model: "gpt5.1",
+          status: "success",
+          outputs: "# Tickets\n## [ ] t-1: Test",
+        },
+      ],
+    });
+
+    await runLoop(stateManager);
+
+    // Read events
+    const eventsPath = path.join(tmpDir, ".carl", "events.jsonl");
+    const events = fs
+      .readFileSync(eventsPath, "utf-8")
+      .trim()
+      .split("\n")
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line));
+
+    // Find developer phase prompt events
+    const devPromptEvents = events.filter(
+      (e: any) => e.event === "prompt" && e.phase === "developer",
+    );
+    expect(devPromptEvents.length).toBe(1); // Single prompt event for both coder and test-writer
+
+    const promptEvent = devPromptEvents[0];
+
+    // Assert: model field reflects the main developer model (haiku4.5)
+    expect(promptEvent.model).toBe("haiku4.5");
+
+    // Assert: meta.usage corresponds only to the coder (main model), not test-writer
+    expect(promptEvent.meta.usage).toBeDefined();
+    expect(promptEvent.meta.usage.source).toBe("auggie");
+    expect(promptEvent.meta.usage.input_tokens).toBe(100); // Coder's tokens
+    expect(promptEvent.meta.usage.output_tokens).toBe(50);
+    expect(promptEvent.meta.usage.total_tokens).toBe(150);
+    expect(promptEvent.meta.usage.credits).toBe(3);
+
+    // Assert: test-writer usage (200 input tokens) is NOT included in the same event
+    // This verifies the split behavior - test-writer usage is not duplicated/mixed with coder usage
+    expect(promptEvent.meta.usage.input_tokens).not.toBe(200);
   });
 });
 

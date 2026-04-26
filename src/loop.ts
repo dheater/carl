@@ -14,8 +14,8 @@ import * as os from "os";
 
 const CARL_SKILLS_DIR = path.join(__dirname, "..", "skills");
 const GLOBAL_SKILLS_DIR = path.join(os.homedir(), ".augment", "skills");
-const TIMING_LOG_DIR = ".carl";
-const TIMING_LOG_FILE = "timing.jsonl";
+const EVENTS_LOG_DIR = ".carl";
+const EVENTS_LOG_FILE = "events.jsonl";
 
 type TimingEvent = {
   timestamp: string;
@@ -27,6 +27,8 @@ type TimingEvent = {
   model: string;
   meta?: Record<string, any>;
 };
+
+type PromptResponse = string | { text: string; usage?: Record<string, any> };
 
 // Shared Auggie client for the current run + phase, so we can:
 // - reuse a session across editor gate round-trips for the same phase
@@ -102,14 +104,27 @@ export function hasOpenTickets(ticketFilePath: string): boolean {
   }
 }
 
+function extractPromptResponseText(
+  response: PromptResponse,
+): [string, Record<string, any> | undefined] {
+  if (typeof response === "string") {
+    return [response, undefined];
+  }
+  // response is an object with text and optional usage
+  const usage = response.usage
+    ? { source: "auggie", ...response.usage }
+    : undefined;
+  return [response.text, usage];
+}
+
 function writeTimingEvent(workspaceRoot: string, event: TimingEvent): void {
-  const timingDir = path.join(workspaceRoot, TIMING_LOG_DIR);
-  if (!fs.existsSync(timingDir)) {
-    fs.mkdirSync(timingDir, { recursive: true });
+  const eventsDir = path.join(workspaceRoot, EVENTS_LOG_DIR);
+  if (!fs.existsSync(eventsDir)) {
+    fs.mkdirSync(eventsDir, { recursive: true });
   }
 
-  const timingLogPath = path.join(timingDir, TIMING_LOG_FILE);
-  fs.appendFileSync(timingLogPath, `${JSON.stringify(event)}\n`, "utf-8");
+  const eventsLogPath = path.join(eventsDir, EVENTS_LOG_FILE);
+  fs.appendFileSync(eventsLogPath, `${JSON.stringify(event)}\n`, "utf-8");
 }
 
 function logTimingDuration(
@@ -386,9 +401,12 @@ async function runTestWriterPhase(
   );
   console.log(`[Timing] prompt entry test-writer/haiku4.5`);
   const testWriterPromptStart = Date.now();
-  const testWriterResponse = await testWriterClient.prompt(
+  const testWriterResponseRaw = await testWriterClient.prompt(
     testWriterInstruction,
     { isAnswerOnly: true },
+  );
+  const [testWriterResponse, testWriterUsage] = extractPromptResponseText(
+    testWriterResponseRaw,
   );
   const testWriterPromptDuration = Date.now() - testWriterPromptStart;
   logTimingDuration(
@@ -402,6 +420,7 @@ async function runTestWriterPhase(
     {
       prompt_chars: testWriterInstruction.length,
       response_chars: testWriterResponse.length,
+      ...(testWriterUsage && { usage: testWriterUsage }),
     },
   );
 
@@ -697,25 +716,34 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
         // Run prompts conditionally
         let coderResponse = "";
         let testWriterResponse = "";
+        let coderUsage: Record<string, any> | undefined = undefined;
         if (coderRunsPrompt && testWriterRunsPrompt) {
           // Both run in parallel
-          const [cr, tr] = await Promise.all([
+          const [crRaw, trRaw] = await Promise.all([
             client.prompt(instruction, { isAnswerOnly: true }),
             twClient!.prompt(testWriterInstruction, { isAnswerOnly: true }),
           ]);
+          const [cr, crUsage] = extractPromptResponseText(crRaw);
+          const [tr] = extractPromptResponseText(trRaw);
           coderResponse = cr;
           testWriterResponse = tr;
+          coderUsage = crUsage;
         } else if (coderRunsPrompt) {
           // Only coder runs
-          coderResponse = await client.prompt(instruction, {
+          const crRaw = await client.prompt(instruction, {
             isAnswerOnly: true,
           });
+          const [cr, crUsage] = extractPromptResponseText(crRaw);
+          coderResponse = cr;
           testWriterResponse = ""; // No-op
+          coderUsage = crUsage;
         } else {
           // Only test-writer runs
-          testWriterResponse = await twClient!.prompt(testWriterInstruction, {
+          const trRaw = await twClient!.prompt(testWriterInstruction, {
             isAnswerOnly: true,
           });
+          const [tr] = extractPromptResponseText(trRaw);
+          testWriterResponse = tr;
           coderResponse = ""; // No-op
         }
 
@@ -734,6 +762,7 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
             blocked:
               /block(?:ed|er):/i.test(coderResponse) ||
               /block(?:ed|er):/i.test(testWriterResponse),
+            ...(coderUsage && { usage: coderUsage }),
           },
         );
 
@@ -765,7 +794,12 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
         // Non-developer phases run normally (sequential)
         console.log(`[Timing] prompt entry ${phaseName}/${model}`);
         const promptStart = Date.now();
-        response = await client.prompt(instruction, { isAnswerOnly: true });
+        const responseRaw = await client.prompt(instruction, {
+          isAnswerOnly: true,
+        });
+        const [responseText, responseUsage] =
+          extractPromptResponseText(responseRaw);
+        response = responseText;
         const promptDuration = Date.now() - promptStart;
         logTimingDuration(
           state.workspace_path,
@@ -778,6 +812,7 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
           {
             prompt_chars: instruction.length,
             response_chars: response.length,
+            ...(responseUsage && { usage: responseUsage }),
           },
         );
 
