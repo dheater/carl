@@ -14,6 +14,16 @@ import * as os from "os";
 
 const CARL_SKILLS_DIR = path.join(__dirname, "..", "skills");
 const GLOBAL_SKILLS_DIR = path.join(os.homedir(), ".augment", "skills");
+const TIMING_LOG_DIR = ".carl";
+const TIMING_LOG_FILE = "timing.jsonl";
+
+type TimingEvent = {
+  timestamp: string;
+  run_id: string;
+  event: "Auggie.create" | "prompt" | "phase";
+  subject: string;
+  duration_ms: number;
+};
 
 // Shared Auggie client for the current run + phase, so we can:
 // - reuse a session across editor gate round-trips for the same phase
@@ -48,15 +58,48 @@ export async function closeSharedClient(): Promise<void> {
   }
 }
 
+const SKILL_ALIASES: Record<string, string[]> = {
+  // Developer phase is implemented by the coder skill; keep developer as a legacy alias
+  developer: ["coder", "developer"],
+};
+
 function loadSkillFile(name: string): string {
-  const candidates = [
-    path.join(CARL_SKILLS_DIR, `${name}.md`),
-    path.join(GLOBAL_SKILLS_DIR, `${name}.md`),
-  ];
-  for (const p of candidates) {
-    if (fs.existsSync(p)) return fs.readFileSync(p, "utf-8");
+  const searchNames = SKILL_ALIASES[name] ?? [name];
+  const searchDirs = [CARL_SKILLS_DIR, GLOBAL_SKILLS_DIR];
+  for (const skillName of searchNames) {
+    for (const dir of searchDirs) {
+      const p = path.join(dir, `${skillName}.md`);
+      if (fs.existsSync(p)) return fs.readFileSync(p, "utf-8");
+    }
   }
   return "";
+}
+
+function writeTimingEvent(workspaceRoot: string, event: TimingEvent): void {
+  const timingDir = path.join(workspaceRoot, TIMING_LOG_DIR);
+  if (!fs.existsSync(timingDir)) {
+    fs.mkdirSync(timingDir, { recursive: true });
+  }
+
+  const timingLogPath = path.join(timingDir, TIMING_LOG_FILE);
+  fs.appendFileSync(timingLogPath, `${JSON.stringify(event)}\n`, "utf-8");
+}
+
+function logTimingDuration(
+  workspaceRoot: string,
+  runId: string,
+  event: TimingEvent["event"],
+  subject: string,
+  durationMs: number,
+): void {
+  writeTimingEvent(workspaceRoot, {
+    timestamp: new Date().toISOString(),
+    run_id: runId,
+    event,
+    subject,
+    duration_ms: durationMs,
+  });
+  console.log(`[Timing] ${event} duration ${durationMs}ms ${subject}`);
 }
 
 function writeTestArtifacts(
@@ -346,8 +389,12 @@ async function runTestWriterPhase(
       allowIndexing: true,
     });
     const auggleCreateDuration = Date.now() - auggleCreateStart;
-    console.log(
-      `[Timing] Auggie.create duration ${auggleCreateDuration}ms test-writer/haiku4.5`,
+    logTimingDuration(
+      workspaceRoot,
+      runId,
+      "Auggie.create",
+      "test-writer/haiku4.5",
+      auggleCreateDuration,
     );
     testWriterClientRunId = runId;
   }
@@ -381,8 +428,12 @@ async function runTestWriterPhase(
     { isAnswerOnly: true },
   );
   const testWriterPromptDuration = Date.now() - testWriterPromptStart;
-  console.log(
-    `[Timing] prompt duration ${testWriterPromptDuration}ms test-writer/haiku4.5`,
+  logTimingDuration(
+    workspaceRoot,
+    runId,
+    "prompt",
+    "test-writer/haiku4.5",
+    testWriterPromptDuration,
   );
 
   return testWriterResponse;
@@ -459,8 +510,12 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
         allowIndexing: true,
       });
       const auggleCreateDuration = Date.now() - auggleCreateStart;
-      console.log(
-        `[Timing] Auggie.create duration ${auggleCreateDuration}ms ${phaseName}/${model}`,
+      logTimingDuration(
+        state.workspace_path,
+        runId,
+        "Auggie.create",
+        `${phaseName}/${model}`,
+        auggleCreateDuration,
       );
       sharedClient = client;
       sharedClientPhase = phaseName;
@@ -542,10 +597,10 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
       let response: string;
       let isBlocked: boolean;
 
-      // Run developer and test-writer in parallel
+      // Run coder and test-writer in parallel for the developer phase
       if (phaseName === "developer") {
         console.log(
-          `[Timing] prompt entry developer/${model} and test-writer/haiku4.5 in parallel`,
+          `[Timing] prompt entry coder/${model} and test-writer/haiku4.5 in parallel`,
         );
         const promptStart = Date.now();
 
@@ -566,8 +621,12 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
             allowIndexing: true,
           });
           const auggleCreateDuration = Date.now() - auggleCreateStart;
-          console.log(
-            `[Timing] Auggie.create duration ${auggleCreateDuration}ms test-writer/haiku4.5`,
+          logTimingDuration(
+            state.workspace_path,
+            runId,
+            "Auggie.create",
+            "test-writer/haiku4.5",
+            auggleCreateDuration,
           );
           testWriterClient = twClient;
           testWriterClientRunId = runId;
@@ -589,17 +648,21 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
         });
 
         // Run both prompts in parallel
-        const [developerResponse, testWriterResponse] = await Promise.all([
+        const [coderResponse, testWriterResponse] = await Promise.all([
           client.prompt(instruction, { isAnswerOnly: true }),
           twClient.prompt(testWriterInstruction, { isAnswerOnly: true }),
         ]);
 
         const promptDuration = Date.now() - promptStart;
-        console.log(
-          `[Timing] prompt duration ${promptDuration}ms developer/${model} and test-writer/haiku4.5`,
+        logTimingDuration(
+          state.workspace_path,
+          runId,
+          "prompt",
+          `coder/${model} and test-writer/haiku4.5`,
+          promptDuration,
         );
 
-        response = developerResponse;
+        response = coderResponse;
         isBlocked = /block(?:ed|er):/i.test(response);
 
         // Add developer entry first (deterministic order)
@@ -629,8 +692,12 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
         const promptStart = Date.now();
         response = await client.prompt(instruction, { isAnswerOnly: true });
         const promptDuration = Date.now() - promptStart;
-        console.log(
-          `[Timing] prompt duration ${promptDuration}ms ${phaseName}/${model}`,
+        logTimingDuration(
+          state.workspace_path,
+          runId,
+          "prompt",
+          `${phaseName}/${model}`,
+          promptDuration,
         );
 
         isBlocked = false; // Only developer can be blocked
@@ -661,7 +728,13 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
       }
 
       const phaseDuration = Date.now() - phaseStartTime;
-      console.log(`[Timing] Phase ${phaseName} duration ${phaseDuration}ms`);
+      logTimingDuration(
+        state.workspace_path,
+        runId,
+        "phase",
+        phaseName,
+        phaseDuration,
+      );
 
       // Special handling for developer phase: check if either developer or test-writer blocked
       let shouldTransitionToArchitect = false;

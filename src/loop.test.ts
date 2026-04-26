@@ -101,6 +101,35 @@ describe("Workflow Loop", () => {
         allowIndexing: true,
       }),
     );
+
+    const timingPath = path.join(tmpDir, ".carl", "timing.jsonl");
+    expect(fs.existsSync(timingPath)).toBe(true);
+
+    const timingEvents = fs
+      .readFileSync(timingPath, "utf-8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+
+    expect(timingEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          run_id: state.run_id,
+          event: "Auggie.create",
+          subject: "architect/gpt5.1",
+        }),
+        expect.objectContaining({
+          run_id: state.run_id,
+          event: "prompt",
+          subject: "architect/gpt5.1",
+        }),
+        expect.objectContaining({
+          run_id: state.run_id,
+          event: "phase",
+          subject: "architect",
+        }),
+      ]),
+    );
   });
 
   test("resumes from a non-gate phase and continues to next gate", async () => {

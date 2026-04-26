@@ -4,12 +4,14 @@ import * as path from "path";
 describe("t-4: Durable regression tests for split tickets (no .agent/tickets.md)", () => {
   let readmeContent: string;
   let architectContent: string;
-  let developerContent: string;
+  let coderContent: string;
   let testWriterContent: string;
 
   beforeAll(() => {
     const readmePath = path.join(__dirname, "..", "README.md");
     const architectPath = path.join(__dirname, "..", "skills", "architect.md");
+    // Support both coder.md and developer.md for backward compatibility
+    const coderPath = path.join(__dirname, "..", "skills", "coder.md");
     const developerPath = path.join(__dirname, "..", "skills", "developer.md");
     const testWriterPath = path.join(
       __dirname,
@@ -20,7 +22,10 @@ describe("t-4: Durable regression tests for split tickets (no .agent/tickets.md)
 
     readmeContent = fs.readFileSync(readmePath, "utf-8");
     architectContent = fs.readFileSync(architectPath, "utf-8");
-    developerContent = fs.readFileSync(developerPath, "utf-8");
+    // Try coder.md first, fall back to developer.md for backward compatibility
+    coderContent = fs.existsSync(coderPath)
+      ? fs.readFileSync(coderPath, "utf-8")
+      : fs.readFileSync(developerPath, "utf-8");
     testWriterContent = fs.readFileSync(testWriterPath, "utf-8");
   });
 
@@ -52,23 +57,23 @@ describe("t-4: Durable regression tests for split tickets (no .agent/tickets.md)
       );
     });
 
-    test("architect.md states it never directly writes to dev-tickets or test-tickets", () => {
-      // Architect's job is to produce the plan, not write the files
-      // (the workflow does that on approval)
-      expect(architectContent).toMatch(
-        /architect never writes.*\.agent\/dev-tickets|architect never writes.*\.agent\/test-tickets/i,
-      );
+    test("architect.md clarifies that architect can write split tickets", () => {
+      // Per t-1 AC: Architect may write .agent/dev-tickets.md and .agent/test-tickets.md
+      expect(architectContent).toMatch(/may write/i);
+      expect(architectContent).toMatch(/\.agent\/dev-tickets\.md/i);
     });
 
-    test("architect.md clarifies that workflow (not architect) writes split tickets", () => {
-      // After architect's output is approved, the workflow handles file creation
-      expect(architectContent).toMatch(/workflow writes/i);
+    test("architect.md states architect hands off to developer phase for implementation", () => {
+      // After architect's output is approved, the workflow hands off to developer
+      expect(architectContent).toMatch(
+        /hands? off.*developer|hands? off.*implementation/i,
+      );
     });
   });
 
-  describe("Developer skill documentation alignment", () => {
-    test("developer.md reads dev-tickets.md (not monolithic tickets.md)", () => {
-      expect(developerContent).toMatch(/\.agent\/dev-tickets\.md/);
+  describe("Coder skill documentation alignment", () => {
+    test("coder.md (or developer.md) reads dev-tickets.md (not monolithic tickets.md)", () => {
+      expect(coderContent).toMatch(/\.agent\/dev-tickets\.md/);
     });
   });
 
@@ -83,11 +88,13 @@ describe("t-4: Durable regression tests for split tickets (no .agent/tickets.md)
   });
 
   describe("Implementation group invariant documentation", () => {
-    test("README or skills mention Developer and TestWriter as separate agents", () => {
+    test("README or skills mention Coder and TestWriter as separate agents", () => {
       // At least one source mentions them as distinct but coordinated phases
       const hasDocumentation =
+        readmeContent.includes("Coder") ||
         readmeContent.includes("Developer") ||
-        developerContent.includes("TestWriter") ||
+        coderContent.includes("TestWriter") ||
+        testWriterContent.includes("Coder") ||
         testWriterContent.includes("Developer");
       expect(hasDocumentation).toBe(true);
     });

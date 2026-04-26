@@ -16,6 +16,8 @@ next_skills:
 **Verification focus:** Confirm the right thing was built. Subtract-first cleanup has already run in verifier; identify any remaining critical issues (security, correctness, egregious duplication).
 **External side effects:** None until the human signs off.
 
+**Phase Separation:** Reviewer does not edit source code or tests and does not run tests. All implementation work is routed back to the developer phase via tickets if needed.
+
 ## Starting a Session
 
 Present these sections in order:

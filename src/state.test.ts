@@ -87,6 +87,27 @@ describe("StateManager", () => {
     expect(fs.existsSync(agentDir)).toBe(false);
   });
 
+  test("cleanupAgentDir does not touch persistent timing logs outside .agent", () => {
+    const agentDir = path.join(tmpDir, ".agent");
+    const timingDir = path.join(tmpDir, ".carl");
+    const timingPath = path.join(timingDir, "timing.jsonl");
+
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.mkdirSync(timingDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(agentDir, "run.json"),
+      '{"run_id":"123"}',
+      "utf-8",
+    );
+    fs.writeFileSync(timingPath, '{"event":"phase"}\n', "utf-8");
+
+    stateManager.cleanupAgentDir();
+
+    expect(fs.existsSync(agentDir)).toBe(false);
+    expect(fs.existsSync(timingPath)).toBe(true);
+    expect(fs.readFileSync(timingPath, "utf-8")).toBe('{"event":"phase"}\n');
+  });
+
   test("cleanupAgentDir is idempotent", () => {
     const agentDir = path.join(tmpDir, ".agent");
     fs.mkdirSync(agentDir, { recursive: true });
@@ -121,12 +142,16 @@ describe("StateManager", () => {
   describe("start command scenario (.agent cleanup)", () => {
     test("start cleanup: removes old .agent on completed run, then creates new state", () => {
       const agentDir = path.join(tmpDir, ".agent");
+      const timingDir = path.join(tmpDir, ".carl");
+      const timingPath = path.join(timingDir, "timing.jsonl");
       fs.mkdirSync(agentDir, { recursive: true });
+      fs.mkdirSync(timingDir, { recursive: true });
 
       const oldState = stateManager.create(tmpDir);
       stateManager.update({ status: "completed" });
 
       fs.writeFileSync(path.join(agentDir, "old-note.txt"), "old", "utf-8");
+      fs.writeFileSync(timingPath, '{"run_id":"old-run"}\n', "utf-8");
 
       expect(fs.existsSync(path.join(agentDir, "old-note.txt"))).toBe(true);
 
@@ -140,11 +165,15 @@ describe("StateManager", () => {
       }
 
       expect(fs.existsSync(agentDir)).toBe(false);
+      expect(fs.existsSync(timingPath)).toBe(true);
 
       const newState = stateManager.create(tmpDir, "new prompt");
       expect(newState.status).toBe("running");
       expect(fs.existsSync(stateFilePath)).toBe(true);
       expect(fs.existsSync(path.join(agentDir, "old-note.txt"))).toBe(false);
+      expect(fs.readFileSync(timingPath, "utf-8")).toBe(
+        '{"run_id":"old-run"}\n',
+      );
     });
 
     test("start with active run: does NOT cleanup .agent when status is not completed", () => {

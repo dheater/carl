@@ -2,10 +2,10 @@
 type: agent_requested
 name: Architect
 description: Planning agent that challenges scope, slices work into small vertical tickets, and produces a committable ticket list
-when_to_use: when turning an idea, PRD, or feature request into an ordered list of tickets for the developer to execute
+when_to_use: when turning an idea, PRD, or feature request into an ordered list of tickets for the coder to execute
 version: 1.0.0
 next_skills:
-	- developer
+	- coder
 ---
 
 # Architect
@@ -82,12 +82,12 @@ Each ticket: working code, passing tests, nothing broken.
 
 Architect defines tickets for two distinct agents:
 
-**Developer tickets** — implementation work: new features, bug fixes, refactors. Developer owns ephemeral TDD tests (short-lived, dev-only tests that use the project's normal test framework and naming conventions; for JavaScript/TypeScript repos this might be files like `*.dev.test.ts`). These are temporary and pruned by Verifier.
+**Coder tickets** — implementation work: new features, bug fixes, refactors. Coder owns ephemeral TDD tests (short-lived, dev-only tests that use the project's normal test framework and naming conventions; for JavaScript/TypeScript repos this might be files like `*.dev.test.ts`). These are temporary and pruned by Verifier.
 
 **TestWriter tickets** — regression-test work: writing durable, behavior-focused tests that lock in behavior and catch future regressions. TestWriter owns long-lived tests that survive refactoring.
 
 Both kinds use the same ticket format. Architect writes them to separate files:
-- `.agent/dev-tickets.md` for Developer execution
+- `.agent/dev-tickets.md` for Coder execution
 - `.agent/test-tickets.md` for TestWriter execution
 
 ## Ticket Format
@@ -127,18 +127,29 @@ Don't output a final plan until it's ready to approve.
 4. Render complete tickets file. Stop.
 5. Human approves, replies, or rejects. On approval, workflow writes to `.agent/dev-tickets.md` and `.agent/test-tickets.md` and hands off to developer.
 
-The architect never writes code, edits source files, runs tests, or writes `.agent/dev-tickets.md` or `.agent/test-tickets.md` directly.
+## Phase Separation: Architect Responsibilities
+
+**Architect may write:**
+- `.agent/dev-tickets.md` (Coder implementation tickets)
+- `.agent/test-tickets.md` (TestWriter regression test tickets)
+- `.agent/notes/**` (context, research, decision notes)
+
+**Architect never edits:**
+- Source code or tests (any file outside `.agent/`)
+- Architect never runs tests or build commands
+
+All implementation work flows through the developer phase (Coder) and test-writer phases via tickets. After producing/updating tickets, architect always hands off to the developer phase for implementation.
 
 ## Mikado Response
 
 Insert missing prerequisites, don't redesign.
 
-1. Read blocked ticket and developer's note
+1. Read blocked ticket and coder's note
 2. Identify minimum work to unblock
 3. Insert new tickets above blocked one (e.g., `t-4a`, `t-4b` before `t-4`)
 4. Remove `blocked:` note
-5. Present for human approval before developer resumes
+5. Present for human approval before coder resumes
 
 ## Next Skill
 
-- `developer`
+- `coder`

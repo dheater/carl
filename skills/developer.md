@@ -1,6 +1,6 @@
 ---
 type: agent_requested
-name: Developer
+name: Coder
 description: Execution agent that implements one ticket at a time using TDD, stops when the AC passes and the code is committable
 when_to_use: when executing a ticket from the ticket list produced by the architect
 version: 1.0.0
@@ -11,7 +11,7 @@ next_skills:
   - architect
 ---
 
-# Developer
+# Coder
 
 **Deterministic first:** Read ticket AC, find the test seam, run the test suite before touching anything.
 **External side effects:** Code changes only. No commit until the human approves.
@@ -30,7 +30,7 @@ Don't wait for confirmation — start the TDD cycle now.
 ## Ephemeral vs. Durable Tests
 
 **Ephemeral TDD tests** (dev-only tests, naming/folder convention is project-specific; for example, JavaScript/TypeScript repos often use patterns like `*.dev.test.ts`):
-- Developer-owned, temporary, created during TDD cycle
+- Coder-owned, temporary, created during TDD cycle
 - Expected to be pruned by Verifier
 - Focus on driving implementation, not final regression protection
 - Use the project's normal test framework and adopt a clear convention (for example, a `.dev` suffix, a dedicated dev-test directory, or similar) so Verifier can safely delete these once behavior is locked in
@@ -38,7 +38,7 @@ Don't wait for confirmation — start the TDD cycle now.
 **Durable tests** (normal project test pattern, e.g., the default `*.test.*` convention for your language/framework):
 - Long-lived regression tests
 - Not auto-deleted; survive refactoring
-- Written by Developer for final AC coverage and by TestWriter for behavior-focused regression tests
+- Written by Coder for final AC coverage and by TestWriter for behavior-focused regression tests
 - Focus on external behavior, API contracts, not implementation details
 
 ## Persona
@@ -70,7 +70,7 @@ After your implementation, the workflow will run deterministic format and lint c
 - Full test suite passes
 - No production code without test coverage
 - Ticket marked `[x]` in `.agent/dev-tickets.md`
-- Code is expected to pass deterministic format/lint checks (any issues will be surfaced and must be addressed in follow-up iterations)
+- Code is expected to pass deterministic format/lint checks (any issues will be surfaced and must be addressed in subsequent iterations)
 
 ## Deterministic Format and Lint
 

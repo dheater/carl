@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 
-describe("t-2: Update Developer/Verifier/Reviewer skills for split tickets", () => {
+describe("t-2: Update Coder/Verifier/Reviewer skills for split tickets", () => {
   describe("skills/developer.md", () => {
     let skillContent: string;
 
@@ -14,10 +14,10 @@ describe("t-2: Update Developer/Verifier/Reviewer skills for split tickets", () 
       expect(skillContent).toMatch(/\.agent\/dev-tickets\.md/);
     });
 
-    test("developer.md distinguishes ephemeral *.dev.test.ts as temporary Developer-owned tests", () => {
+    test("developer.md distinguishes ephemeral *.dev.test.ts as temporary Coder-owned tests", () => {
       expect(skillContent).toMatch(/\*\.dev\.test\.ts|dev\.test/i);
       expect(skillContent).toMatch(/ephemeral|temporary/i);
-      expect(skillContent).toMatch(/Developer/);
+      expect(skillContent).toMatch(/Coder/);
     });
 
     test("developer.md distinguishes durable tests as long-lived and not auto-deleted", () => {

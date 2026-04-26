@@ -29,8 +29,9 @@ Read all deterministic artifacts from the developer phase:
 
 ## Behavioral Constraints
 
-**Do NOT:**
-- Re-run `just lint` or `just test`; rely entirely on the deterministic artifacts produced by developer
+**Do NOT run tests or lint:**
+- Do not re-run `just lint` or `just test`; rely entirely on the deterministic artifacts produced by developer
+- Do not edit source files outside of tests, comments, or dead code removal (no production code changes)
 
 **Do:**
 - Make low-risk, subtract-first edits (see below)
