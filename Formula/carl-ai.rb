@@ -1,16 +1,19 @@
 class CarlAi < Formula
   desc "Opinionated AI development workflow"
   homepage "https://github.com/dheater/carl"
-  url "https://github.com/dheater/carl/archive/refs/tags/v5.2.2.tar.gz"
-  version "5.2.2"
-  sha256 "a40872edb970507f61cb795fd8a2ea8c9b91675518c034cb85f388a9358a4936"
+  url "https://github.com/dheater/carl/releases/download/v0.0.0/carl.js"
+  version "0.0.0"
+  sha256 "0000000000000000000000000000000000000000000000000000000000000000"
   license "MIT"
 
   depends_on "node"
 
   def install
-    system "npm", "install", *Language::Node.std_npm_args(libexec)
-    bin.install_symlink Dir["#{libexec}/bin/*"]
+    libexec.install "carl.js"
+    (bin/"carl").write <<~EOS
+      #!/bin/bash
+      exec "#{Formula["node"].opt_bin}/node" "#{libexec}/carl.js" "$@"
+    EOS
   end
 
   def test

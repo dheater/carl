@@ -18,10 +18,6 @@ describe("homebrew-formula", () => {
       expect(formulaContent).toMatch(/depends_on\s+["']node["']/);
     });
 
-    it("should use Language::Node.std_npm_args", () => {
-      expect(formulaContent).toMatch(/Language::Node\.std_npm_args/);
-    });
-
     it("should define desc, homepage, url, version, sha256, and license", () => {
       expect(formulaContent).toMatch(/desc\s+["']/);
       expect(formulaContent).toMatch(/homepage\s+["']/);
@@ -32,19 +28,18 @@ describe("homebrew-formula", () => {
     });
   });
 
-  describe("Sandbox safety", () => {
-    it("should use system and Language::Node in install block", () => {
+  describe("Install approach", () => {
+    it("should install pre-built carl.js into libexec", () => {
       expect(formulaContent).toMatch(/def\s+install/);
-      expect(formulaContent).toMatch(/system\s+["']npm["']/);
-      expect(formulaContent).toMatch(/Language::Node\.std_npm_args\(libexec\)/);
+      expect(formulaContent).toMatch(/libexec\.install\s+["']carl\.js["']/);
     });
 
-    it("should install into libexec, not system directories", () => {
-      expect(formulaContent).toMatch(/libexec/);
+    it("should not run npm install (no Xcode dependency)", () => {
+      expect(formulaContent).not.toMatch(/system\s+["']npm["']/);
     });
 
-    it("should use bin.install_symlink for safe bin exposure", () => {
-      expect(formulaContent).toMatch(/bin\.install_symlink/);
+    it("should write a shell wrapper into bin", () => {
+      expect(formulaContent).toMatch(/\(bin\/"carl"\)\.write/);
     });
 
     it("should have test block using system command", () => {

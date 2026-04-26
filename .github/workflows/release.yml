@@ -58,34 +58,32 @@ jobs:
             exit 1
           fi
 
-      - name: Create GitHub release
+      - name: Create GitHub release and upload bundle
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "v${{ steps.version.outputs.version }}" \
+          VERSION=${{ steps.version.outputs.version }}
+          gh release create "v${VERSION}" \
             --repo ${{ github.repository }} \
-            --title "v${{ steps.version.outputs.version }}" \
+            --title "v${VERSION}" \
             --generate-notes \
-            --target main
+            --target main \
+            dist/carl.js
 
-      - name: Compute tarball SHA256
+      - name: Compute bundle SHA256
         id: sha
         run: |
           VERSION=${{ steps.version.outputs.version }}
-          URL="https://github.com/${{ github.repository }}/archive/refs/tags/v${VERSION}.tar.gz"
-          # GitHub needs a moment to generate the archive after tag creation
-          sleep 5
-          SHA256=$(curl -sL "$URL" | shasum -a 256 | awk '{print $1}')
+          SHA256=$(shasum -a 256 dist/carl.js | awk '{print $1}')
+          URL="https://github.com/${{ github.repository }}/releases/download/v${VERSION}/carl.js"
           echo "sha256=$SHA256" >> $GITHUB_OUTPUT
           echo "url=$URL" >> $GITHUB_OUTPUT
 
-      - name: Update Formula/carl.rb
+      - name: Update Formula/carl-ai.rb
         run: |
           VERSION=${{ steps.version.outputs.version }}
           URL=${{ steps.sha.outputs.url }}
           SHA256=${{ steps.sha.outputs.sha256 }}
-          REPO=${{ github.repository }}
-          sed -i "s|homepage \".*\"|homepage \"https://github.com/${REPO}\"|" Formula/carl-ai.rb
           sed -i "s|url \".*\"|url \"${URL}\"|" Formula/carl-ai.rb
           sed -i "s|version \".*\"|version \"${VERSION}\"|" Formula/carl-ai.rb
           sed -i "s|sha256 \".*\"|sha256 \"${SHA256}\"|" Formula/carl-ai.rb

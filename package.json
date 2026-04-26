@@ -6,13 +6,14 @@
   },
   "scripts": {
     "prepare": "npm run build",
-    "build": "tsc",
+    "build": "esbuild src/carl.ts --bundle --platform=node --outfile=dist/carl.js '--banner:js=#!/usr/bin/env node'",
     "test": "jest",
     "start": "node dist/carl.js"
   },
   "devDependencies": {
     "@types/jest": "^30.0.0",
     "@types/node": "^25.6.0",
+    "esbuild": "^0.28.0",
     "jest": "^30.3.0",
     "prettier": "^3.8.3",
     "ts-jest": "^29.4.9",
