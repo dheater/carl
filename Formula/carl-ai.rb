@@ -1,9 +1,9 @@
 class CarlAi < Formula
   desc "Opinionated AI development workflow"
   homepage "https://github.com/dheater/carl"
-  url "https://github.com/dheater/carl/archive/refs/tags/v5.2.1.tar.gz"
-  version "5.2.1"
-  sha256 "998501befbc12580eff4d0c572692543ee40306c5884518541a6edacd6c70593"
+  url "https://github.com/dheater/carl/archive/refs/tags/v5.2.2.tar.gz"
+  version "5.2.2"
+  sha256 "a40872edb970507f61cb795fd8a2ea8c9b91675518c034cb85f388a9358a4936"
   license "MIT"
 
   depends_on "node"
