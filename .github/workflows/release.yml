@@ -1,0 +1,96 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check-ci:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify latest CI run on main passed
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          result=$(gh run list \
+            --repo ${{ github.repository }} \
+            --branch main \
+            --workflow ci.yml \
+            --limit 1 \
+            --json conclusion \
+            --jq '.[0].conclusion')
+          if [ "$result" != "success" ]; then
+            echo "Latest CI on main: $result. Must be 'success' to release."
+            exit 1
+          fi
+
+  release:
+    needs: check-ci
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - run: npm ci
+      - run: npm run build
+
+      - name: Get version
+        id: version
+        run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+
+      - name: Fail if tag already exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          if gh release view "v${VERSION}" --repo ${{ github.repository }} &>/dev/null; then
+            echo "Release v${VERSION} already exists."
+            exit 1
+          fi
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "v${{ steps.version.outputs.version }}" \
+            --repo ${{ github.repository }} \
+            --title "v${{ steps.version.outputs.version }}" \
+            --generate-notes \
+            --target main
+
+      - name: Compute tarball SHA256
+        id: sha
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          URL="https://github.com/${{ github.repository }}/archive/refs/tags/v${VERSION}.tar.gz"
+          # GitHub needs a moment to generate the archive after tag creation
+          sleep 5
+          SHA256=$(curl -sL "$URL" | shasum -a 256 | awk '{print $1}')
+          echo "sha256=$SHA256" >> $GITHUB_OUTPUT
+          echo "url=$URL" >> $GITHUB_OUTPUT
+
+      - name: Update Formula/carl.rb
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          URL=${{ steps.sha.outputs.url }}
+          SHA256=${{ steps.sha.outputs.sha256 }}
+          REPO=${{ github.repository }}
+          sed -i "s|homepage \".*\"|homepage \"https://github.com/${REPO}\"|" Formula/carl.rb
+          sed -i "s|url \".*\"|url \"${URL}\"|" Formula/carl.rb
+          sed -i "s|version \".*\"|version \"${VERSION}\"|" Formula/carl.rb
+          sed -i "s|sha256 \".*\"|sha256 \"${SHA256}\"|" Formula/carl.rb
+
+      - name: Commit and push updated formula
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/carl.rb
+          git commit -m "chore: Update Homebrew formula to v${{ steps.version.outputs.version }}"
+          git push
