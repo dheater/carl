@@ -1,12 +1,12 @@
 {
   "name": "carl",
-  "version": "5.2.4",
+  "version": "5.2.5",
   "bin": {
     "carl": "./dist/carl.js"
   },
   "scripts": {
     "prepare": "npm run build",
-    "build": "esbuild src/carl.ts --bundle --platform=node --outfile=dist/carl.js '--banner:js=#!/usr/bin/env node'",
+    "build": "esbuild src/carl.ts --bundle --platform=node --outfile=dist/carl.js",
     "test": "jest",
     "start": "node dist/carl.js"
   },
