@@ -630,9 +630,11 @@ describe("t-2: Two-strike test gate escalates to architect", () => {
     const developerHistories = state.history!.filter(
       (h) => h.phase === "developer",
     );
-    expect(developerHistories[developerHistories.length - 1].status).toBe(
-      "blocked",
-    );
+    const blockedEntry = developerHistories[developerHistories.length - 1];
+    expect(blockedEntry.status).toBe("blocked");
+    // AC: Verify outputs contains both "Tests failed" prefix and "staying in developer phase"
+    expect(blockedEntry.outputs).toMatch(/Tests failed/);
+    expect(blockedEntry.outputs).toMatch(/staying in developer phase/i);
   });
 
   test("second consecutive failing test escalates to architect", async () => {
