@@ -7,7 +7,7 @@ Opinionated AI development workflow. A four-phase loop with human approval gates
 ### Using Homebrew (macOS)
 
 ```bash
-brew tap dheater/carl
+brew tap dheater/carl https://github.com/dheater/carl
 brew install carl-ai
 carl start "<prompt>"
 ```
