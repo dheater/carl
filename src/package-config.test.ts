@@ -24,10 +24,10 @@ describe("package-config", () => {
       expect(packageJson.bin.carl).toBe("./dist/carl.js");
     });
 
-    it("should have a build script that compiles TypeScript", () => {
+    it("should have a build script that produces dist/carl.js", () => {
       expect(packageJson.scripts).toBeDefined();
       expect(packageJson.scripts.build).toBeDefined();
-      expect(packageJson.scripts.build).toBe("tsc");
+      expect(packageJson.scripts.build).toContain("dist/carl.js");
     });
   });
 
