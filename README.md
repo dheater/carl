@@ -4,8 +4,18 @@ Opinionated AI development workflow. A four-phase loop with human approval gates
 
 ## Install
 
+### Using Homebrew (macOS)
+
 ```bash
-git clone https://github.com/carl-lang/carl.git
+brew tap dheater/carl
+brew install carl
+carl start "<prompt>"
+```
+
+### Building from source
+
+```bash
+git clone https://codeberg.org/dheater/carl.git
 cd carl
 just install
 ```

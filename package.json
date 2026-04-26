@@ -1,10 +1,11 @@
 {
   "name": "carl",
-  "version": "5.2.0",
+  "version": "5.2.1",
   "bin": {
     "carl": "./dist/carl.js"
   },
   "scripts": {
+    "prepare": "npm run build",
     "build": "tsc",
     "test": "jest",
     "start": "node dist/carl.js"
@@ -16,7 +17,8 @@
     "prettier": "^3.8.3",
     "ts-jest": "^29.4.9",
     "ts-node": "^10.9.2",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "yaml": "^2.8.3"
   },
   "dependencies": {
     "@augmentcode/auggie-sdk": "^0.1.15"

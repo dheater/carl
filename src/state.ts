@@ -28,8 +28,10 @@ export interface RunState {
 
 export class StateManager {
   private stateFilePath: string;
+  private workspaceRoot: string;
 
   constructor(workspaceRoot: string) {
+    this.workspaceRoot = workspaceRoot;
     this.stateFilePath = path.join(workspaceRoot, ".agent", "run.json");
   }
 
@@ -126,5 +128,12 @@ export class StateManager {
     const newState = { ...currentState, ...updates };
     this.save(newState);
     return newState;
+  }
+
+  public cleanupAgentDir(): void {
+    const agentDir = path.join(this.workspaceRoot, ".agent");
+    if (fs.existsSync(agentDir)) {
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
   }
 }

@@ -2,7 +2,7 @@
 
 import { StateManager } from "./state";
 import { runLoop, closeSharedClient } from "./loop";
-import { approveCommand, rejectCommand, replyCommand } from "./commands"; // used by runWithEditor
+import { approveCommand, rejectCommand, replyCommand } from "./commands";
 import { openEditorForGate, collectPrompt } from "./editor";
 import { red, blue } from "./colors";
 
@@ -35,8 +35,7 @@ async function runWithEditor(
         if (next.status === "completed") {
           console.log("\n  [System] Workflow complete. Sprint approved.\n");
           break;
-        }
-        // continue loop to run the next phase
+	        }
       } else if (result.action === "reject") {
         rejectCommand(
           workspaceRoot,
@@ -50,10 +49,8 @@ async function runWithEditor(
             `  [System] ${phase} rejected. Returning to ${after.current_phase}.`,
           ),
         );
-        // continue loop — workflow resumes at the fallback phase (or explicit target)
       } else {
         replyCommand(workspaceRoot, result.message);
-        // continue loop — re-runs current phase with reply injected
       }
     }
   } finally {
@@ -84,9 +81,9 @@ async function main() {
           console.error(red(`Use 'carl run' to continue it.`));
           process.exit(1);
         }
-      } catch {
-        // No existing state — safe to start
-      }
+        // Cleanup old completed run before starting new one
+        stateManager.cleanupAgentDir();
+	      } catch {}
 
       if (!prompt) {
         const collected = collectPrompt();
@@ -126,9 +123,7 @@ async function main() {
         await closeSharedClient();
         process.exit(0);
       }
-      console.log(`Resuming workflow from phase: ${state.current_phase}`);
-
-      // If awaiting approval, runWithEditor opens the editor immediately
+	      console.log(`Resuming workflow from phase: ${state.current_phase}`);
       if (state.status === "awaiting_approval") {
         const phase = state.current_phase;
         const lastOutput =
@@ -143,7 +138,6 @@ async function main() {
         const result = openEditorForGate(phase, lastOutput);
         if (result.action === "approve") {
           approveCommand(workspaceRoot);
-          // Check if this approval completed the workflow at reviewer phase
           const updatedState = stateManager.load();
           if (updatedState.status === "completed" && phase === "reviewer") {
             console.log("\n  [System] Workflow complete. Sprint approved.\n");
@@ -177,10 +171,8 @@ async function main() {
       console.log(
         `Abandoning run: ${existing.run_id} (phase: ${existing.current_phase}, status: ${existing.status})`,
       );
-    } catch {
-      // No state to show
-    }
-    stateManager.delete();
+	      } catch {}
+    stateManager.cleanupAgentDir();
     console.log(
       "Run cleared. Use 'carl start \"<prompt>\"' to begin a new run.",
     );

@@ -69,4 +69,145 @@ describe("StateManager", () => {
       /Malformed run state - missing or invalid workspace_path/,
     );
   });
+
+  test("cleanupAgentDir removes the entire .agent directory", () => {
+    const agentDir = path.join(tmpDir, ".agent");
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(agentDir, "run.json"),
+      '{"run_id":"123"}',
+      "utf-8",
+    );
+    fs.writeFileSync(path.join(agentDir, "extra-file.txt"), "extra", "utf-8");
+
+    expect(fs.existsSync(agentDir)).toBe(true);
+
+    stateManager.cleanupAgentDir();
+
+    expect(fs.existsSync(agentDir)).toBe(false);
+  });
+
+  test("cleanupAgentDir is idempotent", () => {
+    const agentDir = path.join(tmpDir, ".agent");
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(agentDir, "run.json"),
+      '{"run_id":"123"}',
+      "utf-8",
+    );
+
+    stateManager.cleanupAgentDir();
+    stateManager.cleanupAgentDir();
+
+    expect(fs.existsSync(agentDir)).toBe(false);
+  });
+
+  test("cleanupAgentDir removes nested subdirectories", () => {
+    const agentDir = path.join(tmpDir, ".agent");
+    const notesDir = path.join(agentDir, "notes");
+    fs.mkdirSync(notesDir, { recursive: true });
+    fs.writeFileSync(path.join(notesDir, "architect.md"), "notes", "utf-8");
+    fs.writeFileSync(
+      path.join(agentDir, "run.json"),
+      '{"run_id":"123"}',
+      "utf-8",
+    );
+
+    stateManager.cleanupAgentDir();
+
+    expect(fs.existsSync(agentDir)).toBe(false);
+  });
+
+  describe("start command scenario (.agent cleanup)", () => {
+    test("start cleanup: removes old .agent on completed run, then creates new state", () => {
+      const agentDir = path.join(tmpDir, ".agent");
+      fs.mkdirSync(agentDir, { recursive: true });
+
+      const oldState = stateManager.create(tmpDir);
+      stateManager.update({ status: "completed" });
+
+      fs.writeFileSync(path.join(agentDir, "old-note.txt"), "old", "utf-8");
+
+      expect(fs.existsSync(path.join(agentDir, "old-note.txt"))).toBe(true);
+
+      try {
+        const existing = stateManager.load();
+        if (existing.status === "completed") {
+          stateManager.cleanupAgentDir();
+        }
+      } catch {
+        // No existing state
+      }
+
+      expect(fs.existsSync(agentDir)).toBe(false);
+
+      const newState = stateManager.create(tmpDir, "new prompt");
+      expect(newState.status).toBe("running");
+      expect(fs.existsSync(stateFilePath)).toBe(true);
+      expect(fs.existsSync(path.join(agentDir, "old-note.txt"))).toBe(false);
+    });
+
+    test("start with active run: does NOT cleanup .agent when status is not completed", () => {
+      stateManager.create(tmpDir);
+      stateManager.update({ status: "running" });
+
+      const agentDir = path.join(tmpDir, ".agent");
+      const sentinelFile = path.join(agentDir, "should-not-be-touched.txt");
+      fs.writeFileSync(sentinelFile, "preserve", "utf-8");
+
+      try {
+        const existing = stateManager.load();
+        if (existing.status === "completed") {
+          stateManager.cleanupAgentDir();
+        } else {
+          expect(fs.existsSync(sentinelFile)).toBe(true);
+        }
+      } catch {
+        // No existing state
+      }
+
+      expect(fs.existsSync(sentinelFile)).toBe(true);
+    });
+  });
+
+  describe("reset command scenario (.agent cleanup)", () => {
+    test("reset removes entire .agent directory including run.json and all contents", () => {
+      const agentDir = path.join(tmpDir, ".agent");
+
+      stateManager.create(tmpDir);
+      fs.writeFileSync(path.join(agentDir, "extra.txt"), "extra", "utf-8");
+
+      const notesDir = path.join(agentDir, "notes");
+      fs.mkdirSync(notesDir, { recursive: true });
+      fs.writeFileSync(path.join(notesDir, "architect.md"), "notes", "utf-8");
+
+      expect(fs.existsSync(agentDir)).toBe(true);
+
+      stateManager.cleanupAgentDir();
+
+      expect(fs.existsSync(agentDir)).toBe(false);
+      expect(fs.existsSync(stateFilePath)).toBe(false);
+    });
+
+    test("reset is idempotent: calling on non-existent .agent does not throw", () => {
+      const agentDir = path.join(tmpDir, ".agent");
+      expect(fs.existsSync(agentDir)).toBe(false);
+
+      expect(() => stateManager.cleanupAgentDir()).not.toThrow();
+      expect(fs.existsSync(agentDir)).toBe(false);
+    });
+
+    test("reset: multiple calls are safe and don't throw", () => {
+      const agentDir = path.join(tmpDir, ".agent");
+
+      stateManager.create(tmpDir);
+      expect(fs.existsSync(agentDir)).toBe(true);
+
+      stateManager.cleanupAgentDir();
+      expect(fs.existsSync(agentDir)).toBe(false);
+
+      expect(() => stateManager.cleanupAgentDir()).not.toThrow();
+      expect(fs.existsSync(agentDir)).toBe(false);
+    });
+  });
 });
