@@ -15,7 +15,7 @@ carl start "<prompt>"
 ### Building from source
 
 ```bash
-git clone https://codeberg.org/dheater/carl.git
+git clone https://github.com/dheater/carl.git
 cd carl
 just install
 ```
