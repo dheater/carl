@@ -22,6 +22,10 @@ let sharedClient: any | null = null;
 let sharedClientPhase: string | null = null;
 let sharedClientRunId: string | null = null;
 
+// Separate test-writer client (never shared with developer or other phases)
+let testWriterClient: any | null = null;
+let testWriterClientRunId: string | null = null;
+
 export async function closeSharedClient(): Promise<void> {
   if (sharedClient) {
     try {
@@ -32,6 +36,15 @@ export async function closeSharedClient(): Promise<void> {
     sharedClient = null;
     sharedClientPhase = null;
     sharedClientRunId = null;
+  }
+  if (testWriterClient) {
+    try {
+      await testWriterClient.close();
+    } catch {
+      // Best-effort close
+    }
+    testWriterClient = null;
+    testWriterClientRunId = null;
   }
 }
 
@@ -302,6 +315,79 @@ async function handleReviewerCompletion(
   );
 }
 
+/**
+ * Run the test-writer phase in parallel with developer.
+ * Returns the test-writer response or throws if creation fails.
+ */
+async function runTestWriterPhase(
+  workspaceRoot: string,
+  runId: string,
+): Promise<string> {
+  const { Auggie } = await import("@augmentcode/auggie-sdk");
+
+  // Close and discard any existing test-writer client from a different run
+  if (testWriterClient && testWriterClientRunId !== runId) {
+    try {
+      await testWriterClient.close();
+    } catch {
+      // Best-effort close
+    }
+    testWriterClient = null;
+    testWriterClientRunId = null;
+  }
+
+  // Create a new test-writer client if needed
+  if (!testWriterClient) {
+    console.log(`[Timing] Auggie.create entry test-writer/haiku4.5`);
+    const auggleCreateStart = Date.now();
+    testWriterClient = await Auggie.create({
+      workspaceRoot: workspaceRoot,
+      model: "haiku4.5",
+      allowIndexing: true,
+    });
+    const auggleCreateDuration = Date.now() - auggleCreateStart;
+    console.log(
+      `[Timing] Auggie.create duration ${auggleCreateDuration}ms test-writer/haiku4.5`,
+    );
+    testWriterClientRunId = runId;
+  }
+
+  testWriterClient.onSessionUpdate((notification: any) => {
+    const update = notification.update;
+    if (update) {
+      if (update.sessionUpdate === "tool_call") {
+        console.log(
+          `\n  [test-writer/haiku4.5] Running tool: ${update.title || "unknown"}...`,
+        );
+      } else if (update.sessionUpdate === "agent_thought_chunk") {
+        if (update.content && update.content.text) {
+          process.stdout.write(`\x1b[90m${update.content.text}\x1b[0m`);
+        }
+      }
+    }
+  });
+
+  const testWriterInstruction = buildSkillInstruction(
+    "test-writer",
+    workspaceRoot,
+  );
+  console.log(
+    `  [System] Agent initialized. Sending prompt and awaiting response...`,
+  );
+  console.log(`[Timing] prompt entry test-writer/haiku4.5`);
+  const testWriterPromptStart = Date.now();
+  const testWriterResponse = await testWriterClient.prompt(
+    testWriterInstruction,
+    { isAnswerOnly: true },
+  );
+  const testWriterPromptDuration = Date.now() - testWriterPromptStart;
+  console.log(
+    `[Timing] prompt duration ${testWriterPromptDuration}ms test-writer/haiku4.5`,
+  );
+
+  return testWriterResponse;
+}
+
 export async function runLoop(stateManager: StateManager): Promise<void> {
   let state = stateManager.load();
 
@@ -440,7 +526,7 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
         instruction += `\n\n# Blocker\n\n${lastEntry.outputs}\n\nPlease fix the underlying issues and try again.`;
       } else if (lastEntry && lastEntry.phase !== phaseName) {
         // Only reviewer receives prior workflow context (architect plan/decisions).
-        // Developer runs clean — it reads .agent/tickets.md directly.
+        // Developer runs clean — it reads .agent/dev-tickets.md directly (created by architect).
         if (phaseName === "reviewer") {
           const priorContext = await searchContext(workflowContext, phaseName);
           if (priorContext) {
@@ -452,23 +538,110 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
       console.log(
         `  [System] Agent initialized. Sending prompt and awaiting response...`,
       );
-      console.log(`[Timing] prompt entry ${phaseName}/${model}`);
-      const promptStart = Date.now();
-      const response = await client.prompt(instruction, { isAnswerOnly: true });
-      const promptDuration = Date.now() - promptStart;
-      console.log(
-        `[Timing] prompt duration ${promptDuration}ms ${phaseName}/${model}`,
-      );
 
-      const isBlocked =
-        phaseName === "developer" && /block(?:ed|er):/i.test(response);
+      let response: string;
+      let isBlocked: boolean;
 
-      history.push({
-        phase: phaseName,
-        model: model,
-        status: isBlocked ? "blocked" : "success",
-        outputs: response,
-      });
+      // Run developer and test-writer in parallel
+      if (phaseName === "developer") {
+        console.log(
+          `[Timing] prompt entry developer/${model} and test-writer/haiku4.5 in parallel`,
+        );
+        const promptStart = Date.now();
+
+        // Prepare test-writer instruction in advance
+        const testWriterInstruction = buildSkillInstruction(
+          "test-writer",
+          state.workspace_path,
+        );
+
+        // Ensure test-writer client is ready
+        let twClient = testWriterClient;
+        if (!twClient) {
+          console.log(`[Timing] Auggie.create entry test-writer/haiku4.5`);
+          const auggleCreateStart = Date.now();
+          twClient = await Auggie.create({
+            workspaceRoot: state.workspace_path,
+            model: "haiku4.5",
+            allowIndexing: true,
+          });
+          const auggleCreateDuration = Date.now() - auggleCreateStart;
+          console.log(
+            `[Timing] Auggie.create duration ${auggleCreateDuration}ms test-writer/haiku4.5`,
+          );
+          testWriterClient = twClient;
+          testWriterClientRunId = runId;
+        }
+
+        twClient.onSessionUpdate((notification: any) => {
+          const update = notification.update;
+          if (update) {
+            if (update.sessionUpdate === "tool_call") {
+              console.log(
+                `\n  [test-writer/haiku4.5] Running tool: ${update.title || "unknown"}...`,
+              );
+            } else if (update.sessionUpdate === "agent_thought_chunk") {
+              if (update.content && update.content.text) {
+                process.stdout.write(`\x1b[90m${update.content.text}\x1b[0m`);
+              }
+            }
+          }
+        });
+
+        // Run both prompts in parallel
+        const [developerResponse, testWriterResponse] = await Promise.all([
+          client.prompt(instruction, { isAnswerOnly: true }),
+          twClient.prompt(testWriterInstruction, { isAnswerOnly: true }),
+        ]);
+
+        const promptDuration = Date.now() - promptStart;
+        console.log(
+          `[Timing] prompt duration ${promptDuration}ms developer/${model} and test-writer/haiku4.5`,
+        );
+
+        response = developerResponse;
+        isBlocked = /block(?:ed|er):/i.test(response);
+
+        // Add developer entry first (deterministic order)
+        history.push({
+          phase: phaseName,
+          model: model,
+          status: isBlocked ? "blocked" : "success",
+          outputs: response,
+        });
+
+        // Add test-writer entry (always after developer in deterministic order)
+        const testWriterBlocked = /block(?:ed|er):/i.test(testWriterResponse);
+        history.push({
+          phase: "test-writer",
+          model: "haiku4.5",
+          status: testWriterBlocked ? "blocked" : "success",
+          outputs: testWriterResponse,
+        });
+
+        // If either is blocked, we'll handle it below
+        if (testWriterBlocked && !isBlocked) {
+          isBlocked = true; // Treat as blocked for the gating logic
+        }
+      } else {
+        // Non-developer phases run normally (sequential)
+        console.log(`[Timing] prompt entry ${phaseName}/${model}`);
+        const promptStart = Date.now();
+        response = await client.prompt(instruction, { isAnswerOnly: true });
+        const promptDuration = Date.now() - promptStart;
+        console.log(
+          `[Timing] prompt duration ${promptDuration}ms ${phaseName}/${model}`,
+        );
+
+        isBlocked = false; // Only developer can be blocked
+
+        history.push({
+          phase: phaseName,
+          model: model,
+          status: "success",
+          outputs: response,
+        });
+      }
 
       if (!isBlocked && phaseName === "architect") {
         // Handle architect completion: persist notes and index to context
@@ -490,11 +663,36 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
       const phaseDuration = Date.now() - phaseStartTime;
       console.log(`[Timing] Phase ${phaseName} duration ${phaseDuration}ms`);
 
+      // Special handling for developer phase: check if either developer or test-writer blocked
+      let shouldTransitionToArchitect = false;
+      if (phaseName === "developer") {
+        // Both developer and test-writer have already completed above in parallel
+        // Check if either reported a blocker
+        const devEntry = history[history.length - 2]; // developer entry
+        const twEntry = history[history.length - 1]; // test-writer entry
+
+        const devBlocked = devEntry?.status === "blocked";
+        const twBlocked = twEntry?.status === "blocked";
+
+        if (devBlocked || twBlocked) {
+          // One or both blocked; don't run deterministic checks
+          shouldTransitionToArchitect = true;
+          isBlocked = true; // Mark as blocked so we transition to architect below
+        }
+      }
+
       if (isBlocked) {
         state = stateManager.update({ history, current_phase: "architect" });
+        const blockedPhase =
+          phaseName === "developer"
+            ? shouldTransitionToArchitect &&
+              history[history.length - 1]?.status === "blocked"
+              ? "test-writer"
+              : "developer"
+            : phaseName;
         console.log(
           blue(
-            `Phase ${phaseName} reported a blocker. Handing back to architect.`,
+            `Phase ${blockedPhase} reported a blocker. Handing back to architect.`,
           ),
         );
         continue;
@@ -508,98 +706,9 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
         console.log(`Phase ${phaseName} completed. Awaiting approval.`);
         break; // Pause loop
       } else if (nextPhase) {
-        // After developer completes, run test-writer before deterministic format/lint and tests
+        // After developer and test-writer complete (in parallel), run deterministic checks
         if (phaseName === "developer") {
-          console.log(`[System] Running TestWriter to add regression tests...`);
-          let testWriterClient = sharedClient;
-          // If we have a client from a different phase, close and discard it
-          if (
-            testWriterClient &&
-            (sharedClientRunId !== runId || sharedClientPhase !== "test-writer")
-          ) {
-            try {
-              await testWriterClient.close();
-            } catch {
-              // Best-effort close
-            }
-            sharedClient = null;
-            sharedClientPhase = null;
-            sharedClientRunId = null;
-            testWriterClient = null;
-          }
-
-          // Create a new client for test-writer if needed
-          if (!testWriterClient) {
-            console.log(`[Timing] Auggie.create entry test-writer/haiku4.5`);
-            const auggleCreateStart = Date.now();
-            testWriterClient = await Auggie.create({
-              workspaceRoot: state.workspace_path,
-              model: "haiku4.5",
-              allowIndexing: true,
-            });
-            const auggleCreateDuration = Date.now() - auggleCreateStart;
-            console.log(
-              `[Timing] Auggie.create duration ${auggleCreateDuration}ms test-writer/haiku4.5`,
-            );
-            sharedClient = testWriterClient;
-            sharedClientPhase = "test-writer";
-            sharedClientRunId = runId;
-          }
-
-          testWriterClient.onSessionUpdate((notification: any) => {
-            const update = notification.update;
-            if (update) {
-              if (update.sessionUpdate === "tool_call") {
-                console.log(
-                  `\n  [test-writer/haiku4.5] Running tool: ${update.title || "unknown"}...`,
-                );
-              } else if (update.sessionUpdate === "agent_thought_chunk") {
-                if (update.content && update.content.text) {
-                  process.stdout.write(`\x1b[90m${update.content.text}\x1b[0m`);
-                }
-              }
-            }
-          });
-
-          const testWriterInstruction = buildSkillInstruction(
-            "test-writer",
-            state.workspace_path,
-          );
-          console.log(
-            `  [System] Agent initialized. Sending prompt and awaiting response...`,
-          );
-          console.log(`[Timing] prompt entry test-writer/haiku4.5`);
-          const testWriterPromptStart = Date.now();
-          const testWriterResponse = await testWriterClient.prompt(
-            testWriterInstruction,
-            { isAnswerOnly: true },
-          );
-          const testWriterPromptDuration = Date.now() - testWriterPromptStart;
-          console.log(
-            `[Timing] prompt duration ${testWriterPromptDuration}ms test-writer/haiku4.5`,
-          );
-
-          const testWriterBlocked = /block(?:ed|er):/i.test(testWriterResponse);
-
-          history.push({
-            phase: "test-writer",
-            model: "haiku4.5",
-            status: testWriterBlocked ? "blocked" : "success",
-            outputs: testWriterResponse,
-          });
-
-          if (testWriterBlocked) {
-            state = stateManager.update({
-              history,
-              current_phase: "architect",
-            });
-            console.log(
-              blue(
-                `Phase test-writer reported a blocker. Handing back to architect.`,
-              ),
-            );
-            continue;
-          }
+          // Both completed above; continue with deterministic checks
 
           console.log(
             `[System] Running deterministic format and lint checks...`,

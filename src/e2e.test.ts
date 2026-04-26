@@ -218,7 +218,7 @@ describe("End-to-End Workflow Harness", () => {
     expect(resumedState.status).toBe("awaiting_approval");
   });
 
-  test("architect approval writes the last architect output to .agent/tickets.md", async () => {
+  test("architect approval does NOT write to .agent/tickets.md", async () => {
     const slicePlan =
       "# Feature X\n\n## [ ] t-1: Build thing\n\nAC:\n- It works\n";
     mockPrompt.mockReset();
@@ -228,8 +228,51 @@ describe("End-to-End Workflow Harness", () => {
     approveCommand(tmpDir);
 
     const ticketsPath = path.join(tmpDir, ".agent", "tickets.md");
-    expect(fs.existsSync(ticketsPath)).toBe(true);
-    expect(fs.readFileSync(ticketsPath, "utf-8")).toBe(slicePlan);
+    expect(fs.existsSync(ticketsPath)).toBe(false);
+  });
+
+  test("t-4: Full workflow never creates .agent/tickets.md - regression test for split tickets", async () => {
+    // AC: Running through architect approval and developer/test-writer never creates .agent/tickets.md
+    // This locks in the split ticket behavior (dev-tickets.md, test-tickets.md) and prevents
+    // silent reintroduction of the monolithic tickets file.
+    const slicePlan =
+      "# Feature X\n\n## [ ] t-1: Build thing\n\nAC:\n- It works\n";
+    mockPrompt.mockReset();
+    mockPrompt
+      .mockResolvedValueOnce(slicePlan)
+      .mockResolvedValueOnce("developer output")
+      .mockResolvedValueOnce("test-writer output")
+      .mockResolvedValueOnce("verifier output")
+      .mockResolvedValue("success");
+
+    // Run to architect gate
+    await runLoop(stateManager);
+    let state = stateManager.load();
+    expect(state.current_phase).toBe("architect");
+    expect(state.status).toBe("awaiting_approval");
+
+    // At this point, only architect has run. No tickets.md should exist.
+    const ticketsPath = path.join(tmpDir, ".agent", "tickets.md");
+    expect(fs.existsSync(ticketsPath)).toBe(false);
+
+    // Approve and continue
+    approveCommand(tmpDir);
+
+    // After approval, no tickets.md should be created (this is the key regression check)
+    expect(fs.existsSync(ticketsPath)).toBe(false);
+
+    // Run rest of workflow (developer, test-writer, verifier, reviewer)
+    await runLoop(stateManager);
+    state = stateManager.load();
+
+    // AC: Even after full workflow, tickets.md never created
+    expect(fs.existsSync(ticketsPath)).toBe(false);
+
+    // AC: Verify the workflow progressed through developer, test-writer, and beyond
+    const phases = state.history!.map((h) => h.phase);
+    expect(phases).toContain("architect");
+    expect(phases).toContain("developer");
+    expect(phases).toContain("test-writer");
   });
 
   test("workflow completion closes shared client and clears resources", async () => {
@@ -435,8 +478,8 @@ describe("End-to-End Workflow Harness", () => {
     let reviewerInstruction = "";
     (Auggie.create as jest.Mock).mockResolvedValue({
       prompt: jest.fn().mockImplementation((instruction: string) => {
-        if (callCount === 4) {
-          // reviewer phase (0: architect, 1: developer, 2: test-writer, 3: verifier, 4: reviewer)
+        if (callCount === 3) {
+          // reviewer phase (0: developer, 1: test-writer, 2: verifier, 3: reviewer)
           reviewerInstruction = instruction;
         }
         callCount++;
@@ -473,8 +516,8 @@ describe("End-to-End Workflow Harness", () => {
     let reviewerInstruction = "";
     (Auggie.create as jest.Mock).mockResolvedValue({
       prompt: jest.fn().mockImplementation((instruction: string) => {
-        if (callCount === 4) {
-          // reviewer phase (0: architect, 1: developer, 2: test-writer, 3: verifier, 4: reviewer)
+        if (callCount === 3) {
+          // reviewer phase (0: developer, 1: test-writer, 2: verifier, 3: reviewer)
           reviewerInstruction = instruction;
         }
         callCount++;

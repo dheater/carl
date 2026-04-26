@@ -63,11 +63,10 @@ describe("t-1: Strengthen Architect/Planner specs and introduce per-agent ticket
       expect(plannerContent).toMatch(/\.agent\/test-tickets\.md/);
     });
 
-    test("planner.md clarifies that .agent/tickets.md is not primary for new work", () => {
+    test("planner.md does not mention .agent/tickets.md (split ticket files only)", () => {
       plannerContent = fs.readFileSync(plannerPath, "utf-8");
-      expect(plannerContent).toMatch(
-        /\.agent\/tickets\.md|monolithic|not.*primary|legacy/i,
-      );
+      // Planner should not reference the monolithic tickets.md at all
+      expect(plannerContent).not.toMatch(/\.agent\/tickets\.md/);
     });
 
     test("planner.md states each file uses standard ticket format", () => {

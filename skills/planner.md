@@ -25,8 +25,6 @@ Planner is the single writer for two ticket files:
 - `.agent/dev-tickets.md` — Developer execution tickets
 - `.agent/test-tickets.md` — TestWriter execution tickets
 
-Legacy reference: `.agent/tickets.md` is no longer the primary target for new work. It may be referenced for historical context, but new work is split across the two per-agent files.
-
 ## Ticket Format
 
 Both files use the standard ticket format with `## [ ] t-N:` headings and AC sections:

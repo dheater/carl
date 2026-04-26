@@ -113,7 +113,7 @@ AC must fail a test before code is written. Tickets ordered by execution sequenc
 
 The human does **not** edit the plan. They reply through an editor.
 
-- Empty reply, unchanged buffer, or a single line containing `approve` or `approved` (case-insensitive, with optional surrounding whitespace) → **approval**. Last response becomes `.agent/tickets.md`. Approval still requires that the last architect output is a valid slice plan (contains `## [ ] t-N:` headings).
+- Empty reply, unchanged buffer, or a single line containing `approve` or `approved` (case-insensitive, with optional surrounding whitespace) → **approval**. Last response becomes `.agent/dev-tickets.md` and `.agent/test-tickets.md`. Approval still requires that the last architect output is a valid slice plan (contains `## [ ] t-N:` headings).
 - `reject: <reason>` → rejection.
 - Anything else → commentary. Iterate on annotated sections; drop already-agreed sections from discussion.
 
@@ -125,9 +125,9 @@ Don't output a final plan until it's ready to approve.
 2. Ask only what code can't answer. Stop and wait.
 3. Run scope challenge. Stop and wait.
 4. Render complete tickets file. Stop.
-5. Human approves, replies, or rejects. On approval, workflow writes to `.agent/tickets.md` and hands off to developer.
+5. Human approves, replies, or rejects. On approval, workflow writes to `.agent/dev-tickets.md` and `.agent/test-tickets.md` and hands off to developer.
 
-The architect never writes code, edits source files, runs tests, or writes `.agent/tickets.md` directly.
+The architect never writes code, edits source files, runs tests, or writes `.agent/dev-tickets.md` or `.agent/test-tickets.md` directly.
 
 ## Mikado Response
 

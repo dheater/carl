@@ -18,7 +18,7 @@ describe("Commands", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  test("approveCommand advances architect to developer and writes tickets.md", () => {
+  test("approveCommand advances architect to developer and does NOT write tickets.md", () => {
     const slicePlan =
       "# Feature\n\n## [ ] t-1: Do the thing\n\nAC:\n- It works\n";
     stateManager.update({
@@ -41,7 +41,7 @@ describe("Commands", () => {
     expect(state.current_phase).toBe("developer");
 
     const ticketsPath = path.join(tmpDir, ".agent", "tickets.md");
-    expect(fs.readFileSync(ticketsPath, "utf-8")).toBe(slicePlan);
+    expect(fs.existsSync(ticketsPath)).toBe(false);
   });
 
   test("approveCommand at reviewer gate marks the workflow completed", () => {

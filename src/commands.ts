@@ -1,7 +1,5 @@
 import { StateManager } from "./state";
 import { getNextPhase } from "./graph";
-import * as fs from "fs";
-import * as path from "path";
 
 const TICKET_HEADING_RE = /^##\s+\[\s*\]\s+t-\d+:/m;
 
@@ -33,14 +31,6 @@ export function approveCommand(workspaceRoot: string): void {
           "Reply with your feedback to continue the conversation, or reject to start over.",
       );
     }
-
-    const agentDir = path.join(workspaceRoot, ".agent");
-    if (!fs.existsSync(agentDir)) fs.mkdirSync(agentDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(agentDir, "tickets.md"),
-      lastArchitectOutput,
-      "utf-8",
-    );
   }
 
   const nextPhase = getNextPhase(state.current_phase);
