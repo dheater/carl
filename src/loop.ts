@@ -1,7 +1,6 @@
 import { StateManager } from "./state";
 import {
   getNextPhase,
-  getFallbackPhase,
   getPhaseModel,
   HAPPY_PATH_GRAPH,
   GATE_PHASES,
@@ -71,41 +70,6 @@ function writeTestArtifacts(
     const logPath = path.join(agentDir, "tests.log");
     fs.writeFileSync(logPath, logContent, "utf-8");
   }
-}
-
-function findDevOnlyTestFiles(workspaceRoot: string): string[] {
-  const results: string[] = [];
-
-  function walkDir(dir: string, relativeBase: string = ""): void {
-    try {
-      const entries = fs.readdirSync(dir, { withFileTypes: true });
-      for (const entry of entries) {
-        const fullPath = path.join(dir, entry.name);
-        const relativePath = relativeBase
-          ? path.join(relativeBase, entry.name)
-          : entry.name;
-
-        if (entry.isDirectory()) {
-          // Skip common directories that shouldn't be searched
-          if (
-            ["node_modules", ".git", "dist", ".agent", ".tmp"].includes(
-              entry.name,
-            )
-          ) {
-            continue;
-          }
-          walkDir(fullPath, relativePath);
-        } else if (entry.name.match(/\.dev\.test\.ts$/)) {
-          results.push(relativePath);
-        }
-      }
-    } catch {
-      // Ignore errors reading directories
-    }
-  }
-
-  walkDir(workspaceRoot);
-  return results;
 }
 
 function parsePrerequisites(skillContent: string): string[] {
@@ -244,12 +208,12 @@ export function buildSkillInstruction(
   return instruction;
 }
 
-// What each phase needs to recover from context when resuming or after rejection
+// Phases that read from and write to the shared workflow context.
+// Developer and verifier run in clean context windows with no prior workflow context injected.
 const PHASE_CONTEXT_QUERIES: Record<string, string> = {
   architect:
     "scope, clarifying questions, user answers, requirements, constraints",
-  developer: "tickets, implementation tasks, technical approach",
-  reviewer: "verification results, QA evidence, implementation summary",
+  reviewer: "architect plan, scope decisions, requirements, tickets",
 };
 
 async function searchContext(ctx: any, phaseName: string): Promise<string> {
@@ -260,6 +224,82 @@ async function searchContext(ctx: any, phaseName: string): Promise<string> {
   } catch {
     return "";
   }
+}
+
+/**
+ * Shared helper for phase completion persistence: write notes and optionally index to context.
+ * Architect phases index to context; other phases (e.g., reviewer) only write notes.
+ */
+async function handlePhaseCompletionWithContext(
+  phaseName: string,
+  phaseOutput: string,
+  workspaceRoot: string,
+  workflowContext: any,
+  shouldIndexToContext: boolean,
+): Promise<void> {
+  const agentDir = path.join(workspaceRoot, ".agent");
+
+  // Ensure notes directory exists and write phase notes
+  const notesDir = path.join(agentDir, "notes");
+  if (!fs.existsSync(notesDir)) {
+    fs.mkdirSync(notesDir, { recursive: true });
+  }
+
+  const notesFileName = `${phaseName}.md`;
+  fs.writeFileSync(path.join(notesDir, notesFileName), phaseOutput, "utf-8");
+
+  // Only index to context for specified phases (architect only)
+  if (shouldIndexToContext && workflowContext) {
+    try {
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+      await workflowContext.addToIndex([
+        {
+          path: `agent-log/${phaseName}-${timestamp}.md`,
+          contents: phaseOutput,
+        },
+      ]);
+      const contextPath = path.join(agentDir, "context.json");
+      await workflowContext.exportToFile(contextPath);
+    } catch {
+      // Non-fatal — workflow continues without context persistence
+    }
+  }
+}
+
+/**
+ * Handle architect-phase completion: persist architect output to notes and index to context.
+ * Only called when architect phase completes successfully (not blocked).
+ */
+async function handleArchitectCompletion(
+  architectOutput: string,
+  workspaceRoot: string,
+  workflowContext: any,
+): Promise<void> {
+  await handlePhaseCompletionWithContext(
+    "architect",
+    architectOutput,
+    workspaceRoot,
+    workflowContext,
+    true, // architect indexes to context
+  );
+}
+
+/**
+ * Handle reviewer-phase completion: persist reviewer output to notes only.
+ * Reviewer does not index to context; only notes file is written.
+ */
+async function handleReviewerCompletion(
+  reviewerOutput: string,
+  workspaceRoot: string,
+  workflowContext: any,
+): Promise<void> {
+  await handlePhaseCompletionWithContext(
+    "reviewer",
+    reviewerOutput,
+    workspaceRoot,
+    workflowContext,
+    false, // reviewer does not index to context
+  );
 }
 
 export async function runLoop(stateManager: StateManager): Promise<void> {
@@ -399,10 +439,13 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
       } else if (lastEntry && lastEntry.status === "blocked") {
         instruction += `\n\n# Blocker\n\n${lastEntry.outputs}\n\nPlease fix the underlying issues and try again.`;
       } else if (lastEntry && lastEntry.phase !== phaseName) {
-        // Fresh cross-phase start — give this phase context about what the prior phase did
-        const priorContext = await searchContext(workflowContext, phaseName);
-        if (priorContext) {
-          instruction += `\n\n# Prior workflow context\n\n${priorContext}`;
+        // Only reviewer receives prior workflow context (architect plan/decisions).
+        // Developer runs clean — it reads .agent/tickets.md directly.
+        if (phaseName === "reviewer") {
+          const priorContext = await searchContext(workflowContext, phaseName);
+          if (priorContext) {
+            instruction += `\n\n# Prior workflow context\n\n${priorContext}`;
+          }
         }
       }
 
@@ -427,45 +470,33 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
         outputs: response,
       });
 
-      const agentDir = path.join(state.workspace_path, ".agent");
-
-      if (!isBlocked) {
-        if (phaseName === "architect") {
-          const notesDir = path.join(agentDir, "notes");
-          if (!fs.existsSync(notesDir))
-            fs.mkdirSync(notesDir, { recursive: true });
-          fs.writeFileSync(
-            path.join(notesDir, "architect.md"),
-            response,
-            "utf-8",
-          );
-        }
-
-        // Index phase output so future phases and reply turns can search prior decisions
-        if (workflowContext) {
-          try {
-            const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-            await workflowContext.addToIndex([
-              {
-                path: `agent-log/${phaseName}-${timestamp}.md`,
-                contents: response,
-              },
-            ]);
-            await workflowContext.exportToFile(contextPath);
-          } catch {
-            // Non-fatal — workflow continues without context persistence
-          }
-        }
+      if (!isBlocked && phaseName === "architect") {
+        // Handle architect completion: persist notes and index to context
+        await handleArchitectCompletion(
+          response,
+          state.workspace_path,
+          workflowContext,
+        );
       }
 
+      if (!isBlocked && phaseName === "reviewer") {
+        // Handle reviewer completion: persist notes and index to context.
+        // Architect reads this on the next sprint via the shared context window.
+        await handleReviewerCompletion(
+          response,
+          state.workspace_path,
+          workflowContext,
+        );
+      }
+
+      const phaseDuration = Date.now() - phaseStartTime;
+      console.log(`[Timing] Phase ${phaseName} duration ${phaseDuration}ms`);
+
       if (isBlocked) {
-        const phaseDuration = Date.now() - phaseStartTime;
-        console.log(`[Timing] Phase ${phaseName} duration ${phaseDuration}ms`);
-        const fallback = getFallbackPhase(phaseName);
-        state = stateManager.update({ history, current_phase: fallback });
+        state = stateManager.update({ history, current_phase: "architect" });
         console.log(
           blue(
-            `Phase ${phaseName} reported a blocker. Handing back to ${fallback}.`,
+            `Phase ${phaseName} reported a blocker. Handing back to architect.`,
           ),
         );
         continue;
@@ -475,15 +506,10 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
       const nextPhase = getNextPhase(phaseName);
 
       if (isGate) {
-        const phaseDuration = Date.now() - phaseStartTime;
-        console.log(`[Timing] Phase ${phaseName} duration ${phaseDuration}ms`);
         state = stateManager.update({ history, status: "awaiting_approval" });
         console.log(`Phase ${phaseName} completed. Awaiting approval.`);
         break; // Pause loop
       } else if (nextPhase) {
-        const phaseDuration = Date.now() - phaseStartTime;
-        console.log(`[Timing] Phase ${phaseName} duration ${phaseDuration}ms`);
-
         // After developer completes, run deterministic format/lint and tests before reviewer
         if (phaseName === "developer") {
           console.log(
@@ -545,33 +571,6 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
           }
           // Tests passed, reset counter
           state = { ...state, developer_test_failures: 0 };
-
-          // Hygiene check: detect dev-only test files
-          console.log(`[System] Checking for dev-only test files...`);
-          const devOnlyFiles = findDevOnlyTestFiles(state.workspace_path);
-          if (devOnlyFiles.length > 0) {
-            const filesStr =
-              devOnlyFiles.slice(0, 3).join(", ") +
-              (devOnlyFiles.length > 3 ? ", ..." : "");
-            const hygienicityFailureMessage = `Dev-only test files found (*.dev.test.ts): ${filesStr}. Please remove or rename these files before approval.`;
-
-            history.push({
-              phase: "developer",
-              model: getPhaseModel(phaseName),
-              status: "blocked",
-              outputs: hygienicityFailureMessage,
-            });
-
-            const currentFailures = (state.developer_test_failures ?? 0) + 1;
-            state = stateManager.update({
-              history,
-              developer_test_failures: currentFailures,
-            });
-            console.log(
-              blue(`Dev-only test files detected. Staying in developer phase.`),
-            );
-            return;
-          }
         }
 
         state = stateManager.update({
@@ -583,8 +582,6 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
           `Phase ${phaseName} completed successfully. Advancing to ${nextPhase}.`,
         );
       } else {
-        const phaseDuration = Date.now() - phaseStartTime;
-        console.log(`[Timing] Phase ${phaseName} duration ${phaseDuration}ms`);
         state = stateManager.update({ history, status: "completed" });
         console.log(`Phase ${phaseName} completed. Workflow finished.`);
         break; // Exit loop

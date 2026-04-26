@@ -119,6 +119,37 @@ describe("Commands", () => {
     });
   });
 
+  test("t-8: rejectCommand preserves full editor buffer in history", () => {
+    stateManager.update({
+      current_phase: "reviewer",
+      status: "awaiting_approval",
+    });
+    const fullBuffer = `## Subtraction and cleanup
+
+- **[Security]: Missing validation** — Add bounds check
+
+## Recommendations for Architect
+
+- Extract auth logic to module
+
+reject: incomplete error handling`;
+
+    rejectCommand(tmpDir, "incomplete error handling", "architect", fullBuffer);
+    const state = stateManager.load();
+    expect(state.status).toBe("running");
+    expect(state.current_phase).toBe("architect");
+
+    // History should include the full buffer
+    expect(state.history).toHaveLength(1);
+    const rejectionEntry = state.history![0];
+    expect(rejectionEntry.status).toBe("rejected");
+    expect(rejectionEntry.phase).toBe("reviewer");
+    expect(rejectionEntry.outputs).toContain("Subtraction and cleanup");
+    expect(rejectionEntry.outputs).toContain("Missing validation");
+    expect(rejectionEntry.outputs).toContain("Extract auth logic");
+    expect(rejectionEntry.outputs).toContain("incomplete error handling");
+  });
+
   test("rejectCommand with targetPhase overrides fallback", () => {
     stateManager.update({
       current_phase: "reviewer",

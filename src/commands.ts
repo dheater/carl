@@ -1,5 +1,5 @@
 import { StateManager } from "./state";
-import { getNextPhase, getFallbackPhase } from "./graph";
+import { getNextPhase } from "./graph";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -55,6 +55,7 @@ export function rejectCommand(
   workspaceRoot: string,
   reason: string,
   targetPhase?: string,
+  fullBuffer?: string,
 ): void {
   const stateManager = new StateManager(workspaceRoot);
   let state = stateManager.load();
@@ -63,13 +64,18 @@ export function rejectCommand(
   }
 
   const history = state.history || [];
-  const priorPhase = targetPhase ?? getFallbackPhase(state.current_phase);
+  const priorPhase = targetPhase ?? "architect";
+
+  // Preserve full buffer if provided, otherwise fall back to simple rejection message
+  const outputs = fullBuffer
+    ? `Approval rejected: ${reason}\n\n${fullBuffer}`
+    : `Approval rejected: ${reason}`;
 
   history.push({
     phase: state.current_phase,
     model: "system",
     status: "rejected",
-    outputs: `Approval rejected: ${reason}`,
+    outputs,
   });
 
   stateManager.update({

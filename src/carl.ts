@@ -38,7 +38,12 @@ async function runWithEditor(
         }
         // continue loop to run the next phase
       } else if (result.action === "reject") {
-        rejectCommand(workspaceRoot, result.reason, result.target);
+        rejectCommand(
+          workspaceRoot,
+          result.reason,
+          result.target,
+          result.fullBuffer,
+        );
         const after = stateManager.load();
         console.log(
           blue(
@@ -146,7 +151,12 @@ async function main() {
             return;
           }
         } else if (result.action === "reject") {
-          rejectCommand(workspaceRoot, result.reason, result.target);
+          rejectCommand(
+            workspaceRoot,
+            result.reason,
+            result.target,
+            result.fullBuffer,
+          );
           const after = stateManager.load();
           console.log(
             blue(

@@ -39,7 +39,7 @@ export function collectPrompt(): string | null {
 
 export type EditorAction =
   | { action: "approve" }
-  | { action: "reject"; reason: string; target?: string }
+  | { action: "reject"; reason: string; target?: string; fullBuffer?: string }
   | { action: "reply"; message: string };
 
 export function openEditorForGate(
@@ -94,7 +94,14 @@ export function parseEditorGateApproval(
   if (rejectMatch) {
     const target = rejectMatch[1]?.toLowerCase();
     const reason = rejectMatch[2]?.trim() ?? "";
-    return { action: "reject", reason, ...(target ? { target } : {}) };
+    // Preserve full non-comment buffer for architect to review
+    const fullBuffer = nonCommentLines.join("\n").trim();
+    return {
+      action: "reject",
+      reason,
+      ...(target ? { target } : {}),
+      fullBuffer,
+    };
   }
 
   // Explicit approve signal: "approve" or "approved" with optional surrounding whitespace

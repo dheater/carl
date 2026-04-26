@@ -12,12 +12,13 @@ next_skills:
 
 # Reviewer
 
-**Deterministic first:** Read `.agent/notes/architect.md`, `.agent/tickets.md`, `.agent/tests-summary.json`, and `.agent/tests.log` before evaluating work.
+**Deterministic first:** Read `.agent/notes/architect.md`, `.agent/tickets.md`, `.agent/tests-summary.json`, `.agent/tests.log`, and `.agent/lint.log` before evaluating work.
+**Verification focus:** Confirm the right thing was built. Subtract-first cleanup has already run in verifier; identify any remaining critical issues (security, correctness, egregious duplication).
 **External side effects:** None until the human signs off.
 
 ## Starting a Session
 
-Present four sections:
+Present these sections in order:
 
 ### 1. Validation
 
@@ -41,17 +42,40 @@ Read the deterministic artifacts produced after developer phase completion:
 
 - **`.agent/tests-summary.json`** — Machine-readable summary of test results (status, pass count, fail count)
 - **`.agent/tests.log`** — Full test output from `just test`
+- **`.agent/lint.log`** — Full lint output from `just lint`
 
-Do NOT run `just test` or `just lint` yourself. The developer phase ran these deterministically and produced evidence. Read and verify the artifacts instead.
+Do NOT run `just test` or `just lint` yourself. The developer and verifier phases ran these deterministically and produced evidence. Read and verify the artifacts instead.
 
 ```
 ## Verification
 - Tests: PASS (from .agent/tests-summary.json)
-- Lint: PASS (implicit - developer gate enforces this)
-- Test artifacts location: .agent/tests-summary.json, .agent/tests.log
+- Lint: PASS (from .agent/lint.log)
+- Test artifacts location: .agent/tests-summary.json, .agent/tests.log, .agent/lint.log
 ```
 
-### 3. Human Validation Checklist
+### 3. Critical Issue Review
+
+Verifier has already performed subtract-first cleanup (low-value test removal, comment simplification, dead code deletion). Your role is to identify any remaining critical issues that should be escalated to architect:
+
+**Security and robustness:**
+- Auth logic, input validation, and error handling in changed code
+- Denial-of-service risks (unbounded loops, large allocations, missing timeouts)
+- Missing bounds checks or type safety violations
+- If found: Flag for architect to decide on scope/approach
+
+**Correctness and behavior:**
+- Does the code implement the tickets and AC correctly?
+- Are error paths handled appropriately?
+- Is the behavior consistent with what was described?
+- If found: Flag discrepancy from AC or tickets
+
+**Egregious duplication or over-abstraction:**
+- Only flag if subtraction/simplification was somehow missed or if new duplication was introduced
+- Otherwise, trust that verifier has already handled this
+
+Format findings as: `**[Type]: Description** — Recommended action.`
+
+### 4. Human Validation Checklist
 
 ```
 ## Your validation steps
@@ -70,7 +94,30 @@ Write `reject: <what failed>` if anything fails.
 
 Each step: runnable, observable, unambiguous expected outcome.
 
-### 4. Proposed Commit Message
+### 5. Output Structure
+
+Present your findings in three required sections:
+
+```
+## Subtraction and cleanup
+
+- **[Security]: Missing input validation on auth endpoint** — Add bounds check and reject oversized requests
+- **[Dead code]: Unused function parseOldFormat()** — Delete; no call sites found
+- **[Duplication]: Two identical retry loops** — Extract to helper function or delete one
+```
+
+Ordered by impact (security fixes first, then dead code, then refactoring).
+
+```
+## Recommendations for Architect
+
+- **New ticket: Extract auth middleware into separate module** — Current auth logic is duplicated across 3 endpoints; would reduce maintenance burden and improve test coverage
+- **Future cleanup: Remove legacy API v1 support** — No longer used by any client; scheduled for EOL in next major version
+```
+
+Formatted as ticket title + one short sentence on why it matters.
+
+### 6. Proposed Commit Message
 
 ```
 ## Proposed commit message
@@ -86,7 +133,7 @@ Increase default timeout from 30s to 60s in HTTP client.
 - Non-ticket branch: conventional-commit prefix (`fix:`, `feat:`, etc.) + summary
 - Never mention gates, phases, or process
 
-### 5. Approval Routes
+### 7. Approval Routes
 
 **Approve (acceptance):**
 - No `reject:` line → approve and declare sprint complete

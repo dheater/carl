@@ -82,6 +82,33 @@ describe("parseEditorGateApproval", () => {
   });
 
   describe("reject behavior", () => {
+    test("t-8: preserve full editor buffer on rejection", () => {
+      const reviewerOutput = `## Validation
+
+You asked for: Login flow
+
+## Subtraction and cleanup
+
+- **[Security]: Missing password hash verification** — Add bcrypt validation
+
+reject: missing security checks`;
+
+      const editorContent = `# [reviewer] is waiting
+# Some header
+${reviewerOutput}`;
+
+      const result = parseEditorGateApproval(editorContent, baseTemplate);
+      expect(result.action).toBe("reject");
+      if (result.action === "reject") {
+        expect(result.reason).toBe("missing security checks");
+        expect(result.fullBuffer).toBeDefined();
+        // fullBuffer should have all non-comment lines, including the sections
+        expect(result.fullBuffer).toContain("Login flow");
+        expect(result.fullBuffer).toContain("Missing password hash");
+        expect(result.fullBuffer).toContain("reject: missing security checks");
+      }
+    });
+
     test("recognize 'reject: reason' as rejection", () => {
       const result = parseEditorGateApproval(
         "# comment\nreject: needs more work",
@@ -90,6 +117,7 @@ describe("parseEditorGateApproval", () => {
       expect(result).toEqual({
         action: "reject",
         reason: "needs more work",
+        fullBuffer: "reject: needs more work",
       });
     });
 
@@ -101,6 +129,7 @@ describe("parseEditorGateApproval", () => {
       expect(result).toEqual({
         action: "reject",
         reason: "invalid approach",
+        fullBuffer: "REJECT: invalid approach",
       });
     });
 
@@ -113,6 +142,7 @@ describe("parseEditorGateApproval", () => {
         action: "reject",
         reason: "rethink scope",
         target: "architect",
+        fullBuffer: "reject-architect: rethink scope",
       });
     });
   });

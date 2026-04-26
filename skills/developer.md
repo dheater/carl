@@ -7,7 +7,7 @@ version: 1.0.0
 prerequisites:
   - architect
 next_skills:
-  - reviewer
+  - verifier
   - architect
 ---
 
@@ -46,16 +46,17 @@ No production code without a failing test first. If AC can't be expressed as a t
 7. Refactor if needed, stay green
 8. Repeat for remaining AC items
 9. Full suite — nothing regressed
-10. Run `just format` and `just lint` locally; fix issues
-11. Present change summary, pause for human commit approval; continue to next ticket or declare sprint complete
+10. Mark the ticket `[x]` in `.agent/tickets.md`
+
+After your implementation, the workflow will run deterministic format and lint checks. Any issues found will be surfaced and must be addressed in subsequent iterations.
 
 ## Done Means
 
 - All AC items have passing tests
 - Full test suite passes
 - No production code without test coverage
-- Each ticket committed with human approval
-- `just format` and `just lint` succeed
+- Ticket marked `[x]` in `.agent/tickets.md`
+- Code is expected to pass deterministic format/lint checks (any issues will be surfaced and must be addressed in follow-up iterations)
 
 ## Deterministic Format and Lint
 
@@ -73,17 +74,16 @@ When you need ephemeral experiments or scratch content:
 - Scratch or temporary files must be excluded from the test runner (via Jest config or similar).
 - Never rely on temporary files for passing tests or production behavior.
 
-## Temporary Test Files
+## Test Quality
 
-During development (TDD), you may create temporary tests that help you reason through a problem. Before handing off work for approval:
+Write tests that prevent regressions, not tests that verify implementation details:
 
-- **Keep permanent tests** in files named `*.test.ts` (or your project's test naming convention)
-- **Mark temporary tests** as dev-only by using the `*.dev.test.ts` naming convention
-- **Remove or rename** all `*.dev.test.ts` files before approval
-  - Either delete them if they're truly temporary, or
-  - Rename to `*.test.ts` if they should be kept as permanent regression tests
+- **Test WHAT the code does** (behavior, API contracts, external effects)
+- **Don't test HOW it's done** (internal implementation details, private functions, intermediate states)
+- **Prefer tests that catch real bugs** - Tests that would fail if you changed internal logic are low-value
+- **Leave test pruning to Verifier** — The Verifier phase will examine tests and remove low-value ones that don't materially protect behavior
 
-The workflow will enforce this by blocking advancement to the reviewer gate if any `*.dev.test.ts` files are present. This ensures only production-grade test coverage reaches approval.
+The goal is behavior-focused test coverage that survives refactoring.
 
 ## Mikado Escalation
 

@@ -120,8 +120,8 @@ describe("Workflow Loop", () => {
     const state = stateManager.load();
     expect(state.status).toBe("awaiting_approval");
     expect(state.current_phase).toBe("reviewer");
-    expect(state.history).toHaveLength(3); // architect (prior), developer, reviewer (now at gate)
-    expect(mockPrompt).toHaveBeenCalledTimes(2); // developer and reviewer both run before gate pauses
+    expect(state.history).toHaveLength(4); // architect (prior), developer, verifier, reviewer (now at gate)
+    expect(mockPrompt).toHaveBeenCalledTimes(3); // developer, verifier, and reviewer all run before gate pauses
 
     expect(Auggie.create).toHaveBeenNthCalledWith(
       1,
@@ -131,6 +131,12 @@ describe("Workflow Loop", () => {
     );
     expect(Auggie.create).toHaveBeenNthCalledWith(
       2,
+      expect.objectContaining({
+        model: "gpt5.1", // verifier
+      }),
+    );
+    expect(Auggie.create).toHaveBeenNthCalledWith(
+      3,
       expect.objectContaining({
         model: "gemini-3.1-pro-preview", // reviewer
       }),
@@ -665,15 +671,59 @@ describe("t-2: Two-strike test gate escalates to architect", () => {
     await runLoop(stateManager);
 
     const state = stateManager.load();
-    // Should advance to reviewer (next phase after developer)
+    // Should continue through verifier and reach reviewer (first gate after developer)
     expect(state.current_phase).toBe("reviewer");
     expect(state.status).toBe("awaiting_approval");
     // Counter should be reset to 0
     expect(state.developer_test_failures).toBe(0);
   });
+
+  test("successful developer completion transitions to verifier with tests passing", async () => {
+    // This test verifies that when developer passes tests, the next phase is verifier.
+    // We verify this by checking the history sequence.
+    const justModule = require("./just");
+    justModule.runCanonicalTests.mockReturnValue({
+      exitCode: 0,
+      stdout: "All tests passed",
+      stderr: "",
+      command: "just test",
+      usedJust: true,
+    });
+
+    stateManager.update({
+      current_phase: "developer",
+      status: "running",
+      history: [
+        {
+          phase: "architect",
+          model: "gpt5.1",
+          status: "success",
+          outputs: "# Tickets",
+        },
+      ],
+    });
+
+    await runLoop(stateManager);
+
+    const state = stateManager.load();
+    // After developer passes tests and transitions through non-gate phases, should reach reviewer gate
+    expect(state.current_phase).toBe("reviewer");
+    expect(state.status).toBe("awaiting_approval");
+    expect(state.developer_test_failures).toBe(0);
+
+    // Verify the history shows developer -> verifier -> reviewer progression
+    const phases = state.history!.map((h) => h.phase);
+    const developerIndex = phases.indexOf("developer");
+    const verifierIndex = phases.indexOf("verifier");
+    const reviewerIndex = phases.indexOf("reviewer");
+
+    expect(developerIndex).toBeGreaterThanOrEqual(0);
+    expect(verifierIndex).toBeGreaterThan(developerIndex);
+    expect(reviewerIndex).toBeGreaterThan(verifierIndex);
+  });
 });
 
-describe("t-3: Dev-only .dev.test.ts hygiene gate before reviewer", () => {
+describe("t-4: Dev-only test file handling moved to Verifier", () => {
   let tmpDir: string;
   let stateManager: StateManager;
   let mockPrompt: jest.Mock;
@@ -710,7 +760,17 @@ describe("t-3: Dev-only .dev.test.ts hygiene gate before reviewer", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  test("blocks advancement if .dev.test.ts file exists after passing tests", async () => {
+  test("does not block advancement when .dev.test.ts file exists with passing tests", async () => {
+    // Mock successful test run
+    const justModule = require("./just");
+    justModule.runCanonicalTests.mockReturnValue({
+      exitCode: 0,
+      stdout: "All tests passed",
+      stderr: "",
+      command: "just test",
+      usedJust: true,
+    });
+
     stateManager.update({
       current_phase: "developer",
       status: "running",
@@ -734,19 +794,17 @@ describe("t-3: Dev-only .dev.test.ts hygiene gate before reviewer", () => {
     await runLoop(stateManager);
 
     const state = stateManager.load();
-    // Should stay in developer phase
-    expect(state.current_phase).toBe("developer");
-    expect(state.status).toBe("running");
-    // History should have a blocked entry indicating dev-only tests
-    const developerHistories = state.history!.filter(
-      (h) => h.phase === "developer",
-    );
-    expect(developerHistories[developerHistories.length - 1].status).toBe(
-      "blocked",
-    );
-    expect(developerHistories[developerHistories.length - 1].outputs).toMatch(
-      /\.dev\.test\.ts/,
-    );
+    // Should advance through verifier to reviewer (first gate)
+    // Dev-only test files no longer block advancement
+    expect(state.current_phase).toBe("reviewer");
+    expect(state.status).toBe("awaiting_approval");
+    expect(state.developer_test_failures).toBe(0);
+
+    // Verify the path includes verifier
+    const phases = state.history!.map((h) => h.phase);
+    expect(phases).toContain("developer");
+    expect(phases).toContain("verifier");
+    expect(phases).toContain("reviewer");
   });
 
   test("allows advancement when no .dev.test.ts files exist and tests pass", async () => {
@@ -775,7 +833,82 @@ describe("t-3: Dev-only .dev.test.ts hygiene gate before reviewer", () => {
     expect(state.status).toBe("awaiting_approval");
   });
 
-  test("detects multiple .dev.test.ts files", async () => {
+  test("architect context indexing via dedicated handler: successful architect phase indexes once", async () => {
+    // Verify that addToIndex is called exactly once with architect output
+    // when architect phase completes successfully
+    const mockContextInstance = {
+      search: jest.fn().mockResolvedValue(""),
+      addToIndex: jest
+        .fn()
+        .mockResolvedValue({ newlyUploaded: [], alreadyUploaded: [] }),
+      exportToFile: jest.fn().mockResolvedValue(undefined),
+    };
+    (DirectContext.create as jest.Mock).mockResolvedValueOnce(
+      mockContextInstance,
+    );
+
+    mockPrompt.mockResolvedValueOnce("architect plan");
+
+    await runLoop(stateManager);
+
+    // Verify addToIndex is called exactly once (not zero, not multiple)
+    expect(mockContextInstance.addToIndex).toHaveBeenCalledTimes(1);
+    expect(mockContextInstance.addToIndex).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: expect.stringContaining("agent-log/architect-"),
+          contents: "architect plan",
+        }),
+      ]),
+    );
+    // Verify exportToFile is called exactly once
+    expect(mockContextInstance.exportToFile).toHaveBeenCalledTimes(1);
+  });
+
+  test("architect context indexing: non-architect phases do not call addToIndex", async () => {
+    // Verify that when reviewer phase runs, addToIndex is NOT called
+    const mockContextInstance = {
+      search: jest.fn().mockResolvedValue(""),
+      addToIndex: jest
+        .fn()
+        .mockResolvedValue({ newlyUploaded: [], alreadyUploaded: [] }),
+      exportToFile: jest.fn().mockResolvedValue(undefined),
+    };
+    (DirectContext.create as jest.Mock).mockResolvedValueOnce(
+      mockContextInstance,
+    );
+
+    stateManager.update({
+      current_phase: "reviewer",
+      status: "running",
+      history: [
+        {
+          phase: "developer",
+          model: "haiku4.5",
+          status: "success",
+          outputs: "implementation",
+        },
+      ],
+    });
+
+    await runLoop(stateManager);
+
+    // addToIndex and exportToFile should NOT be called for reviewer
+    expect(mockContextInstance.addToIndex).not.toHaveBeenCalled();
+    expect(mockContextInstance.exportToFile).not.toHaveBeenCalled();
+  });
+
+  test("does not block advancement when multiple .dev.test.ts files exist with passing tests", async () => {
+    // Mock successful test run
+    const justModule = require("./just");
+    justModule.runCanonicalTests.mockReturnValue({
+      exitCode: 0,
+      stdout: "All tests passed",
+      stderr: "",
+      command: "just test",
+      usedJust: true,
+    });
+
     stateManager.update({
       current_phase: "developer",
       status: "running",
@@ -797,14 +930,16 @@ describe("t-3: Dev-only .dev.test.ts hygiene gate before reviewer", () => {
     await runLoop(stateManager);
 
     const state = stateManager.load();
-    expect(state.current_phase).toBe("developer");
-    // History should mention at least one offending file
-    const developerHistories = state.history!.filter(
-      (h) => h.phase === "developer",
-    );
-    expect(developerHistories[developerHistories.length - 1].outputs).toMatch(
-      /file1\.dev\.test\.ts|file2\.dev\.test\.ts/,
-    );
+    // Should advance to reviewer (through verifier)
+    // .dev.test.ts files no longer block advancement
+    expect(state.current_phase).toBe("reviewer");
+    expect(state.status).toBe("awaiting_approval");
+
+    // Verify the path includes verifier
+    const phases = state.history!.map((h) => h.phase);
+    expect(phases).toContain("developer");
+    expect(phases).toContain("verifier");
+    expect(phases).toContain("reviewer");
   });
 });
 
@@ -1024,12 +1159,6 @@ describe("t-4: Reviewer uses deterministic artifacts and reject routes to archit
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  test("getFallbackPhase('reviewer') returns 'architect'", () => {
-    const graph = require("./graph");
-    const fallback = graph.getFallbackPhase("reviewer");
-    expect(fallback).toBe("architect");
-  });
-
   test("reviewer rejection routes to architect via rejectCommand", async () => {
     const { rejectCommand } = require("./commands");
 
@@ -1090,5 +1219,184 @@ describe("t-4: Reviewer uses deterministic artifacts and reject routes to archit
 
     // AC: Should describe reject: routing to architect
     expect(skillContent).toMatch(/reject.*architect|architect.*re-plan/i);
+  });
+
+  test("t-8: architect receives full rejection feedback with reviewer sections", async () => {
+    const rejectionBuffer = `## Subtraction and cleanup
+
+- **[Security]: Missing input validation** — Add bounds check
+- **[Dead code]: Unused function validateOldFormat()** — Delete; no call sites
+
+## Recommendations for Architect
+
+- Extract auth logic into separate module — Current auth is duplicated in 3 places
+- Consider removing legacy API v1 — Scheduled for EOL`;
+
+    // Create a mock state with rejection in history
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-architect-feedback-"));
+    stateManager = new StateManager(tmpDir);
+    stateManager.create(tmpDir);
+
+    const skillsDir = path.join(tmpDir, "skills");
+    fs.mkdirSync(skillsDir);
+    for (const phase of HAPPY_PATH_GRAPH) {
+      fs.writeFileSync(
+        path.join(skillsDir, `${phase}.md`),
+        `dummy ${phase} skill`,
+      );
+    }
+
+    mockPrompt = jest.fn().mockResolvedValue("retry output");
+    mockClose = jest.fn().mockResolvedValue(undefined);
+    mockOnSessionUpdate = jest.fn();
+
+    (Auggie.create as jest.Mock).mockResolvedValue({
+      prompt: mockPrompt,
+      close: mockClose,
+      onSessionUpdate: mockOnSessionUpdate,
+    });
+
+    // Simulate architect ran, then reviewer rejected
+    const state = stateManager.load();
+    state.history = [
+      {
+        phase: "architect",
+        model: "gpt5.1",
+        status: "success",
+        outputs: "## [x] t-1: Some ticket\nAC: ...",
+      },
+      {
+        phase: "reviewer",
+        model: "gemini-3.1-pro-preview",
+        status: "rejected",
+        outputs: `Approval rejected: incomplete validation\n\n${rejectionBuffer}`,
+      },
+    ];
+    state.current_phase = "architect";
+    state.status = "running";
+    stateManager.update(state);
+
+    // Run the loop — should build architect instruction with rejection feedback
+    await runLoop(stateManager);
+
+    // Check that the prompt sent to architect includes the full rejection feedback
+    expect(mockPrompt).toHaveBeenCalled();
+    const promptCall = mockPrompt.mock.calls[0];
+    const instruction = promptCall[0] as string;
+
+    // Should include rejection feedback section
+    expect(instruction).toContain("# Rejection feedback");
+
+    // Should include the full buffer content
+    expect(instruction).toContain("Subtraction and cleanup");
+    expect(instruction).toContain("Missing input validation");
+    expect(instruction).toContain("Unused function validateOldFormat");
+    expect(instruction).toContain("Extract auth logic");
+    expect(instruction).toContain("removing legacy API v1");
+    expect(instruction).toContain("incomplete validation");
+  });
+
+  test("t-7: verifier owns subtract-first cleanup responsibilities", () => {
+    const verifierPath = path.join(__dirname, "..", "skills", "verifier.md");
+    const verifierContent = fs.readFileSync(verifierPath, "utf-8");
+
+    // AC: verifier.md should include subtract-first cleanup language
+    expect(verifierContent).toMatch(/Subtract-First Cleanup/);
+    expect(verifierContent).toMatch(/Remove low-value tests/i);
+    expect(verifierContent).toMatch(/Remove or simplify low-value comments/i);
+    expect(verifierContent).toMatch(/Delete obviously dead code/i);
+
+    const reviewerPath = path.join(__dirname, "..", "skills", "reviewer.md");
+    const reviewerContent = fs.readFileSync(reviewerPath, "utf-8");
+
+    // AC: reviewer.md should NOT contain subtract-first edit phrases
+    expect(reviewerContent).not.toMatch(/Remove low-value tests/i);
+    expect(reviewerContent).not.toMatch(/Delete dead code/i);
+    expect(reviewerContent).not.toMatch(/Remove narration-style comments/i);
+    expect(reviewerContent).not.toMatch(/Prefer deletions over additions/i);
+
+    // AC: reviewer.md should focus on validation and security
+    expect(reviewerContent).toMatch(/Validation/i);
+    expect(reviewerContent).toMatch(/security|robustness/i);
+
+    // AC: reviewer should still route rejections to architect
+    expect(reviewerContent).toMatch(/reject.*architect/i);
+  });
+
+  test("t-6: shared helper for phase completions - architect indexes to context", async () => {
+    // Verify that handleArchitectCompletion invokes the shared helper
+    // and that architect phases index to context
+    const mockContextInstance = {
+      search: jest.fn().mockResolvedValue(""),
+      addToIndex: jest
+        .fn()
+        .mockResolvedValue({ newlyUploaded: [], alreadyUploaded: [] }),
+      exportToFile: jest.fn().mockResolvedValue(undefined),
+    };
+    (DirectContext.create as jest.Mock).mockResolvedValueOnce(
+      mockContextInstance,
+    );
+
+    mockPrompt.mockResolvedValueOnce("architect plan");
+
+    await runLoop(stateManager);
+
+    // Verify that architect indexed to context via the shared helper
+    expect(mockContextInstance.addToIndex).toHaveBeenCalledTimes(1);
+    expect(mockContextInstance.addToIndex).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: expect.stringContaining("agent-log/architect-"),
+          contents: "architect plan",
+        }),
+      ]),
+    );
+    expect(mockContextInstance.exportToFile).toHaveBeenCalledTimes(1);
+
+    // Verify notes were written
+    const notesPath = path.join(tmpDir, ".agent", "notes", "architect.md");
+    expect(fs.existsSync(notesPath)).toBe(true);
+    expect(fs.readFileSync(notesPath, "utf-8")).toBe("architect plan");
+  });
+
+  test("t-6: shared helper for phase completions - reviewer writes notes only, no context indexing", async () => {
+    // Verify that handleReviewerCompletion invokes the shared helper
+    // but only writes notes (no context indexing)
+    const mockContextInstance = {
+      search: jest.fn().mockResolvedValue(""),
+      addToIndex: jest
+        .fn()
+        .mockResolvedValue({ newlyUploaded: [], alreadyUploaded: [] }),
+      exportToFile: jest.fn().mockResolvedValue(undefined),
+    };
+    (DirectContext.create as jest.Mock).mockResolvedValueOnce(
+      mockContextInstance,
+    );
+
+    stateManager.update({
+      current_phase: "reviewer",
+      status: "running",
+      history: [
+        {
+          phase: "developer",
+          model: "haiku4.5",
+          status: "success",
+          outputs: "implementation",
+        },
+      ],
+    });
+
+    mockPrompt.mockResolvedValueOnce("reviewer feedback");
+
+    await runLoop(stateManager);
+
+    // Verify that reviewer did NOT index to context
+    expect(mockContextInstance.addToIndex).not.toHaveBeenCalled();
+    expect(mockContextInstance.exportToFile).not.toHaveBeenCalled();
+
+    // Verify notes were written
+    const notesPath = path.join(tmpDir, ".agent", "notes", "reviewer.md");
+    expect(fs.existsSync(notesPath)).toBe(true);
+    expect(fs.readFileSync(notesPath, "utf-8")).toBe("reviewer feedback");
   });
 });
