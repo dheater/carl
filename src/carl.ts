@@ -35,7 +35,7 @@ async function runWithEditor(
         if (next.status === "completed") {
           console.log("\n  [System] Workflow complete. Sprint approved.\n");
           break;
-	        }
+        }
       } else if (result.action === "reject") {
         rejectCommand(
           workspaceRoot,
@@ -83,7 +83,7 @@ async function main() {
         }
         // Cleanup old completed run before starting new one
         stateManager.cleanupAgentDir();
-	      } catch {}
+      } catch {}
 
       if (!prompt) {
         const collected = collectPrompt();
@@ -123,7 +123,7 @@ async function main() {
         await closeSharedClient();
         process.exit(0);
       }
-	      console.log(`Resuming workflow from phase: ${state.current_phase}`);
+      console.log(`Resuming workflow from phase: ${state.current_phase}`);
       if (state.status === "awaiting_approval") {
         const phase = state.current_phase;
         const lastOutput =
@@ -171,7 +171,7 @@ async function main() {
       console.log(
         `Abandoning run: ${existing.run_id} (phase: ${existing.current_phase}, status: ${existing.status})`,
       );
-	      } catch {}
+    } catch {}
     stateManager.cleanupAgentDir();
     console.log(
       "Run cleared. Use 'carl start \"<prompt>\"' to begin a new run.",
