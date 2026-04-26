@@ -67,7 +67,16 @@ async function main() {
   const stateManager = new StateManager(workspaceRoot);
 
   if (command === "start") {
-    let prompt = args.slice(1).join(" ");
+    // Enforce editor-only prompt: reject any extra arguments
+    if (args.length > 1) {
+      console.error("Usage: carl start");
+      console.error("");
+      console.error(
+        "The prompt must be entered in the editor that opens after running this command.",
+      );
+      process.exit(1);
+    }
+
     try {
       // Guard against wiping an in-progress run
       try {
@@ -85,14 +94,12 @@ async function main() {
         stateManager.cleanupAgentDir();
       } catch {}
 
-      if (!prompt) {
-        const collected = collectPrompt();
-        if (!collected) {
-          console.log("No prompt provided. Cancelled.");
-          process.exit(0);
-        }
-        prompt = collected;
+      const collected = collectPrompt();
+      if (!collected) {
+        console.log("No prompt provided. Cancelled.");
+        process.exit(0);
       }
+      const prompt = collected;
 
       const state = stateManager.create(workspaceRoot, prompt);
       console.log(`Started workflow run: ${state.run_id}`);
@@ -118,7 +125,7 @@ async function main() {
       const state = stateManager.load();
       if (state.status === "completed") {
         console.log(
-          `Workflow already completed (phase: ${state.current_phase}). Use 'carl start "<prompt>"' to begin a new run, or 'carl reset' to clear state.`,
+          `Workflow already completed (phase: ${state.current_phase}). Use 'carl start' to begin a new run, or 'carl reset' to clear state.`,
         );
         await closeSharedClient();
         process.exit(0);
@@ -173,9 +180,7 @@ async function main() {
       );
     } catch {}
     stateManager.cleanupAgentDir();
-    console.log(
-      "Run cleared. Use 'carl start \"<prompt>\"' to begin a new run.",
-    );
+    console.log("Run cleared. Use 'carl start' to begin a new run.");
   } else {
     console.error("Usage: carl <command>");
     console.error("");

@@ -103,8 +103,142 @@ describe("Commands", () => {
     );
   });
 
+  test("approveCommand uses any architect slice-plan history, not just latest output", () => {
+    const slicePlan =
+      "# Feature\n\n## [ ] t-1: Do the thing\n\nAC:\n- It works\n";
+    const summaryMessage =
+      "Approval noted. Architect work for this slice is finished.";
+
+    stateManager.update({
+      current_phase: "architect",
+      status: "awaiting_approval",
+      history: [
+        {
+          phase: "architect",
+          model: "gpt5.1",
+          status: "success",
+          outputs: slicePlan,
+        },
+        {
+          phase: "architect",
+          model: "gpt5.1",
+          status: "success",
+          outputs: summaryMessage,
+        },
+      ],
+    });
+
+    approveCommand(tmpDir, "approve");
+
+    const state = stateManager.load();
+    expect(state.status).toBe("running");
+    expect(state.current_phase).toBe("developer");
+    expect(state.pending_reply).toBeUndefined();
+  });
+
+  test("approveCommand advances when slice-plan exists earlier in history with non-slice-plan output later", () => {
+    const slicePlan = "# Feature\n\n## [ ] t-1: Add feature\n\nAC:\n- Works\n";
+    const followUpOutput = "Additional clarification on the approach.";
+    const anotherOutput = "More thoughts but no new ticket format.";
+
+    stateManager.update({
+      current_phase: "architect",
+      status: "awaiting_approval",
+      history: [
+        {
+          phase: "architect",
+          model: "gpt5.1",
+          status: "success",
+          outputs: slicePlan,
+        },
+        {
+          phase: "architect",
+          model: "gpt5.1",
+          status: "success",
+          outputs: followUpOutput,
+        },
+        {
+          phase: "architect",
+          model: "gpt5.1",
+          status: "success",
+          outputs: anotherOutput,
+        },
+      ],
+    });
+
+    approveCommand(tmpDir, "approve");
+
+    const state = stateManager.load();
+    expect(state.status).toBe("running");
+    expect(state.current_phase).toBe("developer");
+    expect(state.pending_reply).toBeUndefined();
+  });
+
   test("approveCommand throws if not awaiting_approval", () => {
     expect(() => approveCommand(tmpDir)).toThrow(/not awaiting approval/);
+  });
+
+  test("approveCommand rejects architect phase when no slice-plan exists in history", () => {
+    const scopeChallenge =
+      "Scope challenge: is the repo-local scope acceptable?";
+    const clarification = "Additional details about the constraints.";
+
+    stateManager.update({
+      current_phase: "architect",
+      status: "awaiting_approval",
+      history: [
+        {
+          phase: "architect",
+          model: "gpt5.1",
+          status: "success",
+          outputs: scopeChallenge,
+        },
+        {
+          phase: "architect",
+          model: "gpt5.1",
+          status: "success",
+          outputs: clarification,
+        },
+      ],
+    });
+
+    const feedbackBuffer = "Yes, scope is acceptable. Proceed.";
+    approveCommand(tmpDir, feedbackBuffer);
+
+    const state = stateManager.load();
+    expect(state.status).toBe("running");
+    expect(state.current_phase).toBe("architect");
+    expect(state.pending_reply).toBe(feedbackBuffer);
+  });
+
+  test("approveCommand ignores non-success architect entries when searching for slice-plan", () => {
+    const slicePlan = "# Feature\n\n## [ ] t-1: Implement\n\nAC:\n- Done\n";
+    const rejectedOutput = "Some rejected architect output";
+
+    stateManager.update({
+      current_phase: "architect",
+      status: "awaiting_approval",
+      history: [
+        {
+          phase: "architect",
+          model: "gpt5.1",
+          status: "rejected",
+          outputs: rejectedOutput,
+        },
+        {
+          phase: "architect",
+          model: "gpt5.1",
+          status: "success",
+          outputs: slicePlan,
+        },
+      ],
+    });
+
+    approveCommand(tmpDir, "approve");
+
+    const state = stateManager.load();
+    expect(state.status).toBe("running");
+    expect(state.current_phase).toBe("developer");
   });
 
   test("rejectCommand changes status and history, returning to prior phase", () => {
@@ -131,9 +265,8 @@ describe("Commands", () => {
 
     const state = stateManager.load();
     expect(state.status).toBe("running");
-    expect(state.current_phase).toBe("architect"); // reviewer fallback is architect
+	    expect(state.current_phase).toBe("architect");
 
-    // History should have the rejection logged
     expect(state.history).toHaveLength(3);
     expect(state.history![2]).toEqual({
       phase: "reviewer",
@@ -163,7 +296,6 @@ reject: incomplete error handling`;
     expect(state.status).toBe("running");
     expect(state.current_phase).toBe("architect");
 
-    // History should include the full buffer
     expect(state.history).toHaveLength(1);
     const rejectionEntry = state.history![0];
     expect(rejectionEntry.status).toBe("rejected");
@@ -206,6 +338,37 @@ reject: incomplete error handling`;
   test("replyCommand throws if not awaiting_approval", () => {
     expect(() => replyCommand(tmpDir, "some answer")).toThrow(
       /not awaiting approval/,
+    );
+  });
+
+  test("approveCommand throws when no successful architect output exists", () => {
+    stateManager.update({
+      current_phase: "architect",
+      status: "awaiting_approval",
+      history: [],
+    });
+
+    expect(() => approveCommand(tmpDir)).toThrow(
+      /Architect has no successful output to approve yet/,
+    );
+  });
+
+  test("approveCommand throws when history has no successful architect entries", () => {
+    stateManager.update({
+      current_phase: "architect",
+      status: "awaiting_approval",
+      history: [
+        {
+          phase: "architect",
+          model: "gpt5.1",
+          status: "rejected",
+          outputs: "Some rejected output",
+        },
+      ],
+    });
+
+    expect(() => approveCommand(tmpDir)).toThrow(
+      /Architect has no successful output to approve yet/,
     );
   });
 });

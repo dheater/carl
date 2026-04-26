@@ -9,7 +9,7 @@ Opinionated AI development workflow. A four-phase loop with human approval gates
 ```bash
 brew tap dheater/carl https://github.com/dheater/carl
 brew install carl-ai
-carl start "<prompt>"
+carl start  # Prompt will be collected via your editor
 ```
 
 ### Building from source
@@ -25,7 +25,7 @@ just install
 ## Usage
 
 ```bash
-carl start "<prompt>"   # Begin a new run
+carl start              # Begin a new run (prompt collected via editor)
 carl run                # Resume; opens an editor at any approval gate
 carl status             # Show current phase and status
 carl reset              # Abandon the current run

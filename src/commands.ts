@@ -5,21 +5,25 @@ const TICKET_HEADING_RE =
   /^(?:#{2,6}\s+)?(?:[-*+]\s+)?\[\s*(?:|x)\s*\]\s+t-\d+[a-z0-9-]*\s*:/im;
 const ACCEPTANCE_CRITERIA_RE = /^(?:AC|Acceptance Criteria)\s*:/im;
 
-function getLastSuccessfulArchitectOutput(
+function isArchitectSlicePlan(output: string): boolean {
+  return TICKET_HEADING_RE.test(output) && ACCEPTANCE_CRITERIA_RE.test(output);
+}
+
+function hasArchitectSlicePlanInHistory(
   workspaceHistory?: {
     phase: string;
     status: string;
     outputs: string;
   }[],
-): string | undefined {
-  return workspaceHistory
-    ?.slice()
-    .reverse()
-    .find((h) => h.phase === "architect" && h.status === "success")?.outputs;
-}
-
-function isArchitectSlicePlan(output: string): boolean {
-  return TICKET_HEADING_RE.test(output) && ACCEPTANCE_CRITERIA_RE.test(output);
+): boolean {
+  return (
+    workspaceHistory?.some(
+      (h) =>
+        h.phase === "architect" &&
+        h.status === "success" &&
+        isArchitectSlicePlan(h.outputs),
+    ) ?? false
+  );
 }
 
 export function replyCommand(workspaceRoot: string, message: string): void {
@@ -42,18 +46,30 @@ export function approveCommand(
   }
 
   if (state.current_phase === "architect") {
-    const lastArchitectOutput = getLastSuccessfulArchitectOutput(state.history);
+    const hasSuccessfulArchitectOutput =
+      state.history?.some(
+        (h) => h.phase === "architect" && h.status === "success",
+      ) ?? false;
 
-    if (!lastArchitectOutput) {
+    if (!hasSuccessfulArchitectOutput) {
       throw new Error(
         "Architect has no successful output to approve yet. Run the architect phase again.",
       );
     }
 
-    if (!isArchitectSlicePlan(lastArchitectOutput)) {
+    const hasSlicePlan = hasArchitectSlicePlanInHistory(state.history);
+
+    if (!hasSlicePlan) {
+      const lastArchitectOutput = state.history
+        ?.slice()
+        .reverse()
+        .find(
+          (h) => h.phase === "architect" && h.status === "success",
+        )?.outputs;
+
       stateManager.update({
         status: "running",
-        pending_reply: approvalBuffer?.trim() || lastArchitectOutput,
+        pending_reply: approvalBuffer?.trim() || lastArchitectOutput || "",
       });
       return;
     }
@@ -81,8 +97,6 @@ export function rejectCommand(
 
   const history = state.history || [];
   const priorPhase = targetPhase ?? "architect";
-
-  // Preserve full buffer if provided, otherwise fall back to simple rejection message
   const outputs = fullBuffer
     ? `Approval rejected: ${reason}\n\n${fullBuffer}`
     : `Approval rejected: ${reason}`;
