@@ -50,6 +50,8 @@ architect → developer → verifier → reviewer
 - Save any other content → **reply** (the agent reads your feedback and re-runs the phase)
 - Save `reject: <reason>` → **reject** (fall back to the previous phase)
 
+At the architect gate, approval only hands off to developer after the latest architect output looks like a real slice plan. If architect is still asking questions or running scope challenge, the current buffer is fed back to architect and the workflow stays in architect.
+
 On architect approval, the architect's output is split into `.agent/dev-tickets.md` and `.agent/test-tickets.md` for developer and TestWriter execution, and indexed into a persistent workflow context. **Developer and TestWriter do not receive that context window** — they read disk artifacts only (`.agent/dev-tickets.md`, `.agent/test-tickets.md`, `.agent/notes/architect.md`, lint/test logs). **Reviewer reads from and writes to that same context window**, so it can validate what was planned against what was built, and architect picks up the reviewer's findings at the start of the next sprint.
 
 ## Layout

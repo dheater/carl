@@ -3,6 +3,8 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 
+const EDITOR_HEADER_SENTINEL = "# --- End instructions ---";
+
 export function collectPrompt(): string | null {
   const template = [
     "# What would you like to work on?",
@@ -38,7 +40,7 @@ export function collectPrompt(): string | null {
 }
 
 export type EditorAction =
-  | { action: "approve" }
+  | { action: "approve"; fullBuffer: string }
   | { action: "reject"; reason: string; target?: string; fullBuffer?: string }
   | { action: "reply"; message: string };
 
@@ -49,9 +51,9 @@ export function openEditorForGate(
   const header = [
     `# [${phaseName}] is waiting for your input`,
     `# Edit below as needed — add notes, answer questions inline.`,
-    `# Write "reject: <reason>" on its own line to reject (returns to the developer).`,
-    `# Write "reject-architect: <reason>" to reject back to architect instead.`,
+    `# Write "reject: <reason>" on its own line to reject (returns to the architect).`,
     `# Save and close to approve without edits, or write "approve" on its own line to approve with notes.`,
+    EDITOR_HEADER_SENTINEL,
     ``,
   ].join("\n");
 
@@ -83,19 +85,44 @@ export function parseEditorGateApproval(
   content: string,
   template: string,
 ): EditorAction {
-  const nonCommentLines = content
-    .split("\n")
-    .filter((l) => !l.trimStart().startsWith("#"));
+  const normalize = (lines: string[]) => lines.join("\n").trim();
+  const stripEditorHeader = (text: string): string[] => {
+    const lines = text.split("\n");
+    const sentinelIndex = lines.indexOf(EDITOR_HEADER_SENTINEL);
+
+    if (sentinelIndex !== -1) {
+      let bodyStart = sentinelIndex + 1;
+      if (bodyStart < lines.length && lines[bodyStart].trim() === "") {
+        bodyStart += 1;
+      }
+      return lines.slice(bodyStart);
+    }
+
+    let index = 0;
+
+    while (index < lines.length && lines[index].trimStart().startsWith("#")) {
+      index += 1;
+    }
+
+    if (index < lines.length && lines[index].trim() === "") {
+      index += 1;
+    }
+
+    return lines.slice(index);
+  };
+
+  const bodyLines = stripEditorHeader(content);
+  const normalizedBody = normalize(bodyLines);
 
   // Explicit reject signal: "reject: reason" or "reject-<phase>: reason" (unindented)
-  const rejectMatch = nonCommentLines
+  const rejectMatch = bodyLines
     .map((l) => l.match(/^reject(?:-(\w+))?:\s*(.*)/i))
     .find(Boolean);
   if (rejectMatch) {
     const target = rejectMatch[1]?.toLowerCase();
     const reason = rejectMatch[2]?.trim() ?? "";
-    // Preserve full non-comment buffer for architect to review
-    const fullBuffer = nonCommentLines.join("\n").trim();
+    // Preserve the edited buffer without the generated editor header
+    const fullBuffer = bodyLines.join("\n").trim();
     return {
       action: "reject",
       reason,
@@ -106,7 +133,7 @@ export function parseEditorGateApproval(
 
   // Explicit approve signal: "approve" or "approved" with optional surrounding whitespace
   // Also supports "approve: ..." syntax for backwards compatibility
-  const approveMatch = nonCommentLines
+  const approveMatch = bodyLines
     .map((l) => {
       const trimmed = l.trim();
       // Match "approve" or "approved" as sole content (case-insensitive)
@@ -117,24 +144,19 @@ export function parseEditorGateApproval(
     })
     .find(Boolean);
   if (approveMatch) {
-    return { action: "approve" };
+    return { action: "approve", fullBuffer: normalizedBody };
   }
-
-  const normalize = (lines: string[]) => lines.join("\n").trim();
-  const normalizedBody = normalize(nonCommentLines);
 
   // Empty body (user deleted everything) → approve
   if (normalizedBody === "") {
-    return { action: "approve" };
+    return { action: "approve", fullBuffer: "" };
   }
 
   // Unchanged body (user saved without edits) → approve
-  const templateNonComment = template
-    .split("\n")
-    .filter((l) => !l.trimStart().startsWith("#"));
-  if (normalizedBody === normalize(templateNonComment)) {
-    return { action: "approve" };
+  const templateBodyLines = stripEditorHeader(template);
+  if (normalizedBody === normalize(templateBodyLines)) {
+    return { action: "approve", fullBuffer: normalizedBody };
   }
 
-  return { action: "reply", message: content.trim() };
+  return { action: "reply", message: normalizedBody };
 }

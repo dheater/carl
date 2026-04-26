@@ -82,7 +82,7 @@ Each ticket: working code, passing tests, nothing broken.
 
 Architect defines tickets for two distinct agents:
 
-**Developer tickets** — implementation work: new features, bug fixes, refactors. Developer owns ephemeral TDD tests (`.dev.test.ts`); these are temporary and pruned by Verifier.
+**Developer tickets** — implementation work: new features, bug fixes, refactors. Developer owns ephemeral TDD tests (short-lived, dev-only tests that use the project's normal test framework and naming conventions; for JavaScript/TypeScript repos this might be files like `*.dev.test.ts`). These are temporary and pruned by Verifier.
 
 **TestWriter tickets** — regression-test work: writing durable, behavior-focused tests that lock in behavior and catch future regressions. TestWriter owns long-lived tests that survive refactoring.
 
@@ -113,7 +113,7 @@ AC must fail a test before code is written. Tickets ordered by execution sequenc
 
 The human does **not** edit the plan. They reply through an editor.
 
-- Empty reply, unchanged buffer, or a single line containing `approve` or `approved` (case-insensitive, with optional surrounding whitespace) → **approval**. Last response becomes `.agent/dev-tickets.md` and `.agent/test-tickets.md`. Approval still requires that the last architect output is a valid slice plan (contains `## [ ] t-N:` headings).
+- Empty reply, unchanged buffer, or a single line containing `approve` or `approved` (case-insensitive, with optional surrounding whitespace) → **approval**. If the latest architect output is a real slice plan, hand off to developer. If architect is still asking questions or running scope challenge, feed the current buffer back to architect and keep the workflow in architect.
 - `reject: <reason>` → rejection.
 - Anything else → commentary. Iterate on annotated sections; drop already-agreed sections from discussion.
 

@@ -1,7 +1,26 @@
 import { StateManager } from "./state";
 import { getNextPhase } from "./graph";
 
-const TICKET_HEADING_RE = /^##\s+\[\s*\]\s+t-\d+:/m;
+const TICKET_HEADING_RE =
+  /^(?:#{2,6}\s+)?(?:[-*+]\s+)?\[\s*(?:|x)\s*\]\s+t-\d+[a-z0-9-]*\s*:/im;
+const ACCEPTANCE_CRITERIA_RE = /^(?:AC|Acceptance Criteria)\s*:/im;
+
+function getLastSuccessfulArchitectOutput(
+  workspaceHistory?: {
+    phase: string;
+    status: string;
+    outputs: string;
+  }[],
+): string | undefined {
+  return workspaceHistory
+    ?.slice()
+    .reverse()
+    .find((h) => h.phase === "architect" && h.status === "success")?.outputs;
+}
+
+function isArchitectSlicePlan(output: string): boolean {
+  return TICKET_HEADING_RE.test(output) && ACCEPTANCE_CRITERIA_RE.test(output);
+}
 
 export function replyCommand(workspaceRoot: string, message: string): void {
   const stateManager = new StateManager(workspaceRoot);
@@ -12,7 +31,10 @@ export function replyCommand(workspaceRoot: string, message: string): void {
   stateManager.update({ status: "running", pending_reply: message });
 }
 
-export function approveCommand(workspaceRoot: string): void {
+export function approveCommand(
+  workspaceRoot: string,
+  approvalBuffer?: string,
+): void {
   const stateManager = new StateManager(workspaceRoot);
   let state = stateManager.load();
   if (state.status !== "awaiting_approval") {
@@ -20,16 +42,20 @@ export function approveCommand(workspaceRoot: string): void {
   }
 
   if (state.current_phase === "architect") {
-    const lastArchitectOutput = (state.history || [])
-      .slice()
-      .reverse()
-      .find((h) => h.phase === "architect" && h.status === "success")?.outputs;
+    const lastArchitectOutput = getLastSuccessfulArchitectOutput(state.history);
 
-    if (!lastArchitectOutput || !TICKET_HEADING_RE.test(lastArchitectOutput)) {
+    if (!lastArchitectOutput) {
       throw new Error(
-        "Architect has not yet produced a slice plan (expected `## [ ] t-N:` headings in the last architect output). " +
-          "Reply with your feedback to continue the conversation, or reject to start over.",
+        "Architect has no successful output to approve yet. Run the architect phase again.",
       );
+    }
+
+    if (!isArchitectSlicePlan(lastArchitectOutput)) {
+      stateManager.update({
+        status: "running",
+        pending_reply: approvalBuffer?.trim() || lastArchitectOutput,
+      });
+      return;
     }
   }
 

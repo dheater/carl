@@ -30,7 +30,7 @@ async function runWithEditor(
       const result = openEditorForGate(phase, lastOutput);
 
       if (result.action === "approve") {
-        approveCommand(workspaceRoot);
+        approveCommand(workspaceRoot, result.fullBuffer);
         const next = stateManager.load();
         if (next.status === "completed") {
           console.log("\n  [System] Workflow complete. Sprint approved.\n");
@@ -137,7 +137,7 @@ async function main() {
         );
         const result = openEditorForGate(phase, lastOutput);
         if (result.action === "approve") {
-          approveCommand(workspaceRoot);
+          approveCommand(workspaceRoot, result.fullBuffer);
           const updatedState = stateManager.load();
           if (updatedState.status === "completed" && phase === "reviewer") {
             console.log("\n  [System] Workflow complete. Sprint approved.\n");

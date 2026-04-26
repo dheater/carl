@@ -29,13 +29,13 @@ Don't wait for confirmation — start the TDD cycle now.
 
 ## Ephemeral vs. Durable Tests
 
-**Ephemeral TDD tests** (e.g., `*.dev.test.ts`):
+**Ephemeral TDD tests** (dev-only tests, naming/folder convention is project-specific; for example, JavaScript/TypeScript repos often use patterns like `*.dev.test.ts`):
 - Developer-owned, temporary, created during TDD cycle
 - Expected to be pruned by Verifier
 - Focus on driving implementation, not final regression protection
-- Use pattern: `describe("...", () => { test("", () => { ... }) })` with `.dev.test.ts` extension
+- Use the project's normal test framework and adopt a clear convention (for example, a `.dev` suffix, a dedicated dev-test directory, or similar) so Verifier can safely delete these once behavior is locked in
 
-**Durable tests** (normal `*.test.ts` pattern):
+**Durable tests** (normal project test pattern, e.g., the default `*.test.*` convention for your language/framework):
 - Long-lived regression tests
 - Not auto-deleted; survive refactoring
 - Written by Developer for final AC coverage and by TestWriter for behavior-focused regression tests

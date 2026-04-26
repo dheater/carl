@@ -34,7 +34,7 @@ describe("Commands", () => {
       ],
     });
 
-    approveCommand(tmpDir);
+    approveCommand(tmpDir, slicePlan);
 
     const state = stateManager.load();
     expect(state.status).toBe("running");
@@ -42,6 +42,29 @@ describe("Commands", () => {
 
     const ticketsPath = path.join(tmpDir, ".agent", "tickets.md");
     expect(fs.existsSync(ticketsPath)).toBe(false);
+  });
+
+  test("approveCommand accepts broader slice-plan ticket formats", () => {
+    const slicePlan =
+      "# Feature\n\n[ ] t-4a: Add prerequisite\n\nAcceptance Criteria:\n- It works\n";
+    stateManager.update({
+      current_phase: "architect",
+      status: "awaiting_approval",
+      history: [
+        {
+          phase: "architect",
+          model: "gpt5.1",
+          status: "success",
+          outputs: slicePlan,
+        },
+      ],
+    });
+
+    approveCommand(tmpDir, slicePlan);
+
+    const state = stateManager.load();
+    expect(state.status).toBe("running");
+    expect(state.current_phase).toBe("developer");
   });
 
   test("approveCommand at reviewer gate marks the workflow completed", () => {
@@ -53,7 +76,9 @@ describe("Commands", () => {
     expect(stateManager.load().status).toBe("completed");
   });
 
-  test("approveCommand refuses architect approval without a valid slice plan", () => {
+  test("approveCommand continues architect when approval happens before a slice plan exists", () => {
+    const feedbackBuffer =
+      "Scope challenge: do you accept the narrower scope?\n\nYes. Keep it repo-local.";
     stateManager.update({
       current_phase: "architect",
       status: "awaiting_approval",
@@ -67,13 +92,12 @@ describe("Commands", () => {
       ],
     });
 
-    expect(() => approveCommand(tmpDir)).toThrow(
-      /has not yet produced a slice plan/i,
-    );
+    approveCommand(tmpDir, feedbackBuffer);
 
     const state = stateManager.load();
-    expect(state.status).toBe("awaiting_approval");
+    expect(state.status).toBe("running");
     expect(state.current_phase).toBe("architect");
+    expect(state.pending_reply).toBe(feedbackBuffer);
     expect(fs.existsSync(path.join(tmpDir, ".agent", "tickets.md"))).toBe(
       false,
     );

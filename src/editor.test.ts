@@ -10,7 +10,7 @@ describe("parseEditorGateApproval", () => {
         "# comment\napprove",
         baseTemplate,
       );
-      expect(result).toEqual({ action: "approve" });
+      expect(result).toEqual({ action: "approve", fullBuffer: "approve" });
     });
 
     test("recognize 'APPROVE' (uppercase) as approval", () => {
@@ -18,7 +18,7 @@ describe("parseEditorGateApproval", () => {
         "# comment\nAPPROVE",
         baseTemplate,
       );
-      expect(result).toEqual({ action: "approve" });
+      expect(result).toEqual({ action: "approve", fullBuffer: "APPROVE" });
     });
 
     test("recognize 'Approved' (mixed case) as approval", () => {
@@ -26,7 +26,7 @@ describe("parseEditorGateApproval", () => {
         "# comment\nApproved",
         baseTemplate,
       );
-      expect(result).toEqual({ action: "approve" });
+      expect(result).toEqual({ action: "approve", fullBuffer: "Approved" });
     });
 
     test("recognize '  approve  ' (surrounded by whitespace) as approval", () => {
@@ -34,7 +34,7 @@ describe("parseEditorGateApproval", () => {
         "# comment\n  approve  ",
         baseTemplate,
       );
-      expect(result).toEqual({ action: "approve" });
+      expect(result).toEqual({ action: "approve", fullBuffer: "approve" });
     });
 
     test("recognize '  APPROVED  ' (uppercase with whitespace) as approval", () => {
@@ -42,7 +42,7 @@ describe("parseEditorGateApproval", () => {
         "# comment\n  APPROVED  ",
         baseTemplate,
       );
-      expect(result).toEqual({ action: "approve" });
+      expect(result).toEqual({ action: "approve", fullBuffer: "APPROVED" });
     });
 
     test("recognize 'approve: some notes' as approval (backward compat)", () => {
@@ -50,7 +50,10 @@ describe("parseEditorGateApproval", () => {
         "# comment\napprove: looks good",
         baseTemplate,
       );
-      expect(result).toEqual({ action: "approve" });
+      expect(result).toEqual({
+        action: "approve",
+        fullBuffer: "approve: looks good",
+      });
     });
 
     test("recognize '  approved: notes  ' with whitespace as approval", () => {
@@ -58,26 +61,38 @@ describe("parseEditorGateApproval", () => {
         "# comment\n  approved: looks good  ",
         baseTemplate,
       );
-      expect(result).toEqual({ action: "approve" });
+      expect(result).toEqual({
+        action: "approve",
+        fullBuffer: "approved: looks good",
+      });
     });
   });
 
   describe("existing approval behavior", () => {
     test("empty body (all deleted) still approves", () => {
       const result = parseEditorGateApproval("", baseTemplate);
-      expect(result).toEqual({ action: "approve" });
+      expect(result).toEqual({ action: "approve", fullBuffer: "" });
     });
 
     test("unchanged template content still approves", () => {
       const result = parseEditorGateApproval(baseTemplate, baseTemplate);
-      expect(result).toEqual({ action: "approve" });
+      expect(result).toEqual({ action: "approve", fullBuffer: "" });
+    });
+
+    test("unchanged non-comment agent output is preserved in approval buffer", () => {
+      const template = `# [architect] is waiting for your input\n\n## Question\n\nUse repo root?`;
+      const result = parseEditorGateApproval(template, template);
+      expect(result).toEqual({
+        action: "approve",
+        fullBuffer: "## Question\n\nUse repo root?",
+      });
     });
 
     test("unchanged template with extra comments still approves", () => {
       const withComments =
         "# [architect] is waiting for your input\n# Some agent output here\n# extra comment";
       const result = parseEditorGateApproval(withComments, baseTemplate);
-      expect(result).toEqual({ action: "approve" });
+      expect(result).toEqual({ action: "approve", fullBuffer: "" });
     });
   });
 

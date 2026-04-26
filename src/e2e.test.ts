@@ -338,7 +338,9 @@ describe("End-to-End Workflow Harness", () => {
     expect(state.current_phase).toBe("reviewer");
   });
 
-  test("architect approval is refused when the last architect output is not a slice plan", async () => {
+  test("architect approval before a slice plan continues the architect conversation", async () => {
+    const feedbackBuffer =
+      "Scope challenge: here are some questions. Do you accept the narrower scope?\n\nYes. Proceed.";
     mockPrompt.mockReset();
     mockPrompt.mockResolvedValueOnce(
       "Scope challenge: here are some questions. Do you accept the narrower scope?",
@@ -349,18 +351,17 @@ describe("End-to-End Workflow Harness", () => {
     expect(state.status).toBe("awaiting_approval");
     expect(state.current_phase).toBe("architect");
 
-    expect(() => approveCommand(tmpDir)).toThrow(
-      /has not yet produced a slice plan/i,
-    );
+    approveCommand(tmpDir, feedbackBuffer);
 
     // tickets.md must not have been created
     const ticketsPath = path.join(tmpDir, ".agent", "tickets.md");
     expect(fs.existsSync(ticketsPath)).toBe(false);
 
-    // state is untouched — still awaiting at architect
+    // state moves back to running architect with the edited buffer as feedback
     const after = stateManager.load();
-    expect(after.status).toBe("awaiting_approval");
+    expect(after.status).toBe("running");
     expect(after.current_phase).toBe("architect");
+    expect(after.pending_reply).toBe(feedbackBuffer);
   });
 
   test("runJustFormat and runJustLint are called after developer phase", async () => {
