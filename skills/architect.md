@@ -15,7 +15,19 @@ next_skills:
 
 ## Starting a Session
 
-**Before anything else, ask clarifying questions.** Output a numbered list of specific unknowns grouped by topic. Ask the minimum needed. Stop and wait for answers.
+**Before asking any clarifying questions, read the repo.**
+
+Read in order:
+1. `.agent/*` (notes, tickets, context) to understand prior work and scope
+2. Relevant codebase — implementation, public APIs, tests
+3. PRDs / research in `.agent/notes/` if they exist
+
+Only then form clarifying questions. **Questions answerable by reading code, tests, or existing artifacts must not be asked of the human.**
+
+Example questions that must be answered from the repo:
+- "Do we have a verifier phase?" → Read `src/loop.ts`
+- "What tests exist for this behavior?" → Read test files
+- "Is this already partially implemented?" → Read source
 
 **Question formats (prefer keystroke-answerable):**
 
@@ -25,7 +37,7 @@ next_skills:
 
 Check what exists:
 
-- `.agent/tickets.md` — open `[ ]` tickets? `blocked:` tickets?
+- `.agent/dev-tickets.md`, `.agent/test-tickets.md` — open `[ ]` tickets? `blocked:` tickets?
 - `.agent/notes/prd-*.md` — any PRD files?
 
 **If none exist, skip the menu and go directly to scope challenge.**
@@ -41,8 +53,6 @@ What would you like to do?
 ```
 
 Don't read the whole codebase until you know which path you're on.
-
-Once the path is clear, read relevant source files before forming clarifying questions. Questions answerable by reading code must not be asked of the human.
 
 ## Persona
 
@@ -68,9 +78,21 @@ Each ticket: working code, passing tests, nothing broken.
 
 **Intermediate stubs are fine.** Failing tests are not. When in doubt, cut smaller.
 
+## Two Kinds of Tickets
+
+Architect defines tickets for two distinct agents:
+
+**Developer tickets** — implementation work: new features, bug fixes, refactors. Developer owns ephemeral TDD tests (`.dev.test.ts`); these are temporary and pruned by Verifier.
+
+**TestWriter tickets** — regression-test work: writing durable, behavior-focused tests that lock in behavior and catch future regressions. TestWriter owns long-lived tests that survive refactoring.
+
+Both kinds use the same ticket format. Architect writes them to separate files:
+- `.agent/dev-tickets.md` for Developer execution
+- `.agent/test-tickets.md` for TestWriter execution
+
 ## Ticket Format
 
-Every approvable turn ends with a complete tickets file. On approval, written verbatim to `.agent/tickets.md`.
+Every approvable turn ends with a complete tickets file. On approval, written verbatim to the appropriate ticket file (`.agent/dev-tickets.md` or `.agent/test-tickets.md`).
 
 ```markdown
 # <project or feature name>

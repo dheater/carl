@@ -480,8 +480,6 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
       }
 
       if (!isBlocked && phaseName === "reviewer") {
-        // Handle reviewer completion: persist notes and index to context.
-        // Architect reads this on the next sprint via the shared context window.
         await handleReviewerCompletion(
           response,
           state.workspace_path,
@@ -510,8 +508,99 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
         console.log(`Phase ${phaseName} completed. Awaiting approval.`);
         break; // Pause loop
       } else if (nextPhase) {
-        // After developer completes, run deterministic format/lint and tests before reviewer
+        // After developer completes, run test-writer before deterministic format/lint and tests
         if (phaseName === "developer") {
+          console.log(`[System] Running TestWriter to add regression tests...`);
+          let testWriterClient = sharedClient;
+          // If we have a client from a different phase, close and discard it
+          if (
+            testWriterClient &&
+            (sharedClientRunId !== runId || sharedClientPhase !== "test-writer")
+          ) {
+            try {
+              await testWriterClient.close();
+            } catch {
+              // Best-effort close
+            }
+            sharedClient = null;
+            sharedClientPhase = null;
+            sharedClientRunId = null;
+            testWriterClient = null;
+          }
+
+          // Create a new client for test-writer if needed
+          if (!testWriterClient) {
+            console.log(`[Timing] Auggie.create entry test-writer/haiku4.5`);
+            const auggleCreateStart = Date.now();
+            testWriterClient = await Auggie.create({
+              workspaceRoot: state.workspace_path,
+              model: "haiku4.5",
+              allowIndexing: true,
+            });
+            const auggleCreateDuration = Date.now() - auggleCreateStart;
+            console.log(
+              `[Timing] Auggie.create duration ${auggleCreateDuration}ms test-writer/haiku4.5`,
+            );
+            sharedClient = testWriterClient;
+            sharedClientPhase = "test-writer";
+            sharedClientRunId = runId;
+          }
+
+          testWriterClient.onSessionUpdate((notification: any) => {
+            const update = notification.update;
+            if (update) {
+              if (update.sessionUpdate === "tool_call") {
+                console.log(
+                  `\n  [test-writer/haiku4.5] Running tool: ${update.title || "unknown"}...`,
+                );
+              } else if (update.sessionUpdate === "agent_thought_chunk") {
+                if (update.content && update.content.text) {
+                  process.stdout.write(`\x1b[90m${update.content.text}\x1b[0m`);
+                }
+              }
+            }
+          });
+
+          const testWriterInstruction = buildSkillInstruction(
+            "test-writer",
+            state.workspace_path,
+          );
+          console.log(
+            `  [System] Agent initialized. Sending prompt and awaiting response...`,
+          );
+          console.log(`[Timing] prompt entry test-writer/haiku4.5`);
+          const testWriterPromptStart = Date.now();
+          const testWriterResponse = await testWriterClient.prompt(
+            testWriterInstruction,
+            { isAnswerOnly: true },
+          );
+          const testWriterPromptDuration = Date.now() - testWriterPromptStart;
+          console.log(
+            `[Timing] prompt duration ${testWriterPromptDuration}ms test-writer/haiku4.5`,
+          );
+
+          const testWriterBlocked = /block(?:ed|er):/i.test(testWriterResponse);
+
+          history.push({
+            phase: "test-writer",
+            model: "haiku4.5",
+            status: testWriterBlocked ? "blocked" : "success",
+            outputs: testWriterResponse,
+          });
+
+          if (testWriterBlocked) {
+            state = stateManager.update({
+              history,
+              current_phase: "architect",
+            });
+            console.log(
+              blue(
+                `Phase test-writer reported a blocker. Handing back to architect.`,
+              ),
+            );
+            continue;
+          }
+
           console.log(
             `[System] Running deterministic format and lint checks...`,
           );

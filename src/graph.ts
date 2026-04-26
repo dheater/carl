@@ -16,6 +16,6 @@ export function getNextPhase(currentPhase: string): string | null {
 export function getPhaseModel(phase: string): string {
   if (phase === "architect") return "gpt5.1";
   if (phase === "verifier") return "gpt5.1";
-  if (phase === "reviewer") return "gemini-3.1-pro-preview";
+  if (phase === "reviewer") return "haiku4.5";
   return "haiku4.5"; // developer, default
 }

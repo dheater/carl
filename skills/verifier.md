@@ -24,7 +24,7 @@ Read all deterministic artifacts from the developer phase:
 2. **`.agent/tests.log`** — Full test output (if tests failed)
 3. **`.agent/lint.log`** — Full lint output
 4. **`.agent/notes/architect.md`** — Scope and AC for context
-5. **`.agent/tickets.md`** — Tickets being implemented
+5. **`.agent/dev-tickets.md`** and **`.agent/test-tickets.md`** — Tickets being/will be implemented
 6. **Git status/diff** — Which files changed (via existing context tools)
 
 ## Behavioral Constraints
@@ -108,16 +108,36 @@ Relevant output: [snippet from .agent/tests.log]
 
 Each deletion: short "why this is safe" explanation.
 
-### 3. Recommendations for Developer/Architect
+### 3. Recommendations for Developer and TestWriter
+
+Output two clearly separated lists:
+
+**Recommendations for Developer** — focus on implementation and code issues:
 
 ```
-## Recommendations for Developer/Architect
+## Recommendations for Developer
 
-- **Suggested ticket: Extract auth logic into separate module** — Current auth code is duplicated in two handlers; could be refactored into a shared utility for maintainability.
-- **Consider: Add integration test for error path** — Current tests focus on happy path; error handling is not well covered and might benefit from an integration test.
+- **Refactor: Extract auth logic into separate module** — Current auth code is duplicated in two handlers; could be refactored into a shared utility for maintainability.
+- **Fix: Missing error bounds check in parser** — The input parser doesn't validate array bounds before access, creating a potential panic.
+```
+
+**Recommendations for TestWriter** — focus on missing or weak behavior-focused regression tests:
+
+```
+## Recommendations for TestWriter
+
+- **Add test: Error path when network timeout occurs** — Current tests focus on happy path; error handling and timeout recovery should be tested for regression prevention.
+- **Improve test: Idempotence of cache invalidation** — Current test is implementation-focused; add behavior test to verify cache state is consistent after invalidation.
 ```
 
 Format: ticket title + 1–2 sentence justification.
+
+**Routing rules:**
+- Implementation/code issues → **Developer** tickets
+- Missing or weak regression tests → **TestWriter** tickets
+- Regression-test gaps → **TestWriter**, not Developer (unless clearly implementation-related)
+
+**Important:** Verifier does not directly edit `.agent/dev-tickets.md` or `.agent/test-tickets.md`. Instead, it provides structured recommendations for Architect/Planner to turn into tickets.
 
 ## Session Complete
 

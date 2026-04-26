@@ -1,12 +1,10 @@
-import * as fs from "fs";
-import * as path from "path";
+import { loadSkillContent } from "./skill-markdown-test-utils";
 
 describe("Developer skill file placement rule", () => {
   let skillContent: string;
 
   beforeEach(() => {
-    const skillPath = path.join(__dirname, "..", "skills", "developer.md");
-    skillContent = fs.readFileSync(skillPath, "utf-8");
+    skillContent = loadSkillContent("developer");
   });
 
   test("developer.md contains a 'File placement and tracking' section", () => {
@@ -56,5 +54,59 @@ describe("Developer skill file placement rule", () => {
     // Check that the skill is generic, not tied to "carl" or specific repo name
     const isCarlSpecific = skillContent.includes("carl");
     expect(isCarlSpecific).toBe(false);
+  });
+});
+
+describe("t-5: Improve blocked reporting for Developer", () => {
+  let skillContent: string;
+
+  beforeEach(() => {
+    skillContent = loadSkillContent("developer");
+  });
+
+  test("developer.md Mikado Escalation section mentions blocked: prefix for escalation", () => {
+    expect(skillContent).toMatch(/Mikado.*Escalation/i);
+    expect(skillContent).toMatch(/blocked:/);
+  });
+
+  test("developer.md Mikado Escalation includes guidance for ## Blocked ticket section", () => {
+    expect(skillContent).toMatch(/##\s+Blocked/i);
+  });
+
+  test("developer.md Mikado Escalation includes guidance for ## What is missing subsection", () => {
+    expect(skillContent).toMatch(/##.*What is missing/i);
+  });
+
+  test("developer.md references .agent/dev-tickets.md when discussing blocked escalation", () => {
+    // Find the Mikado section and check that it references dev-tickets.md not tickets.md
+    const mikadoMatch = skillContent.match(
+      /## Mikado Escalation\n([\s\S]*?)(?=\n## |$)/i,
+    );
+    if (mikadoMatch) {
+      const mikadoSection = mikadoMatch[1];
+      // Should mention dev-tickets.md in context of Mikado escalation
+      expect(mikadoSection).toMatch(/\.agent\/dev-tickets\.md/);
+    }
+  });
+
+  test("developer.md 'Done Means' section aligns ticket completion with .agent/dev-tickets.md", () => {
+    expect(skillContent).toMatch(/## Done Means/i);
+    // The Done Means section should reference dev-tickets.md when marking tickets as complete
+    const doneMeansMatch = skillContent.match(
+      /## Done Means\n([\s\S]*?)(?=\n## |$)/i,
+    );
+    if (doneMeansMatch) {
+      const doneMeansSection = doneMeansMatch[1];
+      expect(doneMeansSection).toMatch(/\.agent\/dev-tickets\.md/);
+    }
+  });
+
+  test("developer.md cycle step 10 references .agent/dev-tickets.md not .agent/tickets.md", () => {
+    // Step 10 should mark tickets in dev-tickets.md, not tickets.md
+    expect(skillContent).toMatch(/10\./);
+    const step10Match = skillContent.match(
+      /10\.\s+Mark the ticket.*?\[x\][^\n]*\.agent\/dev-tickets\.md/i,
+    );
+    expect(step10Match).toBeTruthy();
   });
 });

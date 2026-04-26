@@ -120,8 +120,8 @@ describe("Workflow Loop", () => {
     const state = stateManager.load();
     expect(state.status).toBe("awaiting_approval");
     expect(state.current_phase).toBe("reviewer");
-    expect(state.history).toHaveLength(4); // architect (prior), developer, verifier, reviewer (now at gate)
-    expect(mockPrompt).toHaveBeenCalledTimes(3); // developer, verifier, and reviewer all run before gate pauses
+    expect(state.history).toHaveLength(5); // architect (prior), developer, test-writer, verifier, reviewer (now at gate)
+    expect(mockPrompt).toHaveBeenCalledTimes(4); // developer, test-writer, verifier, and reviewer all run before gate pauses
 
     expect(Auggie.create).toHaveBeenNthCalledWith(
       1,
@@ -132,13 +132,19 @@ describe("Workflow Loop", () => {
     expect(Auggie.create).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
-        model: "gpt5.1", // verifier
+        model: "haiku4.5", // test-writer
       }),
     );
     expect(Auggie.create).toHaveBeenNthCalledWith(
       3,
       expect.objectContaining({
-        model: "gemini-3.1-pro-preview", // reviewer
+        model: "gpt5.1", // verifier
+      }),
+    );
+    expect(Auggie.create).toHaveBeenNthCalledWith(
+      4,
+      expect.objectContaining({
+        model: "haiku4.5", // reviewer
       }),
     );
   });
@@ -1122,6 +1128,84 @@ describe("buildSkillInstruction for reviewer with branch context", () => {
   });
 });
 
+// Tests for buildSkillInstruction with test-writer phase
+describe("buildSkillInstruction for test-writer with artifacts", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-skill-test-tw-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    jest.clearAllMocks();
+  });
+
+  test("test-writer instructions include full skill content from skills directory", () => {
+    const loopModule = require("./loop");
+    const instruction = loopModule.buildSkillInstruction("test-writer", tmpDir);
+
+    // AC: Should include full TestWriter skill from skills/test-writer.md
+    expect(instruction).toContain("# Your skill for this session");
+    expect(instruction).toContain("# TestWriter");
+    expect(instruction).toMatch(
+      /long-lived.*regression.*test|behavior-focused.*test/i,
+    );
+  });
+
+  test("test-writer instructions mention prerequisites (architect skill)", () => {
+    const loopModule = require("./loop");
+    const instruction = loopModule.buildSkillInstruction("test-writer", tmpDir);
+
+    // AC: Skill file should mention that architect is a prerequisite
+    expect(instruction).toMatch(/prerequisites:/i);
+  });
+
+  test("test-writer instructions describe reading artifacts from .agent directory", () => {
+    const loopModule = require("./loop");
+    const instruction = loopModule.buildSkillInstruction("test-writer", tmpDir);
+
+    // AC: Should mention the starting a session section that describes reading artifacts
+    expect(instruction).toMatch(/Starting a Session|Read in order/i);
+    expect(instruction).toMatch(/\.agent\/notes\/architect\.md/);
+    expect(instruction).toMatch(/\.agent\/test-tickets\.md/);
+  });
+
+  test("test-writer instructions do not include special reviewer artifacts (branch, files changed, lint, tests)", () => {
+    // Setup some artifacts that might exist in reviewer context
+    const gitModule = require("./git");
+    (gitModule.getCurrentBranch as jest.Mock) = jest
+      .fn()
+      .mockReturnValue("feature-branch");
+    (gitModule.getGitStatus as jest.Mock) = jest.fn().mockReturnValue({
+      isRepo: true,
+      trackedChanged: ["src/feature.ts"],
+      untracked: [],
+    });
+
+    const loopModule = require("./loop");
+    const instruction = loopModule.buildSkillInstruction("test-writer", tmpDir);
+
+    // AC: test-writer should NOT have the special reviewer sections injected
+    // (like "## Proposed commit message" or "# Files changed")
+    expect(instruction).not.toMatch(/## Proposed commit message/i);
+    expect(instruction).not.toMatch(/## Tracked changes/i);
+    expect(instruction).not.toMatch(/# Files changed/i);
+  });
+
+  test("test-writer instructions do not embed non-phase prerequisite skills if architect is a phase", () => {
+    const loopModule = require("./loop");
+    const instruction = loopModule.buildSkillInstruction("test-writer", tmpDir);
+
+    // AC: Architect is a HAPPY_PATH_GRAPH phase, so it should NOT be embedded as a supporting skill
+    // The instruction should only have the test-writer skill, not duplicate architect skill content
+    expect(instruction).toContain("# Your skill for this session");
+    expect(instruction).toContain("# TestWriter");
+    // Should not have a "Supporting skill: architect" section
+    expect(instruction).not.toMatch(/# Supporting skill:\s*architect/i);
+  });
+});
+
 describe("t-4: Reviewer uses deterministic artifacts and reject routes to architect", () => {
   let tmpDir: string;
   let stateManager: StateManager;
@@ -1181,7 +1265,7 @@ describe("t-4: Reviewer uses deterministic artifacts and reject routes to archit
         },
         {
           phase: "reviewer",
-          model: "gemini-3.1-pro-preview",
+          model: "haiku4.5",
           status: "success",
           outputs: "# Review",
         },
@@ -1267,7 +1351,7 @@ describe("t-4: Reviewer uses deterministic artifacts and reject routes to archit
       },
       {
         phase: "reviewer",
-        model: "gemini-3.1-pro-preview",
+        model: "haiku4.5",
         status: "rejected",
         outputs: `Approval rejected: incomplete validation\n\n${rejectionBuffer}`,
       },
@@ -1398,5 +1482,209 @@ describe("t-4: Reviewer uses deterministic artifacts and reject routes to archit
     const notesPath = path.join(tmpDir, ".agent", "notes", "reviewer.md");
     expect(fs.existsSync(notesPath)).toBe(true);
     expect(fs.readFileSync(notesPath, "utf-8")).toBe("reviewer feedback");
+  });
+
+  test("t-4: TestWriter runs after developer and before deterministic checks on success", async () => {
+    const { runCanonicalTests } = require("./just");
+    const mockCanonicalTests = runCanonicalTests as jest.Mock;
+
+    stateManager.update({
+      current_phase: "developer",
+      status: "running",
+      history: [
+        {
+          phase: "architect",
+          model: "gpt5.1",
+          status: "success",
+          outputs: "# Tickets\n\n## [ ] t-1: Test\n\nAC:\n- Test",
+        },
+      ],
+    });
+
+    // Developer and TestWriter both succeed
+    mockPrompt.mockResolvedValueOnce("developer implementation");
+    mockPrompt.mockResolvedValueOnce("test-writer tests");
+    mockPrompt.mockResolvedValueOnce("verifier feedback");
+    mockPrompt.mockResolvedValueOnce("reviewer approval");
+
+    await runLoop(stateManager);
+
+    const state = stateManager.load();
+
+    // AC: TestWriter runs after Developer
+    expect(state.history).toHaveLength(5); // architect, developer, test-writer, verifier, reviewer
+    expect(state.history![1]).toEqual(
+      expect.objectContaining({
+        phase: "developer",
+        status: "success",
+        outputs: "developer implementation",
+      }),
+    );
+    expect(state.history![2]).toEqual(
+      expect.objectContaining({
+        phase: "test-writer",
+        status: "success",
+        outputs: "test-writer tests",
+      }),
+    );
+
+    // AC: Deterministic checks run after TestWriter succeeds
+    expect(mockCanonicalTests).toHaveBeenCalled();
+
+    // AC: Next phase after deterministic checks is verifier
+    expect(state.current_phase).toBe("reviewer");
+    expect(state.status).toBe("awaiting_approval");
+
+    // AC: mockPrompt called: developer, test-writer, verifier, reviewer
+    expect(mockPrompt).toHaveBeenCalledTimes(4);
+  });
+
+  test("t-4: TestWriter returning blocked: causes escalation to architect", async () => {
+    const { runCanonicalTests } = require("./just");
+    const mockCanonicalTests = runCanonicalTests as jest.Mock;
+
+    stateManager.update({
+      current_phase: "developer",
+      status: "running",
+      history: [
+        {
+          phase: "architect",
+          model: "gpt5.1",
+          status: "success",
+          outputs: "# Tickets\n\n## [ ] t-1: Test\n\nAC:\n- Test",
+        },
+      ],
+    });
+
+    // Developer succeeds, TestWriter reports blocked, then architect throws to stop loop
+    mockPrompt.mockResolvedValueOnce("developer implementation");
+    mockPrompt.mockResolvedValueOnce("blocked: missing test infrastructure");
+    mockPrompt.mockRejectedValueOnce(new Error("stop loop"));
+
+    await expect(runLoop(stateManager)).rejects.toThrow("stop loop");
+
+    const state = stateManager.load();
+
+    // AC: History has architect (prior), developer (success), test-writer (blocked), architect (failed)
+    expect(state.history![1]).toEqual(
+      expect.objectContaining({
+        phase: "developer",
+        status: "success",
+      }),
+    );
+    expect(state.history![2]).toEqual(
+      expect.objectContaining({
+        phase: "test-writer",
+        status: "blocked",
+        outputs: "blocked: missing test infrastructure",
+      }),
+    );
+
+    // AC: Deterministic checks NOT called when TestWriter blocked
+    expect(mockCanonicalTests).not.toHaveBeenCalled();
+
+    // AC: Phase escalated to architect
+    expect(state.current_phase).toBe("architect");
+  });
+
+  test("t-4: TestWriter client reuse and closure behavior", async () => {
+    const { runCanonicalTests } = require("./just");
+    const mockCanonicalTests = runCanonicalTests as jest.Mock;
+
+    stateManager.update({
+      current_phase: "developer",
+      status: "running",
+      history: [
+        {
+          phase: "architect",
+          model: "gpt5.1",
+          status: "success",
+          outputs: "# Tickets\n\n## [ ] t-1: Test\n\nAC:\n- Test",
+        },
+      ],
+    });
+
+    // Developer and TestWriter both succeed
+    mockPrompt.mockResolvedValueOnce("developer implementation");
+    mockPrompt.mockResolvedValueOnce("test-writer tests");
+    mockPrompt.mockResolvedValueOnce("verifier feedback");
+    mockPrompt.mockResolvedValueOnce("reviewer approval");
+
+    await runLoop(stateManager);
+
+    const state = stateManager.load();
+
+    // AC: TestWriter uses haiku4.5 model
+    expect(state.history![2]).toEqual(
+      expect.objectContaining({
+        phase: "test-writer",
+        model: "haiku4.5",
+      }),
+    );
+
+    // AC: Auggie.create called for test-writer phase
+    const createCalls = (Auggie.create as jest.Mock).mock.calls;
+    const testWriterCreateCall = createCalls.find((call) =>
+      call[0].model?.includes("haiku4.5"),
+    );
+    expect(testWriterCreateCall).toBeTruthy();
+  });
+
+  test("t-4: Two-strike test failure logic still intact after TestWriter insertion", async () => {
+    const { runCanonicalTests } = require("./just");
+    const mockCanonicalTests = runCanonicalTests as jest.Mock;
+
+    stateManager.update({
+      current_phase: "developer",
+      status: "running",
+      history: [
+        {
+          phase: "architect",
+          model: "gpt5.1",
+          status: "success",
+          outputs: "# Tickets\n\n## [ ] t-1: Test\n\nAC:\n- Test",
+        },
+      ],
+    });
+
+    // Developer succeeds, TestWriter succeeds, but canonical tests fail (1st strike)
+    mockPrompt.mockResolvedValueOnce("developer implementation");
+    mockPrompt.mockResolvedValueOnce("test-writer tests");
+    mockCanonicalTests.mockReturnValueOnce({
+      exitCode: 1,
+      stdout: "Test failed",
+      stderr: "",
+      command: "just test",
+      usedJust: true,
+    });
+
+    await runLoop(stateManager);
+
+    const state = stateManager.load();
+
+    // AC: After TestWriter, canonical tests run and fail
+    // AC: Stays in developer phase (1st strike)
+    expect(state.current_phase).toBe("developer");
+    expect(state.developer_test_failures).toBe(1);
+
+    // AC: History shows developer success and test-writer success
+    expect(state.history![1]).toEqual(
+      expect.objectContaining({
+        phase: "developer",
+        status: "success",
+      }),
+    );
+    expect(state.history![2]).toEqual(
+      expect.objectContaining({
+        phase: "test-writer",
+        status: "success",
+      }),
+    );
+
+    // AC: Additional blocked entry for test failure
+    const testBlockedEntry = state.history!.find(
+      (h) => h.phase === "developer" && h.status === "blocked",
+    );
+    expect(testBlockedEntry).toBeDefined();
   });
 });

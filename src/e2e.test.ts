@@ -435,19 +435,20 @@ describe("End-to-End Workflow Harness", () => {
     let reviewerInstruction = "";
     (Auggie.create as jest.Mock).mockResolvedValue({
       prompt: jest.fn().mockImplementation((instruction: string) => {
-        if (callCount === 3) {
-          // reviewer phase (0: architect, 1: developer, 2: verifier, 3: reviewer)
+        if (callCount === 4) {
+          // reviewer phase (0: architect, 1: developer, 2: test-writer, 3: verifier, 4: reviewer)
           reviewerInstruction = instruction;
         }
         callCount++;
         const outputs = [
           "# Tickets\n\n## [ ] t-1: Sample\n\nAC:\n- Sample",
           "mocked developer response",
+          "mocked test-writer response",
           "mocked verifier response",
           "mocked reviewer response",
         ];
         return Promise.resolve(
-          outputs[Math.min(callCount - 1, 3)] || "response",
+          outputs[Math.min(callCount - 1, 4)] || "response",
         );
       }),
       close: jest.fn().mockResolvedValue(undefined),
@@ -472,18 +473,20 @@ describe("End-to-End Workflow Harness", () => {
     let reviewerInstruction = "";
     (Auggie.create as jest.Mock).mockResolvedValue({
       prompt: jest.fn().mockImplementation((instruction: string) => {
-        if (callCount === 3) {
+        if (callCount === 4) {
+          // reviewer phase (0: architect, 1: developer, 2: test-writer, 3: verifier, 4: reviewer)
           reviewerInstruction = instruction;
         }
         callCount++;
         const outputs = [
           "# Tickets\n\n## [ ] t-1: Test\n\nAC:\n- test",
           "mocked developer response",
+          "mocked test-writer response",
           "mocked verifier response",
           "mocked reviewer response",
         ];
         return Promise.resolve(
-          outputs[Math.min(callCount - 1, 3)] || "response",
+          outputs[Math.min(callCount - 1, 4)] || "response",
         );
       }),
       close: jest.fn().mockResolvedValue(undefined),

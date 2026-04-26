@@ -20,12 +20,26 @@ next_skills:
 
 Read `.agent/notes/architect.md` for context (note out-of-scope items).
 
-Read `.agent/tickets.md`. Find first unchecked `[ ]` ticket, announce it, begin immediately.
+Read `.agent/dev-tickets.md`. Find first unchecked `[ ]` ticket, announce it, begin immediately.
 
 - No tickets file → stop: "No tickets found. Run architect first."
 - All checked → stop: "All done. Time for reviewer."
 
 Don't wait for confirmation — start the TDD cycle now.
+
+## Ephemeral vs. Durable Tests
+
+**Ephemeral TDD tests** (e.g., `*.dev.test.ts`):
+- Developer-owned, temporary, created during TDD cycle
+- Expected to be pruned by Verifier
+- Focus on driving implementation, not final regression protection
+- Use pattern: `describe("...", () => { test("", () => { ... }) })` with `.dev.test.ts` extension
+
+**Durable tests** (normal `*.test.ts` pattern):
+- Long-lived regression tests
+- Not auto-deleted; survive refactoring
+- Written by Developer for final AC coverage and by TestWriter for behavior-focused regression tests
+- Focus on external behavior, API contracts, not implementation details
 
 ## Persona
 
@@ -46,7 +60,7 @@ No production code without a failing test first. If AC can't be expressed as a t
 7. Refactor if needed, stay green
 8. Repeat for remaining AC items
 9. Full suite — nothing regressed
-10. Mark the ticket `[x]` in `.agent/tickets.md`
+10. Mark the ticket `[x]` in `.agent/dev-tickets.md`
 
 After your implementation, the workflow will run deterministic format and lint checks. Any issues found will be surfaced and must be addressed in subsequent iterations.
 
@@ -55,7 +69,7 @@ After your implementation, the workflow will run deterministic format and lint c
 - All AC items have passing tests
 - Full test suite passes
 - No production code without test coverage
-- Ticket marked `[x]` in `.agent/tickets.md`
+- Ticket marked `[x]` in `.agent/dev-tickets.md`
 - Code is expected to pass deterministic format/lint checks (any issues will be surfaced and must be addressed in follow-up iterations)
 
 ## Deterministic Format and Lint
@@ -87,11 +101,16 @@ The goal is behavior-focused test coverage that survives refactoring.
 
 ## Mikado Escalation
 
-When a ticket can't be completed because something is missing:
+When a ticket can't be completed because something is missing, escalate to Architect with a structured report:
 
 1. **Revert everything.** Leave codebase identical to before starting.
-2. Add to `.agent/tickets.md`: `blocked: <what's missing and why>`
-3. End the session. Don't work around it. Don't stub and proceed.
+2. Start your reply with a single-line prefix: `blocked: <short summary>`
+3. Follow with a `## Blocked ticket` section that:
+   - Names the ticket id (e.g., `t-5`) and file(s) involved
+   - Briefly describes what was attempted before blocking
+4. Include a `## What is missing` subsection listing concrete prerequisites or decisions needed from Architect (e.g., missing API, unclear AC, required refactor)
+5. Update the blocked ticket's status in `.agent/dev-tickets.md` with `blocked: <reason>` notation
+6. End the session. Don't work around it. Don't stub and proceed.
 
 ## Pushback
 

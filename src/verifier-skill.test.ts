@@ -1,18 +1,10 @@
-import * as fs from "fs";
-import * as path from "path";
+import { loadSkillContent } from "./skill-markdown-test-utils";
 
 describe("Verifier skill file structure and parsing (t-3)", () => {
   let skillContent: string;
 
   beforeEach(() => {
-    const skillPath = path.join(__dirname, "..", "skills", "verifier.md");
-    expect(fs.existsSync(skillPath)).toBe(true);
-    skillContent = fs.readFileSync(skillPath, "utf-8");
-  });
-
-  test("verifier.md exists and is readable", () => {
-    expect(skillContent).toBeTruthy();
-    expect(skillContent.length).toBeGreaterThan(0);
+    skillContent = loadSkillContent("verifier");
   });
 
   test("verifier.md has valid YAML frontmatter", () => {
@@ -75,8 +67,9 @@ describe("Verifier skill file structure and parsing (t-3)", () => {
     expect(skillContent).toMatch(/Changes made/);
   });
 
-  test("verifier.md content includes 'Recommendations for Developer/Architect' section", () => {
-    expect(skillContent).toMatch(/Recommendations for Developer\/Architect/);
+  test("verifier.md content includes 'Recommendations for Developer and TestWriter' sections", () => {
+    expect(skillContent).toMatch(/Recommendations for Developer/);
+    expect(skillContent).toMatch(/Recommendations for TestWriter/);
   });
 
   test("verifier.md mentions deterministic artifacts", () => {
@@ -93,5 +86,19 @@ describe("Verifier skill file structure and parsing (t-3)", () => {
     expect(skillContent).toMatch(/Subtract-First Cleanup/);
     expect(skillContent).toMatch(/Remove low-value tests/i);
     expect(skillContent).toMatch(/Remove or simplify low-value comments/i);
+  });
+
+  test("verifier.md explicitly mentions that Verifier does not directly edit ticket files", () => {
+    // Verifier should provide recommendations, not edit tickets directly
+    expect(skillContent).toMatch(
+      /does not.*directly edit.*\.agent\/dev-tickets\.md|does not.*directly edit.*\.agent\/test-tickets\.md/i,
+    );
+  });
+
+  test("verifier.md instructs Verifier to provide recommendations for Architect to turn into tickets", () => {
+    // Verifier's role is to recommend, not to create tickets
+    expect(skillContent).toMatch(
+      /provides.*recommendations.*Architect|recommendations.*turn into tickets/i,
+    );
   });
 });

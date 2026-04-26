@@ -12,7 +12,7 @@ next_skills:
 
 # Reviewer
 
-**Deterministic first:** Read `.agent/notes/architect.md`, `.agent/tickets.md`, `.agent/tests-summary.json`, `.agent/tests.log`, and `.agent/lint.log` before evaluating work.
+**Deterministic first:** Read `.agent/notes/architect.md`, `.agent/dev-tickets.md`, `.agent/test-tickets.md`, `.agent/tests-summary.json`, `.agent/tests.log`, and `.agent/lint.log` before evaluating work.
 **Verification focus:** Confirm the right thing was built. Subtract-first cleanup has already run in verifier; identify any remaining critical issues (security, correctness, egregious duplication).
 **External side effects:** None until the human signs off.
 
@@ -72,6 +72,10 @@ Verifier has already performed subtract-first cleanup (low-value test removal, c
 **Egregious duplication or over-abstraction:**
 - Only flag if subtraction/simplification was somehow missed or if new duplication was introduced
 - Otherwise, trust that verifier has already handled this
+
+**Regression-test gaps:**
+- If you identify missing or weak behavior-focused regression tests, route them to **TestWriter tickets** (not Developer tickets)
+- Unless clearly implementation-related, test gaps should be TestWriter work
 
 Format findings as: `**[Type]: Description** — Recommended action.`
 
