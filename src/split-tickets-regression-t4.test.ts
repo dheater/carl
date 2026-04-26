@@ -46,7 +46,10 @@ describe("t-4: Durable regression tests for split tickets (no .agent/tickets.md)
       expect(readmeContent).toMatch(
         /Developer.*TestWriter|TestWriter.*Developer/i,
       );
-      expect(readmeContent).toMatch(/context window/i);
+      // README now documents cross-phase coordination via files and history, not context window
+      expect(readmeContent).toMatch(
+        /\.agent\/dev-tickets\.md|\.agent\/test-tickets\.md/i,
+      );
     });
   });
 

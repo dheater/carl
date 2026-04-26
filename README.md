@@ -52,7 +52,13 @@ architect → developer → verifier → reviewer
 
 At the architect gate, approval only hands off to developer after the latest architect output looks like a real slice plan. If architect is still asking questions or running scope challenge, the current buffer is fed back to architect and the workflow stays in architect.
 
-On architect approval, the architect's output is split into `.agent/dev-tickets.md` and `.agent/test-tickets.md` for developer and TestWriter execution, and indexed into a persistent workflow context. **Developer and TestWriter do not receive that context window** — they read disk artifacts only (`.agent/dev-tickets.md`, `.agent/test-tickets.md`, `.agent/notes/architect.md`, lint/test logs). **Reviewer reads from and writes to that same context window**, so it can validate what was planned against what was built, and architect picks up the reviewer's findings at the start of the next sprint.
+Cross-phase coordination is managed via:
+- **`.agent/dev-tickets.md` and `.agent/test-tickets.md`** — Ticket lists created by architect, read by developer and TestWriter
+- **`.agent/notes/*.md`** — Phase outputs (architect.md, reviewer.md, etc.)
+- **`state.history`** — Deterministic run history with all phase outputs and status
+- **Lint/test logs** — `.agent/lint.log`, `.agent/tests-summary.json`, `.agent/tests.log`
+
+Developer reads architect tickets from disk; reviewer reads prior architecture from state history.
 
 ## Layout
 

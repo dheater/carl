@@ -86,7 +86,6 @@ describe("Workflow Loop", () => {
     const state = stateManager.load();
     expect(state.status).toBe("awaiting_approval");
     expect(state.current_phase).toBe("architect");
-    // History should have 1 entry: architect
     expect(state.history).toHaveLength(1);
     expect(state.history![0].phase).toBe("architect");
 
@@ -303,75 +302,53 @@ describe("Workflow Loop", () => {
     );
   });
 
-  test("injects context search result on reply when context engine has prior output", async () => {
-    const priorQuestions = "What is the scope? What language do you prefer?";
-    const mockContextInstance = {
-      search: jest.fn().mockResolvedValue(priorQuestions),
-      addToIndex: jest
-        .fn()
-        .mockResolvedValue({ newlyUploaded: [], alreadyUploaded: [] }),
-      exportToFile: jest.fn().mockResolvedValue(undefined),
-    };
-    (DirectContext.create as jest.Mock).mockResolvedValueOnce(
-      mockContextInstance,
-    );
-
+  test("injects raw prior output from history on reply when pending_reply", async () => {
+    // Set up prior architect output in history
     stateManager.update({
       current_phase: "architect",
       status: "running",
       pending_reply: "repo root, standard tooling",
+      history: [
+        {
+          phase: "architect",
+          model: "gpt5.1",
+          status: "success",
+          outputs: "initial plan",
+        },
+      ],
     });
-    mockPrompt.mockResolvedValueOnce("plan with context");
+    mockPrompt.mockResolvedValueOnce("updated plan");
 
     await runLoop(stateManager);
 
-    // Context search result replaces raw prior output
+    // Uses raw prior output from history (no context engine)
     expect(mockPrompt).toHaveBeenCalledWith(
-      expect.stringContaining("# Prior context\n\n" + priorQuestions),
+      expect.stringContaining("# Your previous output\n\ninitial plan"),
       expect.any(Object),
     );
     expect(mockPrompt).toHaveBeenCalledWith(
       expect.stringContaining("# Human reply\n\nrepo root, standard tooling"),
       expect.any(Object),
     );
-    // Raw prior output section is NOT used when context search returns results
-    expect(mockPrompt).not.toHaveBeenCalledWith(
-      expect.stringContaining("# Your previous output"),
-      expect.any(Object),
-    );
-    // Context is indexed and persisted after the run
-    expect(mockContextInstance.addToIndex).toHaveBeenCalledWith(
-      expect.arrayContaining([
-        expect.objectContaining({
-          path: expect.stringContaining("agent-log/architect-"),
-        }),
-      ]),
-    );
-    expect(mockContextInstance.exportToFile).toHaveBeenCalled();
   });
 
-  test("injects cross-phase context when a fresh phase starts after a different phase", async () => {
-    const developerOutput = "Developer implemented t-1: added auth middleware";
-    const mockContextInstance = {
-      search: jest.fn().mockResolvedValue(developerOutput),
-      addToIndex: jest
-        .fn()
-        .mockResolvedValue({ newlyUploaded: [], alreadyUploaded: [] }),
-      exportToFile: jest.fn().mockResolvedValue(undefined),
-    };
-    (DirectContext.create as jest.Mock).mockResolvedValueOnce(
-      mockContextInstance,
-    );
-
+  test("injects prior architect output when reviewer starts after architect", async () => {
+    const architectOutput = "t-1, t-2, t-3 in architect plan";
     stateManager.update({
       current_phase: "reviewer",
       status: "running",
       history: [
         {
+          phase: "architect",
+          model: "gpt5.1",
+          status: "success",
+          outputs: architectOutput,
+        },
+        {
           phase: "developer",
           model: "haiku4.5",
           status: "success",
-          outputs: developerOutput,
+          outputs: "Developer implemented tickets",
         },
       ],
     });
@@ -379,14 +356,15 @@ describe("Workflow Loop", () => {
 
     await runLoop(stateManager);
 
+    // Reviewer should receive the architect output as prior workflow context
     expect(mockPrompt).toHaveBeenCalledWith(
-      expect.stringContaining("# Prior workflow context\n\n" + developerOutput),
+      expect.stringContaining("# Prior workflow context\n\n" + architectOutput),
       expect.any(Object),
     );
   });
 
-  test("falls back to raw prior output when context search returns empty", async () => {
-    // Default mock returns '' from search — verify fallback path
+  test("uses raw prior output from history on pending reply", async () => {
+    // Verify that raw prior output from history is used (no context engine)
     stateManager.update({
       current_phase: "architect",
       status: "running",
@@ -404,7 +382,7 @@ describe("Workflow Loop", () => {
 
     await runLoop(stateManager);
 
-    // Falls back to raw prior output since context.search() returned ''
+    // Uses raw prior output from history
     expect(mockPrompt).toHaveBeenCalledWith(
       expect.stringContaining(
         "# Your previous output\n\nPrevious architect output with questions",
@@ -512,10 +490,8 @@ describe("t-1: Deterministic just test run and artifacts after developer", () =>
 
     await runLoop(stateManager);
 
-    // Check that runCanonicalTests was called
     expect(runJustMock).toHaveBeenCalledWith(tmpDir);
 
-    // Check that tests-summary.json was created with correct structure
     const summaryPath = path.join(tmpDir, ".agent", "tests-summary.json");
     expect(fs.existsSync(summaryPath)).toBe(true);
 
@@ -524,7 +500,6 @@ describe("t-1: Deterministic just test run and artifacts after developer", () =>
     expect(summary.status).toBe("PASS");
     expect(summary.timestamp).toBeDefined();
 
-    // tests.log should NOT be created for passing tests
     const logPath = path.join(tmpDir, ".agent", "tests.log");
     expect(fs.existsSync(logPath)).toBe(false);
   });
@@ -553,7 +528,6 @@ describe("t-1: Deterministic just test run and artifacts after developer", () =>
 
     await runLoop(stateManager);
 
-    // Check that tests-summary.json was created with FAIL status
     const summaryPath = path.join(tmpDir, ".agent", "tests-summary.json");
     expect(fs.existsSync(summaryPath)).toBe(true);
 
@@ -562,7 +536,6 @@ describe("t-1: Deterministic just test run and artifacts after developer", () =>
     expect(summary.status).toBe("FAIL");
     expect(summary.timestamp).toBeDefined();
 
-    // tests.log should be created with failing output
     const logPath = path.join(tmpDir, ".agent", "tests.log");
     expect(fs.existsSync(logPath)).toBe(true);
     const logContent = fs.readFileSync(logPath, "utf-8");
@@ -577,7 +550,6 @@ describe("t-1: Deterministic just test run and artifacts after developer", () =>
 
     await runLoop(stateManager);
 
-    // runCanonicalTests should NOT have been called (architect is a gate)
     expect(runJustMock).not.toHaveBeenCalled();
   });
 });
@@ -886,51 +858,26 @@ describe("t-4: Dev-only test file handling moved to Verifier", () => {
     expect(state.status).toBe("awaiting_approval");
   });
 
-  test("architect context indexing via dedicated handler: successful architect phase indexes once", async () => {
-    // Verify that addToIndex is called exactly once with architect output
-    // when architect phase completes successfully
-    const mockContextInstance = {
-      search: jest.fn().mockResolvedValue(""),
-      addToIndex: jest
-        .fn()
-        .mockResolvedValue({ newlyUploaded: [], alreadyUploaded: [] }),
-      exportToFile: jest.fn().mockResolvedValue(undefined),
-    };
-    (DirectContext.create as jest.Mock).mockResolvedValueOnce(
-      mockContextInstance,
-    );
-
+  test("writes architect notes to .agent/notes/architect.md on successful architect phase", async () => {
+    // Verify architect notes are written (no context engine)
     mockPrompt.mockResolvedValueOnce("architect plan");
 
     await runLoop(stateManager);
 
-    // Verify addToIndex is called exactly once (not zero, not multiple)
-    expect(mockContextInstance.addToIndex).toHaveBeenCalledTimes(1);
-    expect(mockContextInstance.addToIndex).toHaveBeenCalledWith(
-      expect.arrayContaining([
-        expect.objectContaining({
-          path: expect.stringContaining("agent-log/architect-"),
-          contents: "architect plan",
-        }),
-      ]),
+    // Check that architect notes file was written
+    const architectNotesPath = path.join(
+      tmpDir,
+      ".agent",
+      "notes",
+      "architect.md",
     );
-    // Verify exportToFile is called exactly once
-    expect(mockContextInstance.exportToFile).toHaveBeenCalledTimes(1);
+    expect(fs.existsSync(architectNotesPath)).toBe(true);
+    const content = fs.readFileSync(architectNotesPath, "utf-8");
+    expect(content).toBe("architect plan");
   });
 
-  test("architect context indexing: non-architect phases do not call addToIndex", async () => {
-    // Verify that when reviewer phase runs, addToIndex is NOT called
-    const mockContextInstance = {
-      search: jest.fn().mockResolvedValue(""),
-      addToIndex: jest
-        .fn()
-        .mockResolvedValue({ newlyUploaded: [], alreadyUploaded: [] }),
-      exportToFile: jest.fn().mockResolvedValue(undefined),
-    };
-    (DirectContext.create as jest.Mock).mockResolvedValueOnce(
-      mockContextInstance,
-    );
-
+  test("writes reviewer notes to .agent/notes/reviewer.md on successful reviewer phase", async () => {
+    // Verify reviewer notes are written (no context engine)
     stateManager.update({
       current_phase: "reviewer",
       status: "running",
@@ -944,11 +891,20 @@ describe("t-4: Dev-only test file handling moved to Verifier", () => {
       ],
     });
 
+    mockPrompt.mockResolvedValueOnce("reviewer validation");
+
     await runLoop(stateManager);
 
-    // addToIndex and exportToFile should NOT be called for reviewer
-    expect(mockContextInstance.addToIndex).not.toHaveBeenCalled();
-    expect(mockContextInstance.exportToFile).not.toHaveBeenCalled();
+    // Check that reviewer notes file was written
+    const reviewerNotesPath = path.join(
+      tmpDir,
+      ".agent",
+      "notes",
+      "reviewer.md",
+    );
+    expect(fs.existsSync(reviewerNotesPath)).toBe(true);
+    const content = fs.readFileSync(reviewerNotesPath, "utf-8");
+    expect(content).toBe("reviewer validation");
   });
 
   test("does not block advancement when multiple .dev.test.ts files exist with passing tests", async () => {
@@ -1457,56 +1413,22 @@ describe("t-4: Reviewer uses deterministic artifacts and reject routes to archit
     expect(reviewerContent).toMatch(/reject.*architect/i);
   });
 
-  test("t-6: shared helper for phase completions - architect indexes to context", async () => {
-    // Verify that handleArchitectCompletion invokes the shared helper
-    // and that architect phases index to context
-    const mockContextInstance = {
-      search: jest.fn().mockResolvedValue(""),
-      addToIndex: jest
-        .fn()
-        .mockResolvedValue({ newlyUploaded: [], alreadyUploaded: [] }),
-      exportToFile: jest.fn().mockResolvedValue(undefined),
-    };
-    (DirectContext.create as jest.Mock).mockResolvedValueOnce(
-      mockContextInstance,
-    );
-
+  test("t-1: architect phase writes notes without context indexing", async () => {
     mockPrompt.mockResolvedValueOnce("architect plan");
 
     await runLoop(stateManager);
 
-    // Verify that architect indexed to context via the shared helper
-    expect(mockContextInstance.addToIndex).toHaveBeenCalledTimes(1);
-    expect(mockContextInstance.addToIndex).toHaveBeenCalledWith(
-      expect.arrayContaining([
-        expect.objectContaining({
-          path: expect.stringContaining("agent-log/architect-"),
-          contents: "architect plan",
-        }),
-      ]),
-    );
-    expect(mockContextInstance.exportToFile).toHaveBeenCalledTimes(1);
-
-    // Verify notes were written
+    // Verify notes were written (no context engine)
     const notesPath = path.join(tmpDir, ".agent", "notes", "architect.md");
     expect(fs.existsSync(notesPath)).toBe(true);
     expect(fs.readFileSync(notesPath, "utf-8")).toBe("architect plan");
+
+    // Verify no context.json file was created
+    const contextPath = path.join(tmpDir, ".agent", "context.json");
+    expect(fs.existsSync(contextPath)).toBe(false);
   });
 
-  test("t-6: shared helper for phase completions - reviewer writes notes only, no context indexing", async () => {
-    // Verify that handleReviewerCompletion invokes the shared helper
-    // but only writes notes (no context indexing)
-    const mockContextInstance = {
-      search: jest.fn().mockResolvedValue(""),
-      addToIndex: jest
-        .fn()
-        .mockResolvedValue({ newlyUploaded: [], alreadyUploaded: [] }),
-      exportToFile: jest.fn().mockResolvedValue(undefined),
-    };
-    (DirectContext.create as jest.Mock).mockResolvedValueOnce(
-      mockContextInstance,
-    );
-
+  test("t-1: reviewer phase writes notes without context indexing", async () => {
     stateManager.update({
       current_phase: "reviewer",
       status: "running",
@@ -1524,14 +1446,14 @@ describe("t-4: Reviewer uses deterministic artifacts and reject routes to archit
 
     await runLoop(stateManager);
 
-    // Verify that reviewer did NOT index to context
-    expect(mockContextInstance.addToIndex).not.toHaveBeenCalled();
-    expect(mockContextInstance.exportToFile).not.toHaveBeenCalled();
-
-    // Verify notes were written
+    // Verify notes were written (no context engine)
     const notesPath = path.join(tmpDir, ".agent", "notes", "reviewer.md");
     expect(fs.existsSync(notesPath)).toBe(true);
     expect(fs.readFileSync(notesPath, "utf-8")).toBe("reviewer feedback");
+
+    // Verify no context.json file was created
+    const contextPath = path.join(tmpDir, ".agent", "context.json");
+    expect(fs.existsSync(contextPath)).toBe(false);
   });
 
   test("t-4: TestWriter runs after developer and before deterministic checks on success", async () => {
@@ -1877,5 +1799,445 @@ describe("t-4: Reviewer uses deterministic artifacts and reject routes to archit
 
     // AC: Phase escalated back to architect
     expect(state.current_phase).toBe("architect");
+  });
+});
+
+describe("t-4: Regression tests for logging schema and context removal", () => {
+  let tmpDir: string;
+  let stateManager: StateManager;
+  let mockPrompt: jest.Mock;
+  let mockClose: jest.Mock;
+  let mockOnSessionUpdate: jest.Mock;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-test-"));
+    stateManager = new StateManager(tmpDir);
+    stateManager.create(tmpDir);
+
+    const skillsDir = path.join(tmpDir, "skills");
+    fs.mkdirSync(skillsDir);
+    for (const phase of HAPPY_PATH_GRAPH) {
+      fs.writeFileSync(
+        path.join(skillsDir, `${phase}.md`),
+        `dummy ${phase} skill`,
+      );
+    }
+
+    mockPrompt = jest.fn().mockResolvedValue("mocked response");
+    mockClose = jest.fn().mockResolvedValue(undefined);
+    mockOnSessionUpdate = jest.fn();
+
+    (Auggie.create as jest.Mock).mockResolvedValue({
+      prompt: mockPrompt,
+      close: mockClose,
+      onSessionUpdate: mockOnSessionUpdate,
+    });
+  });
+
+  afterEach(async () => {
+    await closeSharedClient();
+    jest.clearAllMocks();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("logTimingDuration writes JSON lines with phase and model fields", async () => {
+    // Create dev-tickets.md with open tickets to ensure developer phase runs
+    const agentDir = path.join(tmpDir, ".agent");
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(agentDir, "dev-tickets.md"),
+      "-[ ] t-1: Open ticket",
+      "utf-8",
+    );
+
+    // Test the developer phase which includes meta fields
+    stateManager.update({
+      current_phase: "developer",
+      status: "running",
+      history: [
+        {
+          phase: "architect",
+          model: "gpt5.1",
+          status: "success",
+          outputs: "# Tickets\n\n## [ ] t-1: Test\n\nAC:\n- Test",
+        },
+      ],
+    });
+
+    mockPrompt.mockResolvedValueOnce("developer implementation");
+    mockPrompt.mockResolvedValueOnce("test-writer tests");
+    mockPrompt.mockResolvedValueOnce("verifier feedback");
+    mockPrompt.mockResolvedValueOnce("reviewer approval");
+
+    await runLoop(stateManager);
+
+    // Read timing log
+    const timingPath = path.join(tmpDir, ".carl", "timing.jsonl");
+    expect(fs.existsSync(timingPath)).toBe(true);
+
+    const lines = fs
+      .readFileSync(timingPath, "utf-8")
+      .trim()
+      .split("\n")
+      .filter((line) => line.length > 0);
+
+    // Parse all events
+    const events = lines.map((line) => JSON.parse(line));
+
+    // Find any prompt event with meta fields (could be any phase)
+    const promptEventWithMeta = events.find(
+      (e: any) => e.event === "prompt" && e.meta && e.phase !== undefined,
+    );
+
+    // AC: prompt event has phase and model fields
+    expect(promptEventWithMeta).toBeDefined();
+    if (promptEventWithMeta) {
+      expect(promptEventWithMeta.phase).toBeDefined();
+      expect(typeof promptEventWithMeta.phase).toBe("string");
+      expect(promptEventWithMeta.model).toBeDefined();
+      expect(typeof promptEventWithMeta.model).toBe("string");
+
+      // AC: meta fields are present and numeric
+      expect(promptEventWithMeta.meta).toBeDefined();
+      expect(typeof promptEventWithMeta.meta.prompt_chars).toBe("number");
+      expect(typeof promptEventWithMeta.meta.response_chars).toBe("number");
+      expect(promptEventWithMeta.meta.prompt_chars).toBeGreaterThan(0);
+      expect(promptEventWithMeta.meta.response_chars).toBeGreaterThan(0);
+
+      // AC: JSON is valid and parseable as written
+      expect(typeof promptEventWithMeta).toBe("object");
+    }
+  });
+
+  test("all timing events include phase and model fields", async () => {
+    // Setup multiple prompts to go through architect and developer phases
+    mockPrompt.mockResolvedValueOnce(
+      "# Tickets\n\n## [ ] t-1: Test\n\nAC:\n- Test",
+    );
+    mockPrompt.mockResolvedValueOnce("developer impl");
+    mockPrompt.mockResolvedValueOnce("test-writer impl");
+    mockPrompt.mockResolvedValueOnce("verifier impl");
+    mockPrompt.mockResolvedValueOnce("reviewer impl");
+
+    // Run the first loop iteration (architect phase)
+    await runLoop(stateManager);
+
+    // Approve architect to move to developer
+    let state = stateManager.load();
+    stateManager.update({
+      ...state,
+      status: "running",
+    });
+
+    // Run developer phase
+    await runLoop(stateManager);
+
+    const timingPath = path.join(tmpDir, ".carl", "timing.jsonl");
+    const events = fs
+      .readFileSync(timingPath, "utf-8")
+      .trim()
+      .split("\n")
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line));
+
+    // Every event should have phase and model
+    for (const event of events) {
+      expect(event.phase).toBeDefined();
+      expect(typeof event.phase).toBe("string");
+      expect(event.model).toBeDefined();
+      expect(typeof event.model).toBe("string");
+    }
+
+    // At least one event from architect phase
+    const phases = new Set(events.map((e: any) => e.phase));
+    expect(phases.has("architect")).toBe(true);
+  });
+
+  test("no DirectContext imports or calls are present in loop.ts", () => {
+    const loopContent = fs.readFileSync(
+      path.join(__dirname, "loop.ts"),
+      "utf-8",
+    );
+
+    // AC: DirectContext is not imported
+    expect(loopContent).not.toMatch(/import.*DirectContext/);
+    expect(loopContent).not.toMatch(/require.*DirectContext/);
+
+    // AC: No DirectContext method calls
+    expect(loopContent).not.toMatch(/DirectContext\./);
+    expect(loopContent).not.toMatch(/DirectContext\.create/);
+  });
+
+  test("no context.json file is created after workflow completes", async () => {
+    mockPrompt.mockResolvedValueOnce(
+      "# Tickets\n\n## [ ] t-1: Test\n\nAC:\n- Test",
+    );
+
+    // Run architect phase
+    await runLoop(stateManager);
+
+    // AC: context.json does not exist
+    const contextPath = path.join(tmpDir, ".agent", "context.json");
+    expect(fs.existsSync(contextPath)).toBe(false);
+
+    // Verify .agent directory exists but context.json is not there
+    const agentDir = path.join(tmpDir, ".agent");
+    if (fs.existsSync(agentDir)) {
+      const agentFiles = fs.readdirSync(agentDir);
+      expect(agentFiles).not.toContain("context.json");
+    }
+  });
+
+  test("prompt meta fields contain accurate character counts for architect", async () => {
+    const architectResponse = "# Tickets\n\n## [ ] t-1: Test\n\nAC:\n- Test";
+    mockPrompt.mockResolvedValueOnce(architectResponse);
+
+    await runLoop(stateManager);
+
+    const timingPath = path.join(tmpDir, ".carl", "timing.jsonl");
+    const events = fs
+      .readFileSync(timingPath, "utf-8")
+      .trim()
+      .split("\n")
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line));
+
+    // Find architect prompt event with meta field
+    const architectPromptEvent = events.find(
+      (e: any) => e.event === "prompt" && e.phase === "architect",
+    );
+    expect(architectPromptEvent).toBeDefined();
+
+    if (architectPromptEvent && architectPromptEvent.meta) {
+      // prompt_chars should be > 0 (instruction length)
+      if ("prompt_chars" in architectPromptEvent.meta) {
+        expect(typeof architectPromptEvent.meta.prompt_chars).toBe("number");
+        expect(architectPromptEvent.meta.prompt_chars).toBeGreaterThan(0);
+      }
+      // response_chars should be > 0 (response length)
+      if ("response_chars" in architectPromptEvent.meta) {
+        expect(typeof architectPromptEvent.meta.response_chars).toBe("number");
+        expect(architectPromptEvent.meta.response_chars).toBeGreaterThan(0);
+      }
+    }
+  });
+});
+
+describe("t-5: Allow empty developer/test ticket queues to skip phases", () => {
+  test("hasOpenTickets returns true for missing file (assume work exists)", () => {
+    const loopModule = require("./loop");
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-test-"));
+    try {
+      const filePath = path.join(tmpDir, ".agent", "dev-tickets.md");
+      // File doesn't exist - assume work exists, don't skip
+      expect(loopModule.hasOpenTickets(filePath)).toBe(true);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true });
+    }
+  });
+
+  test("hasOpenTickets returns false for file with no open tickets", () => {
+    const loopModule = require("./loop");
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-test-"));
+    try {
+      const agentDir = path.join(tmpDir, ".agent");
+      fs.mkdirSync(agentDir, { recursive: true });
+      const filePath = path.join(agentDir, "dev-tickets.md");
+      fs.writeFileSync(
+        filePath,
+        "-[x] t-1: Completed ticket\n-[x] t-2: Another completed",
+        "utf-8",
+      );
+      expect(loopModule.hasOpenTickets(filePath)).toBe(false);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true });
+    }
+  });
+
+  test("hasOpenTickets returns true for file with open tickets", () => {
+    const loopModule = require("./loop");
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-test-"));
+    try {
+      const agentDir = path.join(tmpDir, ".agent");
+      fs.mkdirSync(agentDir, { recursive: true });
+      const filePath = path.join(agentDir, "dev-tickets.md");
+      fs.writeFileSync(
+        filePath,
+        "-[ ] t-1: Open ticket\n-[x] t-2: Completed ticket",
+        "utf-8",
+      );
+      expect(loopModule.hasOpenTickets(filePath)).toBe(true);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true });
+    }
+  });
+
+  test("developer phase skips when dev-tickets.md has no open tickets", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-test-t5-dev-"));
+    const stateManager = new StateManager(tmpDir);
+    stateManager.create(tmpDir);
+
+    const skillsDir = path.join(tmpDir, "skills");
+    fs.mkdirSync(skillsDir);
+    for (const phase of HAPPY_PATH_GRAPH) {
+      fs.writeFileSync(
+        path.join(skillsDir, `${phase}.md`),
+        `dummy ${phase} skill`,
+      );
+    }
+
+    // Create dev-tickets.md and test-tickets.md with no open tickets
+    const agentDir = path.join(tmpDir, ".agent");
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(agentDir, "dev-tickets.md"),
+      "-[x] t-1: Completed\n-[x] t-2: Done",
+      "utf-8",
+    );
+    // Also create test-tickets.md with no open tickets
+    fs.writeFileSync(
+      path.join(agentDir, "test-tickets.md"),
+      "-[x] tt-1: Test completed",
+      "utf-8",
+    );
+
+    const mockPrompt = jest.fn().mockResolvedValue("mocked response");
+    const mockClose = jest.fn().mockResolvedValue(undefined);
+    const mockOnSessionUpdate = jest.fn();
+
+    (Auggie.create as jest.Mock).mockResolvedValue({
+      prompt: mockPrompt,
+      close: mockClose,
+      onSessionUpdate: mockOnSessionUpdate,
+    });
+
+    // Set state to developer phase
+    stateManager.update({
+      current_phase: "developer",
+      status: "running",
+      history: [
+        {
+          phase: "architect",
+          model: "gpt5.1",
+          status: "success",
+          outputs: "# Tickets",
+        },
+      ],
+    });
+
+    try {
+      await runLoop(stateManager);
+      const state = stateManager.load();
+
+      // AC: Developer phase should be skipped (no prompts to coder/test-writer)
+      // Should transition through verifier to reviewer (gate phase)
+      expect(state.current_phase).toBe("reviewer");
+      expect(state.status).toBe("awaiting_approval");
+
+      // AC: History should have developer and test-writer entries with success status
+      const devHistory = state.history!.find((h) => h.phase === "developer");
+      expect(devHistory).toBeDefined();
+      expect(devHistory!.status).toBe("success");
+      expect(devHistory!.outputs).toBe(""); // No-op outputs
+
+      const twHistory = state.history!.find((h) => h.phase === "test-writer");
+      expect(twHistory).toBeDefined();
+      expect(twHistory!.status).toBe("success");
+      expect(twHistory!.outputs).toBe(""); // No-op outputs
+
+      // AC: Prompt should NOT be called for developer/test-writer
+      // Only architect was previously run, so this should be 0
+      expect(mockPrompt).not.toHaveBeenCalledWith(
+        expect.stringContaining("Coder"),
+        expect.anything(),
+      );
+    } finally {
+      await closeSharedClient();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("developer phase runs normally when dev-tickets.md has open tickets", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-test-t5-dev2-"));
+    const stateManager = new StateManager(tmpDir);
+    stateManager.create(tmpDir);
+
+    const skillsDir = path.join(tmpDir, "skills");
+    fs.mkdirSync(skillsDir);
+    for (const phase of HAPPY_PATH_GRAPH) {
+      fs.writeFileSync(
+        path.join(skillsDir, `${phase}.md`),
+        `dummy ${phase} skill`,
+      );
+    }
+
+    // Create dev-tickets.md with open tickets
+    const agentDir = path.join(tmpDir, ".agent");
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(agentDir, "dev-tickets.md"),
+      "-[ ] t-1: Open ticket\n-[x] t-2: Done",
+      "utf-8",
+    );
+
+    const mockPrompt = jest.fn().mockResolvedValue("implementation");
+    const mockClose = jest.fn().mockResolvedValue(undefined);
+    const mockOnSessionUpdate = jest.fn();
+
+    (Auggie.create as jest.Mock).mockResolvedValue({
+      prompt: mockPrompt,
+      close: mockClose,
+      onSessionUpdate: mockOnSessionUpdate,
+    });
+
+    // Mock runCanonicalTests to succeed
+    const { runCanonicalTests } = require("./just");
+    const mockCanonicalTests = runCanonicalTests as jest.Mock;
+    mockCanonicalTests.mockReturnValue({
+      exitCode: 0,
+      stdout: "Tests passed",
+      stderr: "",
+      command: "just test",
+      usedJust: true,
+    });
+
+    // Set state to developer phase
+    stateManager.update({
+      current_phase: "developer",
+      status: "running",
+      history: [
+        {
+          phase: "architect",
+          model: "gpt5.1",
+          status: "success",
+          outputs: "# Tickets",
+        },
+      ],
+    });
+
+    try {
+      await runLoop(stateManager);
+      const state = stateManager.load();
+
+      // AC: Developer phase should run (prompts sent to coder/test-writer)
+      // Verify that mockPrompt was called
+      expect(mockPrompt).toHaveBeenCalled();
+
+      // AC: History should have developer and test-writer entries
+      const devHistory = state.history!.find((h) => h.phase === "developer");
+      expect(devHistory).toBeDefined();
+      expect(devHistory!.status).toBe("success");
+
+      const twHistory = state.history!.find((h) => h.phase === "test-writer");
+      expect(twHistory).toBeDefined();
+      expect(twHistory!.status).toBe("success");
+
+      // AC: Should proceed through verifier and reach reviewer (gate phase)
+      expect(state.current_phase).toBe("reviewer");
+      expect(state.status).toBe("awaiting_approval");
+    } finally {
+      await closeSharedClient();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });

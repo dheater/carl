@@ -23,6 +23,9 @@ type TimingEvent = {
   event: "Auggie.create" | "prompt" | "phase";
   subject: string;
   duration_ms: number;
+  phase: string;
+  model: string;
+  meta?: Record<string, any>;
 };
 
 // Shared Auggie client for the current run + phase, so we can:
@@ -75,6 +78,30 @@ function loadSkillFile(name: string): string {
   return "";
 }
 
+/**
+ * Check if a ticket file has open tickets.
+ * Returns true if:
+ * - File doesn't exist (assume work exists, no skip)
+ * - File exists and contains at least one open [ ] ticket
+ * Returns false if:
+ * - File exists but contains no open [ ] tickets
+ */
+export function hasOpenTickets(ticketFilePath: string): boolean {
+  if (!fs.existsSync(ticketFilePath)) {
+    // File doesn't exist - assume work exists, don't skip
+    return true;
+  }
+
+  try {
+    const content = fs.readFileSync(ticketFilePath, "utf-8");
+    // Check for any open tickets: [ ] pattern (with optional leading -#* before it)
+    return /\[\s*\]/.test(content);
+  } catch {
+    // On read error, assume work exists, don't skip
+    return true;
+  }
+}
+
 function writeTimingEvent(workspaceRoot: string, event: TimingEvent): void {
   const timingDir = path.join(workspaceRoot, TIMING_LOG_DIR);
   if (!fs.existsSync(timingDir)) {
@@ -91,6 +118,9 @@ function logTimingDuration(
   event: TimingEvent["event"],
   subject: string,
   durationMs: number,
+  phase: string,
+  model: string,
+  meta?: Record<string, any>,
 ): void {
   writeTimingEvent(workspaceRoot, {
     timestamp: new Date().toISOString(),
@@ -98,6 +128,9 @@ function logTimingDuration(
     event,
     subject,
     duration_ms: durationMs,
+    phase,
+    model,
+    meta,
   });
   console.log(`[Timing] ${event} duration ${durationMs}ms ${subject}`);
 }
@@ -266,33 +299,14 @@ export function buildSkillInstruction(
 
 // Phases that read from and write to the shared workflow context.
 // Developer and verifier run in clean context windows with no prior workflow context injected.
-const PHASE_CONTEXT_QUERIES: Record<string, string> = {
-  architect:
-    "scope, clarifying questions, user answers, requirements, constraints",
-  reviewer: "architect plan, scope decisions, requirements, tickets",
-};
-
-async function searchContext(ctx: any, phaseName: string): Promise<string> {
-  const query =
-    PHASE_CONTEXT_QUERIES[phaseName] ?? "prior outputs, decisions, context";
-  try {
-    return (await ctx.search(query)) ?? "";
-  } catch {
-    return "";
-  }
-}
-
 /**
- * Shared helper for phase completion persistence: write notes and optionally index to context.
- * Architect phases index to context; other phases (e.g., reviewer) only write notes.
+ * Write phase notes to .agent/notes/{phaseName}.md
  */
-async function handlePhaseCompletionWithContext(
+function writePhaseNotes(
   phaseName: string,
   phaseOutput: string,
   workspaceRoot: string,
-  workflowContext: any,
-  shouldIndexToContext: boolean,
-): Promise<void> {
+): void {
   const agentDir = path.join(workspaceRoot, ".agent");
 
   // Ensure notes directory exists and write phase notes
@@ -303,59 +317,6 @@ async function handlePhaseCompletionWithContext(
 
   const notesFileName = `${phaseName}.md`;
   fs.writeFileSync(path.join(notesDir, notesFileName), phaseOutput, "utf-8");
-
-  // Only index to context for specified phases (architect only)
-  if (shouldIndexToContext && workflowContext) {
-    try {
-      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-      await workflowContext.addToIndex([
-        {
-          path: `agent-log/${phaseName}-${timestamp}.md`,
-          contents: phaseOutput,
-        },
-      ]);
-      const contextPath = path.join(agentDir, "context.json");
-      await workflowContext.exportToFile(contextPath);
-    } catch {
-      // Non-fatal — workflow continues without context persistence
-    }
-  }
-}
-
-/**
- * Handle architect-phase completion: persist architect output to notes and index to context.
- * Only called when architect phase completes successfully (not blocked).
- */
-async function handleArchitectCompletion(
-  architectOutput: string,
-  workspaceRoot: string,
-  workflowContext: any,
-): Promise<void> {
-  await handlePhaseCompletionWithContext(
-    "architect",
-    architectOutput,
-    workspaceRoot,
-    workflowContext,
-    true, // architect indexes to context
-  );
-}
-
-/**
- * Handle reviewer-phase completion: persist reviewer output to notes only.
- * Reviewer does not index to context; only notes file is written.
- */
-async function handleReviewerCompletion(
-  reviewerOutput: string,
-  workspaceRoot: string,
-  workflowContext: any,
-): Promise<void> {
-  await handlePhaseCompletionWithContext(
-    "reviewer",
-    reviewerOutput,
-    workspaceRoot,
-    workflowContext,
-    false, // reviewer does not index to context
-  );
 }
 
 /**
@@ -395,6 +356,8 @@ async function runTestWriterPhase(
       "Auggie.create",
       "test-writer/haiku4.5",
       auggleCreateDuration,
+      "test-writer",
+      "haiku4.5",
     );
     testWriterClientRunId = runId;
   }
@@ -434,6 +397,12 @@ async function runTestWriterPhase(
     "prompt",
     "test-writer/haiku4.5",
     testWriterPromptDuration,
+    "test-writer",
+    "haiku4.5",
+    {
+      prompt_chars: testWriterInstruction.length,
+      response_chars: testWriterResponse.length,
+    },
   );
 
   return testWriterResponse;
@@ -453,25 +422,9 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
     state = stateManager.update({ status: "running" });
   }
 
-  const { Auggie, DirectContext } = await import("@augmentcode/auggie-sdk");
+  const { Auggie } = await import("@augmentcode/auggie-sdk");
 
   const runId = state.run_id;
-
-  // Workflow context: persists across phases in-memory, saved to disk at .agent/context.json
-  // between sessions so agents can recover prior decisions without re-running earlier phases.
-  const contextPath = path.join(state.workspace_path, ".agent", "context.json");
-  let workflowContext: any = null;
-  try {
-    workflowContext = fs.existsSync(contextPath)
-      ? await DirectContext.importFromFile(contextPath)
-      : await DirectContext.create();
-  } catch (err: any) {
-    console.warn(
-      yellow(
-        `  [System] Context engine unavailable — ${err.message}. Falling back to inline context.`,
-      ),
-    );
-  }
 
   while (state.status === "running") {
     const phaseName = state.current_phase;
@@ -516,6 +469,8 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
         "Auggie.create",
         `${phaseName}/${model}`,
         auggleCreateDuration,
+        phaseName,
+        model,
       );
       sharedClient = client;
       sharedClientPhase = phaseName;
@@ -561,19 +516,13 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
         .find((h) => h.phase === phaseName && h.status === "success");
 
       if (state.pending_reply) {
-        const priorContext = await searchContext(workflowContext, phaseName);
-        if (priorContext) {
-          instruction += `\n\n# Prior context\n\n${priorContext}`;
-        } else if (priorOutput) {
+        if (priorOutput) {
           instruction += `\n\n# Your previous output\n\n${priorOutput.outputs}`;
         }
         instruction += `\n\n# Human reply\n\n${state.pending_reply}\n\nContinue from where you left off using this answer. Do not re-ask questions that have been answered.`;
         state = stateManager.update({ pending_reply: undefined });
       } else if (lastEntry && lastEntry.status === "rejected") {
-        const priorContext = await searchContext(workflowContext, phaseName);
-        if (priorContext) {
-          instruction += `\n\n# Prior context\n\n${priorContext}`;
-        } else if (priorOutput) {
+        if (priorOutput) {
           instruction += `\n\n# Your previous output\n\n${priorOutput.outputs}`;
         }
         instruction += `\n\n# Rejection feedback\n\n${lastEntry.outputs}\n\nPlease incorporate this feedback and try again.`;
@@ -583,9 +532,13 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
         // Only reviewer receives prior workflow context (architect plan/decisions).
         // Developer runs clean — it reads .agent/dev-tickets.md directly (created by architect).
         if (phaseName === "reviewer") {
-          const priorContext = await searchContext(workflowContext, phaseName);
-          if (priorContext) {
-            instruction += `\n\n# Prior workflow context\n\n${priorContext}`;
+          // Look for the most recent architect success in history
+          const architectOutput = history
+            .slice()
+            .reverse()
+            .find((h) => h.phase === "architect" && h.status === "success");
+          if (architectOutput) {
+            instruction += `\n\n# Prior workflow context\n\n${architectOutput.outputs}`;
           }
         }
       }
@@ -597,61 +550,174 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
       let response: string;
       let isBlocked: boolean;
 
+      // Check if developer/test-writer should be skipped due to no open tickets
+      const devTicketsPath = path.join(
+        state.workspace_path,
+        ".agent",
+        "dev-tickets.md",
+      );
+      const testTicketsPath = path.join(
+        state.workspace_path,
+        ".agent",
+        "test-tickets.md",
+      );
+      const hasDevTickets = hasOpenTickets(devTicketsPath);
+      const hasTestTickets = hasOpenTickets(testTicketsPath);
+
       // Run coder and test-writer in parallel for the developer phase
-      if (phaseName === "developer") {
+      // If BOTH have no tickets, skip the entire phase; otherwise run what we can
+      if (phaseName === "developer" && !hasDevTickets && !hasTestTickets) {
+        // No open developer or test tickets - skip the phase entirely
         console.log(
-          `[Timing] prompt entry coder/${model} and test-writer/haiku4.5 in parallel`,
-        );
-        const promptStart = Date.now();
-
-        // Prepare test-writer instruction in advance
-        const testWriterInstruction = buildSkillInstruction(
-          "test-writer",
-          state.workspace_path,
+          `[System] No open developer or test tickets. Skipping developer phase.`,
         );
 
-        // Ensure test-writer client is ready
-        let twClient = testWriterClient;
-        if (!twClient) {
-          console.log(`[Timing] Auggie.create entry test-writer/haiku4.5`);
-          const auggleCreateStart = Date.now();
-          twClient = await Auggie.create({
-            workspaceRoot: state.workspace_path,
-            model: "haiku4.5",
-            allowIndexing: true,
-          });
-          const auggleCreateDuration = Date.now() - auggleCreateStart;
-          logTimingDuration(
-            state.workspace_path,
-            runId,
-            "Auggie.create",
-            "test-writer/haiku4.5",
-            auggleCreateDuration,
-          );
-          testWriterClient = twClient;
-          testWriterClientRunId = runId;
-        }
+        const history = state.history || [];
+        const phaseStartTime = Date.now();
+        const phaseDuration = Date.now() - phaseStartTime;
 
-        twClient.onSessionUpdate((notification: any) => {
-          const update = notification.update;
-          if (update) {
-            if (update.sessionUpdate === "tool_call") {
-              console.log(
-                `\n  [test-writer/haiku4.5] Running tool: ${update.title || "unknown"}...`,
-              );
-            } else if (update.sessionUpdate === "agent_thought_chunk") {
-              if (update.content && update.content.text) {
-                process.stdout.write(`\x1b[90m${update.content.text}\x1b[0m`);
-              }
-            }
-          }
+        // Record both entries as success (no-op)
+        history.push({
+          phase: "developer",
+          model: model,
+          status: "success",
+          outputs: "",
         });
 
-        // Run both prompts in parallel
-        const [coderResponse, testWriterResponse] = await Promise.all([
-          client.prompt(instruction, { isAnswerOnly: true }),
-          twClient.prompt(testWriterInstruction, { isAnswerOnly: true }),
-        ]);
+        history.push({
+          phase: "test-writer",
+          model: "haiku4.5",
+          status: "success",
+          outputs: "",
+        });
+
+        // Log phase events
+        logTimingDuration(
+          state.workspace_path,
+          runId,
+          "phase",
+          "developer",
+          phaseDuration,
+          "developer",
+          model,
+          { status: "success", blocked: false },
+        );
+
+        logTimingDuration(
+          state.workspace_path,
+          runId,
+          "phase",
+          "test-writer",
+          phaseDuration,
+          "test-writer",
+          "haiku4.5",
+          { status: "success", blocked: false },
+        );
+
+        // Transition to next phase
+        const nextPhase = getNextPhase("developer");
+        if (nextPhase) {
+          state = stateManager.update({
+            history,
+            current_phase: nextPhase,
+          });
+          console.log(`[System] Transitioning to: ${nextPhase}`);
+        }
+        continue;
+      } else if (phaseName === "developer") {
+        // At least one of dev or test has tickets (we skipped both above)
+        const coderRunsPrompt = hasDevTickets;
+        const testWriterRunsPrompt = hasTestTickets;
+
+        if (coderRunsPrompt && testWriterRunsPrompt) {
+          console.log(
+            `[Timing] prompt entry coder/${model} and test-writer/haiku4.5 in parallel`,
+          );
+        } else if (coderRunsPrompt) {
+          console.log(
+            `[Timing] prompt entry coder/${model} (test-writer has no tickets)`,
+          );
+        } else {
+          console.log(
+            `[Timing] prompt entry test-writer/haiku4.5 (coder has no tickets)`,
+          );
+        }
+
+        const promptStart = Date.now();
+
+        // Prepare test-writer instruction in advance if needed
+        let testWriterInstruction = "";
+        let twClient: any = null;
+        if (testWriterRunsPrompt) {
+          testWriterInstruction = buildSkillInstruction(
+            "test-writer",
+            state.workspace_path,
+          );
+
+          // Ensure test-writer client is ready
+          twClient = testWriterClient;
+          if (!twClient) {
+            console.log(`[Timing] Auggie.create entry test-writer/haiku4.5`);
+            const auggleCreateStart = Date.now();
+            twClient = await Auggie.create({
+              workspaceRoot: state.workspace_path,
+              model: "haiku4.5",
+              allowIndexing: true,
+            });
+            const auggleCreateDuration = Date.now() - auggleCreateStart;
+            logTimingDuration(
+              state.workspace_path,
+              runId,
+              "Auggie.create",
+              "test-writer/haiku4.5",
+              auggleCreateDuration,
+              "test-writer",
+              "haiku4.5",
+            );
+            testWriterClient = twClient;
+            testWriterClientRunId = runId;
+          }
+
+          twClient.onSessionUpdate((notification: any) => {
+            const update = notification.update;
+            if (update) {
+              if (update.sessionUpdate === "tool_call") {
+                console.log(
+                  `\n  [test-writer/haiku4.5] Running tool: ${update.title || "unknown"}...`,
+                );
+              } else if (update.sessionUpdate === "agent_thought_chunk") {
+                if (update.content && update.content.text) {
+                  process.stdout.write(`\x1b[90m${update.content.text}\x1b[0m`);
+                }
+              }
+            }
+          });
+        }
+
+        // Run prompts conditionally
+        let coderResponse = "";
+        let testWriterResponse = "";
+        if (coderRunsPrompt && testWriterRunsPrompt) {
+          // Both run in parallel
+          const [cr, tr] = await Promise.all([
+            client.prompt(instruction, { isAnswerOnly: true }),
+            twClient!.prompt(testWriterInstruction, { isAnswerOnly: true }),
+          ]);
+          coderResponse = cr;
+          testWriterResponse = tr;
+        } else if (coderRunsPrompt) {
+          // Only coder runs
+          coderResponse = await client.prompt(instruction, {
+            isAnswerOnly: true,
+          });
+          testWriterResponse = ""; // No-op
+        } else {
+          // Only test-writer runs
+          testWriterResponse = await twClient!.prompt(testWriterInstruction, {
+            isAnswerOnly: true,
+          });
+          coderResponse = ""; // No-op
+        }
 
         const promptDuration = Date.now() - promptStart;
         logTimingDuration(
@@ -660,6 +726,15 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
           "prompt",
           `coder/${model} and test-writer/haiku4.5`,
           promptDuration,
+          phaseName,
+          model,
+          {
+            prompt_chars: instruction.length,
+            response_chars: coderResponse.length,
+            blocked:
+              /block(?:ed|er):/i.test(coderResponse) ||
+              /block(?:ed|er):/i.test(testWriterResponse),
+          },
         );
 
         response = coderResponse;
@@ -698,6 +773,12 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
           "prompt",
           `${phaseName}/${model}`,
           promptDuration,
+          phaseName,
+          model,
+          {
+            prompt_chars: instruction.length,
+            response_chars: response.length,
+          },
         );
 
         isBlocked = false; // Only developer can be blocked
@@ -711,30 +792,20 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
       }
 
       if (!isBlocked && phaseName === "architect") {
-        // Handle architect completion: persist notes and index to context
-        await handleArchitectCompletion(
-          response,
-          state.workspace_path,
-          workflowContext,
-        );
+        // Write architect notes
+        writePhaseNotes(phaseName, response, state.workspace_path);
       }
 
       if (!isBlocked && phaseName === "reviewer") {
-        await handleReviewerCompletion(
-          response,
-          state.workspace_path,
-          workflowContext,
-        );
+        // Write reviewer notes
+        writePhaseNotes(phaseName, response, state.workspace_path);
       }
 
       const phaseDuration = Date.now() - phaseStartTime;
-      logTimingDuration(
-        state.workspace_path,
-        runId,
-        "phase",
-        phaseName,
-        phaseDuration,
-      );
+
+      // Determine phase status for logging
+      let phaseStatus = "success";
+      let developerPhaseBlocked = false;
 
       // Special handling for developer phase: check if either developer or test-writer blocked
       let shouldTransitionToArchitect = false;
@@ -748,11 +819,28 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
         const twBlocked = twEntry?.status === "blocked";
 
         if (devBlocked || twBlocked) {
+          phaseStatus = "blocked";
+          developerPhaseBlocked = true;
           // One or both blocked; don't run deterministic checks
           shouldTransitionToArchitect = true;
           isBlocked = true; // Mark as blocked so we transition to architect below
         }
       }
+
+      // Log phase event with status
+      logTimingDuration(
+        state.workspace_path,
+        runId,
+        "phase",
+        phaseName,
+        phaseDuration,
+        phaseName,
+        model,
+        {
+          status: phaseStatus,
+          ...(phaseName === "developer" && { blocked: developerPhaseBlocked }),
+        },
+      );
 
       if (isBlocked) {
         state = stateManager.update({ history, current_phase: "architect" });
