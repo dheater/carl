@@ -85,15 +85,15 @@ jobs:
           URL=${{ steps.sha.outputs.url }}
           SHA256=${{ steps.sha.outputs.sha256 }}
           REPO=${{ github.repository }}
-          sed -i "s|homepage \".*\"|homepage \"https://github.com/${REPO}\"|" Formula/carl.rb
-          sed -i "s|url \".*\"|url \"${URL}\"|" Formula/carl.rb
-          sed -i "s|version \".*\"|version \"${VERSION}\"|" Formula/carl.rb
-          sed -i "s|sha256 \".*\"|sha256 \"${SHA256}\"|" Formula/carl.rb
+          sed -i "s|homepage \".*\"|homepage \"https://github.com/${REPO}\"|" Formula/carl-ai.rb
+          sed -i "s|url \".*\"|url \"${URL}\"|" Formula/carl-ai.rb
+          sed -i "s|version \".*\"|version \"${VERSION}\"|" Formula/carl-ai.rb
+          sed -i "s|sha256 \".*\"|sha256 \"${SHA256}\"|" Formula/carl-ai.rb
 
       - name: Commit and push updated formula
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Formula/carl.rb
+          git add Formula/carl-ai.rb
           git commit -m "chore: Update Homebrew formula to v${{ steps.version.outputs.version }}"
           git push

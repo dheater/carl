@@ -8,7 +8,7 @@ Opinionated AI development workflow. A four-phase loop with human approval gates
 
 ```bash
 brew tap dheater/carl
-brew install carl
+brew install carl-ai
 carl start "<prompt>"
 ```
 

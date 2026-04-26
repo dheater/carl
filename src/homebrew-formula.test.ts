@@ -5,13 +5,13 @@ describe("homebrew-formula", () => {
   let formulaContent: string;
 
   beforeAll(() => {
-    const formulaPath = path.join(__dirname, "..", "Formula", "carl.rb");
+    const formulaPath = path.join(__dirname, "..", "Formula", "carl-ai.rb");
     formulaContent = fs.readFileSync(formulaPath, "utf-8");
   });
 
   describe("Formula structure", () => {
-    it("should have class Carl < Formula", () => {
-      expect(formulaContent).toMatch(/class\s+Carl\s*<\s*Formula/);
+    it("should have class CarlAi < Formula", () => {
+      expect(formulaContent).toMatch(/class\s+CarlAi\s*<\s*Formula/);
     });
 
     it("should depend on node", () => {

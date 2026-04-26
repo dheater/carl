@@ -1,6 +1,6 @@
 {
   "name": "carl",
-  "version": "5.2.1",
+  "version": "5.2.2",
   "bin": {
     "carl": "./dist/carl.js"
   },

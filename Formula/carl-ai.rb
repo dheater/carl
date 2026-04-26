@@ -1,4 +1,4 @@
-class Carl < Formula
+class CarlAi < Formula
   desc "Opinionated AI development workflow"
   homepage "https://github.com/dheater/carl"
   url "https://github.com/dheater/carl/archive/refs/tags/v5.2.1.tar.gz"
