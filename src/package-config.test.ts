@@ -31,7 +31,7 @@ describe("package-config", () => {
     });
   });
 
-  describe("Homebrew packaging compatibility", () => {
+  describe("package distribution", () => {
     it("should have compiled dist/carl.js after npm run build", () => {
       const distPath = path.join(__dirname, "..", "dist", "carl.js");
       expect(fs.existsSync(distPath)).toBe(true);

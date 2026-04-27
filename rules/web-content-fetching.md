@@ -30,7 +30,6 @@ md-fetch "https://example.com/docs" > output.md
 ## Installation
 
 ```bash
-brew install md-fetch              # macOS
-cargo install md-fetch             # Linux/source
+cargo install md-fetch
 ```
 
