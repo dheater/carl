@@ -23,8 +23,8 @@ describe("Workflow graph - verifier phase addition (t-1)", () => {
   test("getPhaseModel handles architect, developer, verifier, and reviewer", () => {
     expect(getPhaseModel("architect")).toBe("gpt5.1");
     expect(getPhaseModel("developer")).toBe("haiku4.5");
-    expect(getPhaseModel("verifier")).toBe("gpt5.1");
-    expect(getPhaseModel("reviewer")).toBe("haiku4.5");
+    expect(getPhaseModel("verifier")).toBe("code-review");
+    expect(getPhaseModel("reviewer")).toBe("code-review");
   });
 
   test("GATE_PHASES only includes architect and reviewer, not verifier or developer", () => {

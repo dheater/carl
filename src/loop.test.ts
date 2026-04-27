@@ -166,13 +166,13 @@ describe("Workflow Loop", () => {
     expect(Auggie.create).toHaveBeenNthCalledWith(
       3,
       expect.objectContaining({
-        model: "gpt5.1", // verifier
+        model: "code-review", // verifier
       }),
     );
     expect(Auggie.create).toHaveBeenNthCalledWith(
       4,
       expect.objectContaining({
-        model: "haiku4.5", // reviewer
+        model: "code-review", // reviewer
       }),
     );
   });
