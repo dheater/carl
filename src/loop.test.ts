@@ -552,6 +552,72 @@ describe("t-1: Deterministic just test run and artifacts after developer", () =>
 
     expect(runJustMock).not.toHaveBeenCalled();
   });
+
+  test("t-9: keeps tests.log consistent across fail->pass retries", async () => {
+    // First run: tests fail
+    runJustMock.mockReturnValueOnce({
+      exitCode: 1,
+      stdout: "Test suite failed - first attempt",
+      stderr: "Error: assertion failed",
+      command: "just test",
+      usedJust: true,
+    });
+
+    stateManager.update({
+      current_phase: "developer",
+      status: "running",
+      history: [
+        {
+          phase: "architect",
+          model: "gpt5.1",
+          status: "success",
+          outputs: "# Tickets",
+        },
+      ],
+    });
+
+    await runLoop(stateManager);
+
+    // After first run: both tests-summary.json (FAIL) and tests.log exist
+    const summaryPath = path.join(tmpDir, ".agent", "tests-summary.json");
+    const logPath = path.join(tmpDir, ".agent", "tests.log");
+
+    expect(fs.existsSync(summaryPath)).toBe(true);
+    let summary = JSON.parse(fs.readFileSync(summaryPath, "utf-8"));
+    expect(summary.status).toBe("FAIL");
+
+    expect(fs.existsSync(logPath)).toBe(true);
+    let logContent = fs.readFileSync(logPath, "utf-8");
+    expect(logContent).toContain("Test suite failed - first attempt");
+
+    // Second run: tests pass
+    runJustMock.mockReturnValueOnce({
+      exitCode: 0,
+      stdout: "All tests passed - second attempt",
+      stderr: "",
+      command: "just test",
+      usedJust: true,
+    });
+
+    // Stay in developer phase for retry
+    stateManager.update({
+      current_phase: "developer",
+      status: "running",
+      developer_test_failures: 1,
+    });
+
+    await runLoop(stateManager);
+
+    // After second run: tests-summary.json shows PASS and tests.log is removed
+    expect(fs.existsSync(summaryPath)).toBe(true);
+    summary = JSON.parse(fs.readFileSync(summaryPath, "utf-8"));
+    expect(summary.status).toBe("PASS");
+    expect(summary.command).toBe("just test");
+    expect(summary.timestamp).toBeDefined();
+
+    // Most important: tests.log should NOT exist when tests pass
+    expect(fs.existsSync(logPath)).toBe(false);
+  });
 });
 
 describe("t-2: Two-strike test gate escalates to architect", () => {
@@ -1131,6 +1197,103 @@ describe("buildSkillInstruction for reviewer with branch context", () => {
     expect(instruction).toMatch(/Status.*FAIL/i);
     expect(instruction).toMatch(/Test suite failed/);
     expect(instruction).toMatch(/assertion failed/);
+  });
+
+  test("t-12: Guard removes stale .agent/tests.log when tests-summary.json shows PASS", () => {
+    // AC: Create temp workspace with PASS status but stale test log
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-t12-pass-"));
+    const gitModule = require("./git");
+    jest.spyOn(gitModule, "getCurrentBranch").mockReturnValue("main");
+    jest.spyOn(gitModule, "getGitStatus").mockReturnValue({
+      isRepo: true,
+      trackedChanged: [],
+      untracked: [],
+    });
+
+    const agentDir = path.join(tmpDir, ".agent");
+    fs.mkdirSync(agentDir, { recursive: true });
+
+    // Write PASS status with stale failure log
+    const summaryPath = path.join(agentDir, "tests-summary.json");
+    fs.writeFileSync(
+      summaryPath,
+      JSON.stringify({
+        command: "npm test",
+        status: "PASS",
+        timestamp: "2025-01-01T12:00:00Z",
+      }),
+    );
+
+    const logPath = path.join(agentDir, "tests.log");
+    const staleLog =
+      "Command: npm test\n\nStdout:\nOld failure output here\n\nStderr:\nOld error";
+    fs.writeFileSync(logPath, staleLog);
+
+    // Before guard: stale log exists
+    expect(fs.existsSync(logPath)).toBe(true);
+
+    const loopModule = require("./loop");
+    // AC: Exercise the guard by calling buildSkillInstruction
+    const instruction = loopModule.buildSkillInstruction("reviewer", tmpDir);
+
+    // AC: After guard runs, stale log should not exist
+    expect(fs.existsSync(logPath)).toBe(false);
+
+    // AC: Instructions should show PASS status
+    expect(instruction).toMatch(/Status.*PASS/i);
+
+    // AC: Instructions should NOT include stale failure output
+    expect(instruction).not.toMatch(/Old failure output/);
+    expect(instruction).not.toMatch(/Old error/);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    jest.restoreAllMocks();
+  });
+
+  test("t-12: Guard preserves .agent/tests.log when status is FAIL", () => {
+    // AC: Preserve FAIL behavior
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-t12-fail-"));
+    const gitModule = require("./git");
+    jest.spyOn(gitModule, "getCurrentBranch").mockReturnValue("main");
+    jest.spyOn(gitModule, "getGitStatus").mockReturnValue({
+      isRepo: true,
+      trackedChanged: [],
+      untracked: [],
+    });
+
+    const agentDir = path.join(tmpDir, ".agent");
+    fs.mkdirSync(agentDir, { recursive: true });
+
+    // Write FAIL status with test log
+    const summaryPath = path.join(agentDir, "tests-summary.json");
+    fs.writeFileSync(
+      summaryPath,
+      JSON.stringify({
+        command: "npm test",
+        status: "FAIL",
+        timestamp: "2025-01-01T12:00:00Z",
+      }),
+    );
+
+    const logPath = path.join(agentDir, "tests.log");
+    const failLog =
+      "Command: npm test\n\nStdout:\nActual failure output\n\nStderr:\nActual error";
+    fs.writeFileSync(logPath, failLog);
+
+    const loopModule = require("./loop");
+    // AC: Call guard
+    const instruction = loopModule.buildSkillInstruction("reviewer", tmpDir);
+
+    // AC: FAIL log must still exist
+    expect(fs.existsSync(logPath)).toBe(true);
+
+    // AC: Instructions should include failure output
+    expect(instruction).toMatch(/Status.*FAIL/i);
+    expect(instruction).toMatch(/Actual failure output/);
+    expect(instruction).toMatch(/Actual error/);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    jest.restoreAllMocks();
   });
 });
 
@@ -1848,7 +2011,7 @@ describe("t-4: Regression tests for logging schema and context removal", () => {
     fs.mkdirSync(agentDir, { recursive: true });
     fs.writeFileSync(
       path.join(agentDir, "dev-tickets.md"),
-      "-[ ] t-1: Open ticket",
+      "## [ ] t-1: Open ticket",
       "utf-8",
     );
 
@@ -2204,12 +2367,12 @@ describe("t-102: Regression tests for usage metadata and developer/test-writer s
     fs.mkdirSync(agentDir, { recursive: true });
     fs.writeFileSync(
       path.join(agentDir, "dev-tickets.md"),
-      "-[ ] t-1: Open ticket",
+      "## [ ] t-1: Open ticket",
       "utf-8",
     );
     fs.writeFileSync(
       path.join(agentDir, "test-tickets.md"),
-      "-[ ] tt-1: Open test ticket",
+      "## [ ] tt-1: Open test ticket",
       "utf-8",
     );
 
@@ -2252,7 +2415,7 @@ describe("t-102: Regression tests for usage metadata and developer/test-writer s
     const devPromptEvents = events.filter(
       (e: any) => e.event === "prompt" && e.phase === "developer",
     );
-    expect(devPromptEvents.length).toBe(1); // Single prompt event for both coder and test-writer
+    expect(devPromptEvents.length).toBe(1); // Single prompt event for coder (developer phase)
 
     const promptEvent = devPromptEvents[0];
 
@@ -2274,54 +2437,6 @@ describe("t-102: Regression tests for usage metadata and developer/test-writer s
 });
 
 describe("t-5: Allow empty developer/test ticket queues to skip phases", () => {
-  test("hasOpenTickets returns true for missing file (assume work exists)", () => {
-    const loopModule = require("./loop");
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-test-"));
-    try {
-      const filePath = path.join(tmpDir, ".agent", "dev-tickets.md");
-      // File doesn't exist - assume work exists, don't skip
-      expect(loopModule.hasOpenTickets(filePath)).toBe(true);
-    } finally {
-      fs.rmSync(tmpDir, { recursive: true });
-    }
-  });
-
-  test("hasOpenTickets returns false for file with no open tickets", () => {
-    const loopModule = require("./loop");
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-test-"));
-    try {
-      const agentDir = path.join(tmpDir, ".agent");
-      fs.mkdirSync(agentDir, { recursive: true });
-      const filePath = path.join(agentDir, "dev-tickets.md");
-      fs.writeFileSync(
-        filePath,
-        "-[x] t-1: Completed ticket\n-[x] t-2: Another completed",
-        "utf-8",
-      );
-      expect(loopModule.hasOpenTickets(filePath)).toBe(false);
-    } finally {
-      fs.rmSync(tmpDir, { recursive: true });
-    }
-  });
-
-  test("hasOpenTickets returns true for file with open tickets", () => {
-    const loopModule = require("./loop");
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-test-"));
-    try {
-      const agentDir = path.join(tmpDir, ".agent");
-      fs.mkdirSync(agentDir, { recursive: true });
-      const filePath = path.join(agentDir, "dev-tickets.md");
-      fs.writeFileSync(
-        filePath,
-        "-[ ] t-1: Open ticket\n-[x] t-2: Completed ticket",
-        "utf-8",
-      );
-      expect(loopModule.hasOpenTickets(filePath)).toBe(true);
-    } finally {
-      fs.rmSync(tmpDir, { recursive: true });
-    }
-  });
-
   test("developer phase skips when dev-tickets.md has no open tickets", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-test-t5-dev-"));
     const stateManager = new StateManager(tmpDir);
@@ -2341,13 +2456,13 @@ describe("t-5: Allow empty developer/test ticket queues to skip phases", () => {
     fs.mkdirSync(agentDir, { recursive: true });
     fs.writeFileSync(
       path.join(agentDir, "dev-tickets.md"),
-      "-[x] t-1: Completed\n-[x] t-2: Done",
+      "## [x] t-1: Completed\n## [x] t-2: Done",
       "utf-8",
     );
     // Also create test-tickets.md with no open tickets
     fs.writeFileSync(
       path.join(agentDir, "test-tickets.md"),
-      "-[x] tt-1: Test completed",
+      "## [x] tt-1: Test completed",
       "utf-8",
     );
 
@@ -2407,6 +2522,262 @@ describe("t-5: Allow empty developer/test ticket queues to skip phases", () => {
     }
   });
 
+  test("t-1: No developer prompt event when dev-tickets.md has no open tickets", async () => {
+    const tmpDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "carl-test-t1-no-dev-"),
+    );
+    const stateManager = new StateManager(tmpDir);
+    stateManager.create(tmpDir);
+
+    const skillsDir = path.join(tmpDir, "skills");
+    fs.mkdirSync(skillsDir);
+    for (const phase of HAPPY_PATH_GRAPH) {
+      fs.writeFileSync(
+        path.join(skillsDir, `${phase}.md`),
+        `dummy ${phase} skill`,
+      );
+    }
+
+    // Create dev-tickets.md with NO open tickets
+    const agentDir = path.join(tmpDir, ".agent");
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(agentDir, "dev-tickets.md"),
+      "## [x] t-1: Completed\n## [x] t-2: Done",
+      "utf-8",
+    );
+    // Create test-tickets.md with open tickets
+    fs.writeFileSync(
+      path.join(agentDir, "test-tickets.md"),
+      "## [ ] tt-1: Test ticket",
+      "utf-8",
+    );
+
+    const mockPrompt = jest.fn().mockResolvedValue("mocked response");
+    const mockClose = jest.fn().mockResolvedValue(undefined);
+    const mockOnSessionUpdate = jest.fn();
+
+    (Auggie.create as jest.Mock).mockResolvedValue({
+      prompt: mockPrompt,
+      close: mockClose,
+      onSessionUpdate: mockOnSessionUpdate,
+    });
+
+    stateManager.update({
+      current_phase: "developer",
+      status: "running",
+      history: [
+        {
+          phase: "architect",
+          model: "gpt5.1",
+          status: "success",
+          outputs: "# Tickets",
+        },
+      ],
+    });
+
+    try {
+      await runLoop(stateManager);
+      const state = stateManager.load();
+
+      // AC: Developer phase should be skipped
+      expect(state.current_phase).toBe("reviewer");
+      expect(state.status).toBe("awaiting_approval");
+
+      // AC: History should have developer entry (no-op)
+      const devHistory = state.history!.find((h) => h.phase === "developer");
+      expect(devHistory).toBeDefined();
+      expect(devHistory!.status).toBe("success");
+      expect(devHistory!.outputs).toBe("");
+
+      // AC: Check events.jsonl - should NOT have prompt event with phase="developer"
+      const eventsPath = path.join(tmpDir, ".carl", "events.jsonl");
+      expect(fs.existsSync(eventsPath)).toBe(true);
+
+      const events = fs
+        .readFileSync(eventsPath, "utf-8")
+        .trim()
+        .split("\n")
+        .filter((line) => line.length > 0)
+        .map((line) => JSON.parse(line));
+
+      const developerPromptEvent = events.find(
+        (e: any) => e.event === "prompt" && e.phase === "developer",
+      );
+      expect(developerPromptEvent).toBeUndefined();
+
+      // AC: test-writer should still run (has open tickets)
+      const testWriterPromptEvent = events.find(
+        (e: any) => e.event === "prompt" && e.phase === "test-writer",
+      );
+      expect(testWriterPromptEvent).toBeDefined();
+    } finally {
+      await closeSharedClient();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("t-1: No test-writer prompt event when test-tickets.md has no open tickets", async () => {
+    const tmpDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "carl-test-t1-no-tw-"),
+    );
+    const stateManager = new StateManager(tmpDir);
+    stateManager.create(tmpDir);
+
+    const skillsDir = path.join(tmpDir, "skills");
+    fs.mkdirSync(skillsDir);
+    for (const phase of HAPPY_PATH_GRAPH) {
+      fs.writeFileSync(
+        path.join(skillsDir, `${phase}.md`),
+        `dummy ${phase} skill`,
+      );
+    }
+
+    // Create dev-tickets.md with open tickets
+    const agentDir = path.join(tmpDir, ".agent");
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(agentDir, "dev-tickets.md"),
+      "## [ ] t-1: Dev ticket",
+      "utf-8",
+    );
+    // Create test-tickets.md with NO open tickets
+    fs.writeFileSync(
+      path.join(agentDir, "test-tickets.md"),
+      "## [x] tt-1: Test completed",
+      "utf-8",
+    );
+
+    const mockPrompt = jest.fn().mockResolvedValue("mocked response");
+    const mockClose = jest.fn().mockResolvedValue(undefined);
+    const mockOnSessionUpdate = jest.fn();
+
+    (Auggie.create as jest.Mock).mockResolvedValue({
+      prompt: mockPrompt,
+      close: mockClose,
+      onSessionUpdate: mockOnSessionUpdate,
+    });
+
+    stateManager.update({
+      current_phase: "developer",
+      status: "running",
+      history: [
+        {
+          phase: "architect",
+          model: "gpt5.1",
+          status: "success",
+          outputs: "# Tickets",
+        },
+      ],
+    });
+
+    try {
+      await runLoop(stateManager);
+      const state = stateManager.load();
+
+      // AC: Developer should run, test-writer should be skipped
+      expect(state.current_phase).toBe("reviewer");
+      expect(state.status).toBe("awaiting_approval");
+
+      // AC: Check events.jsonl
+      const eventsPath = path.join(tmpDir, ".carl", "events.jsonl");
+      expect(fs.existsSync(eventsPath)).toBe(true);
+
+      const events = fs
+        .readFileSync(eventsPath, "utf-8")
+        .trim()
+        .split("\n")
+        .filter((line) => line.length > 0)
+        .map((line) => JSON.parse(line));
+
+      // AC: developer should have prompt event
+      const developerPromptEvent = events.find(
+        (e: any) => e.event === "prompt" && e.phase === "developer",
+      );
+      expect(developerPromptEvent).toBeDefined();
+
+      // AC: test-writer should NOT have prompt event
+      const testWriterPromptEvent = events.find(
+        (e: any) => e.event === "prompt" && e.phase === "test-writer",
+      );
+      expect(testWriterPromptEvent).toBeUndefined();
+    } finally {
+      await closeSharedClient();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("t-5: Architect phase logs ticket counts in events", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-test-t5-logs-"));
+    const stateManager = new StateManager(tmpDir);
+    stateManager.create(tmpDir);
+
+    const skillsDir = path.join(tmpDir, "skills");
+    fs.mkdirSync(skillsDir);
+    for (const phase of HAPPY_PATH_GRAPH) {
+      fs.writeFileSync(
+        path.join(skillsDir, `${phase}.md`),
+        `dummy ${phase} skill`,
+      );
+    }
+
+    const mockPrompt = jest
+      .fn()
+      .mockResolvedValue("# Tickets\n\n## [ ] t-1: Test");
+    const mockClose = jest.fn().mockResolvedValue(undefined);
+    const mockOnSessionUpdate = jest.fn();
+
+    (Auggie.create as jest.Mock).mockResolvedValue({
+      prompt: mockPrompt,
+      close: mockClose,
+      onSessionUpdate: mockOnSessionUpdate,
+    });
+
+    try {
+      await runLoop(stateManager);
+
+      // Read events.jsonl
+      const eventsPath = path.join(tmpDir, ".carl", "events.jsonl");
+      expect(fs.existsSync(eventsPath)).toBe(true);
+
+      const events = fs
+        .readFileSync(eventsPath, "utf-8")
+        .trim()
+        .split("\n")
+        .filter((line) => line.length > 0)
+        .map((line) => JSON.parse(line));
+
+      // AC: Find architect phase event
+      const architectPhaseEvent = events.find(
+        (e: any) => e.event === "phase" && e.subject === "architect",
+      );
+      expect(architectPhaseEvent).toBeDefined();
+
+      // AC: Architect phase event should have dev_open_tickets and test_open_tickets counts
+      if (architectPhaseEvent && architectPhaseEvent.meta) {
+        expect(typeof architectPhaseEvent.meta.dev_open_tickets).toBe("number");
+        expect(typeof architectPhaseEvent.meta.test_open_tickets).toBe(
+          "number",
+        );
+      }
+
+      // AC: All prompt events should have prompt_chars and response_chars
+      const promptEvents = events.filter((e: any) => e.event === "prompt");
+      expect(promptEvents.length).toBeGreaterThan(0);
+
+      for (const promptEvent of promptEvents) {
+        expect(promptEvent.meta).toBeDefined();
+        expect(typeof promptEvent.meta.prompt_chars).toBe("number");
+        expect(typeof promptEvent.meta.response_chars).toBe("number");
+        expect(promptEvent.meta.prompt_chars).toBeGreaterThan(0);
+        expect(promptEvent.meta.response_chars).toBeGreaterThan(0);
+      }
+    } finally {
+      await closeSharedClient();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   test("developer phase runs normally when dev-tickets.md has open tickets", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-test-t5-dev2-"));
     const stateManager = new StateManager(tmpDir);
@@ -2426,7 +2797,7 @@ describe("t-5: Allow empty developer/test ticket queues to skip phases", () => {
     fs.mkdirSync(agentDir, { recursive: true });
     fs.writeFileSync(
       path.join(agentDir, "dev-tickets.md"),
-      "-[ ] t-1: Open ticket\n-[x] t-2: Done",
+      "## [ ] t-1: Open ticket\n## [x] t-2: Done",
       "utf-8",
     );
 
@@ -2489,5 +2860,532 @@ describe("t-5: Allow empty developer/test ticket queues to skip phases", () => {
       await closeSharedClient();
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("t-1: Tests for prompt budgets and ticket-scoped context", () => {
+  // Constants for prompt budgets - single source of truth
+  const ARCHITECT_PROMPT_BUDGET = 4000;
+  const DEVELOPER_PROMPT_BUDGET = 2000;
+  const TEST_WRITER_PROMPT_BUDGET = 2000;
+
+  test("developer skill prompt stays within budget", () => {
+    const loopModule = require("./loop");
+    // Build developer instruction with no additional context
+    const instruction = loopModule.buildSkillInstruction("developer");
+
+    // AC: Developer prompt should be <= 2000 characters
+    expect(instruction.length).toBeLessThanOrEqual(DEVELOPER_PROMPT_BUDGET);
+  });
+
+  test("test-writer skill prompt stays within budget", () => {
+    const loopModule = require("./loop");
+    // Build test-writer instruction with no additional context
+    const instruction = loopModule.buildSkillInstruction("test-writer");
+
+    // AC: Test-writer prompt should be <= 2000 characters
+    expect(instruction.length).toBeLessThanOrEqual(TEST_WRITER_PROMPT_BUDGET);
+  });
+
+  test("architect skill prompt stays within budget", () => {
+    const loopModule = require("./loop");
+    // Build architect instruction with no additional context
+    const instruction = loopModule.buildSkillInstruction("architect");
+
+    // AC: Architect prompt should be <= 4000 characters
+    expect(instruction.length).toBeLessThanOrEqual(ARCHITECT_PROMPT_BUDGET);
+  });
+
+  test("developer phase runs both developer and test-writer when both have open tickets", async () => {
+    const tmpDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "carl-test-t1-both-tickets-"),
+    );
+    const stateManager = new StateManager(tmpDir);
+    stateManager.create(tmpDir);
+
+    const skillsDir = path.join(tmpDir, "skills");
+    fs.mkdirSync(skillsDir);
+    for (const phase of HAPPY_PATH_GRAPH) {
+      fs.writeFileSync(
+        path.join(skillsDir, `${phase}.md`),
+        `dummy ${phase} skill`,
+      );
+    }
+
+    // Create both with open tickets
+    const agentDir = path.join(tmpDir, ".agent");
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(agentDir, "dev-tickets.md"),
+      "## [ ] t-1: Dev task",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(agentDir, "test-tickets.md"),
+      "## [ ] tt-1: Test task",
+      "utf-8",
+    );
+
+    const mockPrompt = jest.fn().mockResolvedValue("response");
+    const mockClose = jest.fn().mockResolvedValue(undefined);
+    const mockOnSessionUpdate = jest.fn();
+
+    (Auggie.create as jest.Mock).mockResolvedValue({
+      prompt: mockPrompt,
+      close: mockClose,
+      onSessionUpdate: mockOnSessionUpdate,
+    });
+
+    const { runCanonicalTests } = require("./just");
+    (runCanonicalTests as jest.Mock).mockReturnValue({
+      exitCode: 0,
+      stdout: "Tests passed",
+      stderr: "",
+      command: "just test",
+      usedJust: true,
+    });
+
+    stateManager.update({
+      current_phase: "developer",
+      status: "running",
+      history: [
+        {
+          phase: "architect",
+          model: "gpt5.1",
+          status: "success",
+          outputs: "# Tickets",
+        },
+      ],
+    });
+
+    try {
+      await runLoop(stateManager);
+      const eventsPath = path.join(tmpDir, ".carl", "events.jsonl");
+      expect(fs.existsSync(eventsPath)).toBe(true);
+
+      const events = fs
+        .readFileSync(eventsPath, "utf-8")
+        .trim()
+        .split("\n")
+        .filter((line) => line.length > 0)
+        .map((line) => JSON.parse(line));
+
+      // AC: Both developer and test-writer prompts should be logged
+      const devPromptEvent = events.find(
+        (e: any) => e.event === "prompt" && e.phase === "developer",
+      );
+      const twPromptEvent = events.find(
+        (e: any) => e.event === "prompt" && e.phase === "test-writer",
+      );
+
+      expect(devPromptEvent).toBeDefined();
+      expect(twPromptEvent).toBeDefined();
+
+      // AC: Both should have reasonable prompt sizes (within budgets)
+      if (devPromptEvent && devPromptEvent.meta) {
+        expect(devPromptEvent.meta.prompt_chars).toBeLessThanOrEqual(
+          DEVELOPER_PROMPT_BUDGET,
+        );
+      }
+      if (twPromptEvent && twPromptEvent.meta) {
+        expect(twPromptEvent.meta.prompt_chars).toBeLessThanOrEqual(
+          TEST_WRITER_PROMPT_BUDGET,
+        );
+      }
+    } finally {
+      await closeSharedClient();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  describe("hasOpenTickets and countOpenTickets", () => {
+    let tmpDir: string;
+
+    beforeEach(() => {
+      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-test-ticket-"));
+    });
+
+    afterEach(() => {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    test("hasOpenTickets returns false when file has only completed tickets with [ ] in prose", () => {
+      const ticketFile = path.join(tmpDir, "tickets.md");
+      const content = `# Test Tickets
+
+## [x] t-1: Completed ticket
+
+The AC mentions that zero open \`[ ]\` tickets should skip the phase.
+
+## [x] t-2: Another completed ticket
+
+More prose with [ ] in it.`;
+
+      fs.writeFileSync(ticketFile, content);
+
+      // Import the function
+      const { hasOpenTickets } = require("./loop");
+      expect(hasOpenTickets(ticketFile)).toBe(false);
+    });
+
+    test("countOpenTickets returns 0 when file has only completed tickets with [ ] in prose", () => {
+      const ticketFile = path.join(tmpDir, "tickets.md");
+      const content = `# Test Tickets
+
+## [x] t-1: Completed ticket
+
+The AC mentions that zero open \`[ ]\` tickets should skip the phase.
+
+## [x] t-2: Another completed ticket
+
+More prose with [ ] in it.`;
+
+      fs.writeFileSync(ticketFile, content);
+
+      // Import the function
+      const { countOpenTickets } = require("./loop");
+      expect(countOpenTickets(ticketFile)).toBe(0);
+    });
+
+    test("hasOpenTickets returns true when file has open ticket headings", () => {
+      const ticketFile = path.join(tmpDir, "tickets.md");
+      const content = `# Test Tickets
+
+## [ ] t-1: Open ticket
+
+This is an open ticket.
+
+## [x] t-2: Completed ticket
+
+This one is done.`;
+
+      fs.writeFileSync(ticketFile, content);
+
+      // Import the function
+      const { hasOpenTickets } = require("./loop");
+      expect(hasOpenTickets(ticketFile)).toBe(true);
+    });
+
+    test("countOpenTickets returns correct count with multiple open tickets and no prose [ ]", () => {
+      const ticketFile = path.join(tmpDir, "tickets.md");
+      const content = `# Test Tickets
+
+## [ ] t-1: First open ticket
+
+## [ ] t-2: Second open ticket
+
+## [x] t-3: Completed ticket`;
+
+      fs.writeFileSync(ticketFile, content);
+
+      // Import the function
+      const { countOpenTickets } = require("./loop");
+      expect(countOpenTickets(ticketFile)).toBe(2);
+    });
+
+    test("hasOpenTickets returns true when file doesn't exist (assume work exists)", () => {
+      const nonexistentFile = path.join(tmpDir, "nonexistent.md");
+      const { hasOpenTickets } = require("./loop");
+      expect(hasOpenTickets(nonexistentFile)).toBe(true);
+    });
+
+    test("countOpenTickets returns 0 when file doesn't exist", () => {
+      const nonexistentFile = path.join(tmpDir, "nonexistent.md");
+      const { countOpenTickets } = require("./loop");
+      expect(countOpenTickets(nonexistentFile)).toBe(0);
+    });
+  });
+
+  describe("Developer phase gating with completed tickets and [ ] in prose", () => {
+    test("skips developer phase when both ticket files have only completed tickets with [ ] in prose", async () => {
+      const testTmpDir = fs.mkdtempSync(
+        path.join(os.tmpdir(), "carl-test-gate-"),
+      );
+      const testStateManager = new StateManager(testTmpDir);
+      testStateManager.create(testTmpDir);
+
+      // Create skills directory with dummy skills
+      const skillsDir = path.join(testTmpDir, "skills");
+      fs.mkdirSync(skillsDir);
+      for (const phase of HAPPY_PATH_GRAPH) {
+        fs.writeFileSync(
+          path.join(skillsDir, `${phase}.md`),
+          `dummy ${phase} skill`,
+        );
+      }
+
+      // .agent directory already created by stateManager.create()
+      const agentDir = path.join(testTmpDir, ".agent");
+
+      // Create dev-tickets.md with only completed tickets and [ ] in prose
+      const devTicketsPath = path.join(agentDir, "dev-tickets.md");
+      fs.writeFileSync(
+        devTicketsPath,
+        `# Dev Tickets
+
+## [x] t-1: Completed dev ticket
+
+The AC says we should ignore \`[ ]\` in prose.
+
+## [x] t-2: Another completed ticket
+
+More prose with [ ] in it.`,
+      );
+
+      // Create test-tickets.md with only completed tickets and [ ] in prose
+      const testTicketsPath = path.join(agentDir, "test-tickets.md");
+      fs.writeFileSync(
+        testTicketsPath,
+        `# Test Tickets
+
+## [x] t-1: Completed test ticket
+
+The AC mentions that zero open \`[ ]\` tickets should skip the phase.`,
+      );
+
+      // Set up state to transition from architect to developer phase
+      // When developer phase runs with no open tickets, it should skip entirely
+      testStateManager.update({
+        current_phase: "developer",
+        status: "running",
+        history: [
+          {
+            phase: "architect",
+            model: "gpt5.1",
+            status: "success",
+            outputs: "# Tickets",
+          },
+        ],
+      });
+
+      try {
+        // Mock Auggie for the test
+        const mockTestPrompt = jest.fn().mockResolvedValue("test output");
+        const mockTestClose = jest.fn().mockResolvedValue(undefined);
+
+        (Auggie.create as jest.Mock).mockResolvedValue({
+          prompt: mockTestPrompt,
+          close: mockTestClose,
+          onSessionUpdate: jest.fn(),
+        });
+
+        // Run the loop - developer phase should be skipped
+        await runLoop(testStateManager);
+
+        const state = testStateManager.load();
+
+        // Developer phase should be skipped due to no open tickets,
+        // so the workflow should proceed through verifier to reviewer (first gate)
+        expect(state.status).toBe("awaiting_approval");
+        expect(state.current_phase).toBe("reviewer");
+
+        // Verify no developer or test-writer prompts were created
+        const eventsPath = path.join(testTmpDir, ".carl", "events.jsonl");
+        if (fs.existsSync(eventsPath)) {
+          const events = fs
+            .readFileSync(eventsPath, "utf-8")
+            .trim()
+            .split("\n")
+            .filter((line) => line.length > 0)
+            .map((line) => JSON.parse(line));
+
+          // Check that developer phase was skipped (no prompt events for developer or test-writer)
+          const devPrompts = events.filter(
+            (e: any) => e.event === "prompt" && e.phase === "developer",
+          );
+          const testWriterPrompts = events.filter(
+            (e: any) => e.event === "prompt" && e.phase === "test-writer",
+          );
+
+          expect(devPrompts).toHaveLength(0);
+          expect(testWriterPrompts).toHaveLength(0);
+        }
+      } finally {
+        await closeSharedClient();
+        fs.rmSync(testTmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("t-11: architect phase event includes exact meta.dev_open_tickets and meta.test_open_tickets for zero tickets with [ ] in prose", async () => {
+      const testTmpDir = fs.mkdtempSync(
+        path.join(os.tmpdir(), "carl-test-meta-"),
+      );
+      const testStateManager = new StateManager(testTmpDir);
+      testStateManager.create(testTmpDir);
+
+      // Create skills directory with dummy skills
+      const skillsDir = path.join(testTmpDir, "skills");
+      fs.mkdirSync(skillsDir);
+      for (const phase of HAPPY_PATH_GRAPH) {
+        fs.writeFileSync(
+          path.join(skillsDir, `${phase}.md`),
+          `dummy ${phase} skill`,
+        );
+      }
+
+      // .agent directory already created by stateManager.create()
+      const agentDir = path.join(testTmpDir, ".agent");
+
+      // Create dev-tickets.md with only completed tickets and [ ] in prose
+      const devTicketsPath = path.join(agentDir, "dev-tickets.md");
+      fs.writeFileSync(
+        devTicketsPath,
+        `# Dev Tickets
+
+## [x] t-1: Completed dev ticket
+
+The AC says we should ignore \`[ ]\` in prose.
+
+## [x] t-2: Another completed ticket
+
+More prose with [ ] in it.`,
+      );
+
+      // Create test-tickets.md with only completed tickets and [ ] in prose
+      const testTicketsPath = path.join(agentDir, "test-tickets.md");
+      fs.writeFileSync(
+        testTicketsPath,
+        `# Test Tickets
+
+## [x] t-1: Completed test ticket
+
+The AC mentions that zero open \`[ ]\` tickets should skip the phase.`,
+      );
+
+      // Set up state to start in architect phase so we can capture the architect phase event
+      testStateManager.update({
+        current_phase: "architect",
+        status: "running",
+      });
+
+      try {
+        // Mock Auggie for the test
+        const mockTestPrompt = jest.fn().mockResolvedValue("test output");
+        const mockTestClose = jest.fn().mockResolvedValue(undefined);
+
+        (Auggie.create as jest.Mock).mockResolvedValue({
+          prompt: mockTestPrompt,
+          close: mockTestClose,
+          onSessionUpdate: jest.fn(),
+        });
+
+        // Run the loop
+        await runLoop(testStateManager);
+
+        // Parse the events log and find the architect phase event
+        const eventsPath = path.join(testTmpDir, ".carl", "events.jsonl");
+        expect(fs.existsSync(eventsPath)).toBe(true);
+
+        const events = fs
+          .readFileSync(eventsPath, "utf-8")
+          .trim()
+          .split("\n")
+          .filter((line) => line.length > 0)
+          .map((line) => JSON.parse(line));
+
+        // Find architect phase event (event === "phase" and phase === "architect")
+        const architectPhaseEvent = events.find(
+          (e: any) => e.event === "phase" && e.phase === "architect",
+        );
+
+        expect(architectPhaseEvent).toBeDefined();
+        expect(architectPhaseEvent.meta).toBeDefined();
+        expect(architectPhaseEvent.meta.dev_open_tickets).toBe(0);
+        expect(architectPhaseEvent.meta.test_open_tickets).toBe(0);
+      } finally {
+        await closeSharedClient();
+        fs.rmSync(testTmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("t-11: architect phase event reports correct ticket counts with open tickets", async () => {
+      const testTmpDir = fs.mkdtempSync(
+        path.join(os.tmpdir(), "carl-test-meta-open-"),
+      );
+      const testStateManager = new StateManager(testTmpDir);
+      testStateManager.create(testTmpDir);
+
+      // Create skills directory with dummy skills
+      const skillsDir = path.join(testTmpDir, "skills");
+      fs.mkdirSync(skillsDir);
+      for (const phase of HAPPY_PATH_GRAPH) {
+        fs.writeFileSync(
+          path.join(skillsDir, `${phase}.md`),
+          `dummy ${phase} skill`,
+        );
+      }
+
+      // .agent directory already created by stateManager.create()
+      const agentDir = path.join(testTmpDir, ".agent");
+
+      // Create dev-tickets.md with multiple open tickets
+      const devTicketsPath = path.join(agentDir, "dev-tickets.md");
+      fs.writeFileSync(
+        devTicketsPath,
+        `# Dev Tickets
+
+## [ ] t-1: First open dev ticket
+
+## [ ] t-2: Second open dev ticket
+
+## [x] t-3: Completed ticket`,
+      );
+
+      // Create test-tickets.md with one open ticket
+      const testTicketsPath = path.join(agentDir, "test-tickets.md");
+      fs.writeFileSync(
+        testTicketsPath,
+        `# Test Tickets
+
+## [ ] t-1: Open test ticket
+
+## [x] t-2: Completed test ticket`,
+      );
+
+      // Set up state to start in architect phase so we can capture the architect phase event
+      testStateManager.update({
+        current_phase: "architect",
+        status: "running",
+      });
+
+      try {
+        // Mock Auggie for the test
+        const mockTestPrompt = jest.fn().mockResolvedValue("test output");
+        const mockTestClose = jest.fn().mockResolvedValue(undefined);
+
+        (Auggie.create as jest.Mock).mockResolvedValue({
+          prompt: mockTestPrompt,
+          close: mockTestClose,
+          onSessionUpdate: jest.fn(),
+        });
+
+        // Run the loop
+        await runLoop(testStateManager);
+
+        // Parse the events log and find the architect phase event
+        const eventsPath = path.join(testTmpDir, ".carl", "events.jsonl");
+        expect(fs.existsSync(eventsPath)).toBe(true);
+
+        const events = fs
+          .readFileSync(eventsPath, "utf-8")
+          .trim()
+          .split("\n")
+          .filter((line) => line.length > 0)
+          .map((line) => JSON.parse(line));
+
+        // Find architect phase event
+        const architectPhaseEvent = events.find(
+          (e: any) => e.event === "phase" && e.phase === "architect",
+        );
+
+        expect(architectPhaseEvent).toBeDefined();
+        expect(architectPhaseEvent.meta).toBeDefined();
+        expect(architectPhaseEvent.meta.dev_open_tickets).toBe(2);
+        expect(architectPhaseEvent.meta.test_open_tickets).toBe(1);
+      } finally {
+        await closeSharedClient();
+        fs.rmSync(testTmpDir, { recursive: true, force: true });
+      }
+    });
   });
 });

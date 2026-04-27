@@ -11,75 +11,41 @@ next_skills: []
 
 # TestWriter
 
-**Deterministic first:** Read scope, AC, and existing code before writing tests.
-**Focus:** Long-lived, behavior-focused regression tests only.
-**External side effects:** Test code only. No production code. No commits until reviewer approves.
+Write long-lived, behavior-focused regression tests. Test WHAT (behavior) not HOW (implementation).
+
+**Developer phase note:** TestWriter runs within the developer phase, which is triggered when **either** `.agent/dev-tickets.md` or `.agent/test-tickets.md` has open `[ ]` tickets. See "Developer Phase Semantics" in `skills/developer.md` for the full contract. (Future optimization: the orchestrator _may_ someday avoid creating a coder client when only test-writer tickets exist; that would be a separate implementation ticket if we decide to do it.)
 
 ## Starting a Session
 
 Read in order:
+1. `.agent/notes/architect.md` — scope, AC, deferred items
+2. `.agent/test-tickets.md` — TestWriter tickets
+3. Git diff — what changed
+4. Existing tests — current coverage
 
-1. **`.agent/notes/architect.md`** — Scope, AC, and what was deferred
-2. **`.agent/test-tickets.md`** — TestWriter tickets for this session
-3. **Git status/diff** — Which code changed
-4. **Existing test files** — Current coverage around changed behavior
+## Durable Tests
 
-## Durable Regression Tests Only
-
-TestWriter writes long-lived tests that survive refactoring:
-
-**What to test (behavior/WHAT):**
-- Observable behavior, API contracts, external effects
-- Error paths and edge cases
-- Acceptance criteria coverage
-- Regression prevention across refactoring
-
-**What NOT to test (implementation/HOW):**
-- Internal implementation details
-- Private functions
-- Intermediate states
-- How something is done (not what it does)
-
-**No ephemeral tests:** TestWriter does not create `*.dev.test.ts` files (those are Developer-only, temporary TDD tests).
-
-## Subtract-First Approach
-
-When adding tests, prefer deletion and strengthening:
-
-1. **Strengthen existing tests** — Can we improve coverage of existing tests instead of adding new ones?
-2. **Delete low-value tests** — May delete or simplify low-value tests created during this session if they're redundant
-3. **Add new only if needed** — If the behavior is not covered by existing tests
+Test behavior, contracts, effects, error paths. Not implementation, private functions, internals. No `*.dev.test.ts` (Developer-only).
 
 ## Process
 
-1. Read scope, AC, and git diff
-2. Identify behavior gaps (not covered by existing tests)
-3. Write durable tests to lock in that behavior
-4. Focus on WHAT (observable behavior), not HOW (implementation)
-5. Prefer strengthening/refactoring over blindly adding tests
+1. Read scope, AC, git diff, existing tests
+2. Identify untested behavior gaps
+3. Write tests to lock in behavior
+4. WHAT not HOW
+5. Strengthen or add new
+6. Delete low-value tests
 
-## Session Complete
-
-After implementing all TestWriter tickets and writing tests:
-- All AC have test coverage
-- Tests focus on behavior, not implementation
-- Subtract-first cleanup applied
-- Code is committable
-
-Wait for reviewer approval.
+Done: AC covered, behavior-focused, committable, wait for reviewer.
 
 ## Blocked / Mikado Escalation
 
-When you cannot proceed because a prerequisite is missing or unclear, escalate to Architect:
+Escalate with `blocked: <summary>`. Revert everything.
 
-1. **Revert everything.** Leave codebase identical to before starting.
-2. Start your reply with a single-line prefix: `blocked: <short summary>`
-3. Follow with a `## Blocked ticket` section that:
-   - Names the TestWriter ticket(s) from `.agent/test-tickets.md` being worked on
-   - Summarizes what behavior you were trying to cover with tests
-4. Include a `## What is missing` subsection listing concrete missing inputs or decisions (e.g., unclear AC, missing deterministic artifacts, ambiguous existing tests) that Architect must resolve
-5. End the session. Don't work around it. Don't skip tests and proceed.
+### Blocked ticket section
 
-## Next Skill
+Identify TestWriter ticket(s) from `.agent/test-tickets.md`, summarize what behavior you were testing.
 
-None (TestWriter is not a gate phase; work continues to reviewer).
+### What is missing
+
+List concrete missing inputs needed from Architect (unclear AC, missing deterministic artifacts, ambiguous tests).

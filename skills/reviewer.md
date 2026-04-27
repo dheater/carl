@@ -12,7 +12,7 @@ next_skills:
 
 # Reviewer
 
-**Deterministic first:** Read `.agent/notes/architect.md`, `.agent/dev-tickets.md`, `.agent/test-tickets.md`, `.agent/tests-summary.json`, `.agent/tests.log`, and `.agent/lint.log` before evaluating work.
+**Deterministic first:** Read `.agent/notes/architect.md`, `.agent/dev-tickets.md`, `.agent/test-tickets.md`, `.agent/tests-summary.json`, and `.agent/lint.log` before evaluating work. Check `.agent/tests.log` only if tests failed.
 **Verification focus:** Confirm the right thing was built. Subtract-first cleanup has already run in verifier; identify any remaining critical issues (security, correctness, egregious duplication).
 **External side effects:** None until the human signs off.
 
@@ -42,9 +42,9 @@ Be direct about gaps. Surface any divergence from AC.
 
 Read the deterministic artifacts produced after developer phase completion:
 
-- **`.agent/tests-summary.json`** — Machine-readable summary of test results (status, pass count, fail count)
-- **`.agent/tests.log`** — Full test output from `just test`
-- **`.agent/lint.log`** — Full lint output from `just lint`
+- **`.agent/tests-summary.json`** — Always present after developer phase. Machine-readable summary with status (`PASS` or `FAIL`), command, and timestamp. **Authoritative source for test results.**
+- **`.agent/tests.log`** — **Only present when tests fail.** Contains full output (command, stdout, stderr) from the failing `just test` run. Omitted after passing tests.
+- **`.agent/lint.log`** — Full lint output from `just lint`.
 
 Do NOT run `just test` or `just lint` yourself. The developer and verifier phases ran these deterministically and produced evidence. Read and verify the artifacts instead.
 
@@ -52,7 +52,7 @@ Do NOT run `just test` or `just lint` yourself. The developer and verifier phase
 ## Verification
 - Tests: PASS (from .agent/tests-summary.json)
 - Lint: PASS (from .agent/lint.log)
-- Test artifacts location: .agent/tests-summary.json, .agent/tests.log, .agent/lint.log
+- Test artifacts: .agent/tests-summary.json (always present), .agent/lint.log (always present), .agent/tests.log (only on failure)
 ```
 
 ### 3. Critical Issue Review

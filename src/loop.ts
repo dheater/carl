@@ -84,9 +84,12 @@ function loadSkillFile(name: string): string {
  * Check if a ticket file has open tickets.
  * Returns true if:
  * - File doesn't exist (assume work exists, no skip)
- * - File exists and contains at least one open [ ] ticket
+ * - File exists and contains at least one open [ ] ticket heading (e.g., `## [ ] t-1: ...`)
  * Returns false if:
- * - File exists but contains no open [ ] tickets
+ * - File exists but contains no open [ ] ticket headings
+ *
+ * Only considers ticket heading lines (starting with `##`) as tickets.
+ * Ignores `[ ]` or `[x]` appearing in AC prose or inline examples.
  */
 export function hasOpenTickets(ticketFilePath: string): boolean {
   if (!fs.existsSync(ticketFilePath)) {
@@ -96,11 +99,38 @@ export function hasOpenTickets(ticketFilePath: string): boolean {
 
   try {
     const content = fs.readFileSync(ticketFilePath, "utf-8");
-    // Check for any open tickets: [ ] pattern (with optional leading -#* before it)
-    return /\[\s*\]/.test(content);
+    // Check for open ticket headings: lines starting with ## followed by [ ] (with optional whitespace)
+    // Example matches: "## [ ] t-1: ...", "## [ ]t-1: ..."
+    return /^##\s*\[\s*\]/m.test(content);
   } catch {
     // On read error, assume work exists, don't skip
     return true;
+  }
+}
+
+/**
+ * Count the number of open tickets in a ticket file.
+ * Returns 0 if:
+ * - File doesn't exist
+ * - File exists but contains no open [ ] ticket headings
+ * Returns the count of open [ ] ticket headings otherwise
+ *
+ * Only considers ticket heading lines (starting with `##`) as tickets.
+ * Ignores `[ ]` or `[x]` appearing in AC prose or inline examples.
+ */
+export function countOpenTickets(ticketFilePath: string): number {
+  if (!fs.existsSync(ticketFilePath)) {
+    return 0;
+  }
+
+  try {
+    const content = fs.readFileSync(ticketFilePath, "utf-8");
+    // Count open ticket headings: lines starting with ## followed by [ ] (with optional whitespace)
+    // Example matches: "## [ ] t-1: ...", "## [ ]t-1: ..."
+    const matches = content.match(/^##\s*\[\s*\]/gm);
+    return matches ? matches.length : 0;
+  } catch {
+    return 0;
   }
 }
 
@@ -168,11 +198,17 @@ function writeTestArtifacts(
   const summaryPath = path.join(agentDir, "tests-summary.json");
   fs.writeFileSync(summaryPath, JSON.stringify(summary, null, 2), "utf-8");
 
+  const logPath = path.join(agentDir, "tests.log");
+
   // Write test log on failure
   if (result.exitCode !== 0) {
     const logContent = `Command: ${result.command}\n\nStdout:\n${result.stdout}\n\nStderr:\n${result.stderr}`;
-    const logPath = path.join(agentDir, "tests.log");
     fs.writeFileSync(logPath, logContent, "utf-8");
+  } else {
+    // Remove stale log file if tests pass
+    if (fs.existsSync(logPath)) {
+      fs.unlinkSync(logPath);
+    }
   }
 }
 
@@ -190,6 +226,27 @@ export function buildSkillInstruction(
   phaseName: string,
   workspaceRoot?: string,
 ): string {
+  // t-12: Guard against PASS + stale tests.log
+  // If tests-summary.json shows PASS, remove any stale tests.log file
+  if (workspaceRoot) {
+    const testSummaryPath = path.join(
+      workspaceRoot,
+      ".agent",
+      "tests-summary.json",
+    );
+    const testLogPath = path.join(workspaceRoot, ".agent", "tests.log");
+    if (fs.existsSync(testSummaryPath)) {
+      try {
+        const summary = JSON.parse(fs.readFileSync(testSummaryPath, "utf-8"));
+        if (summary.status === "PASS" && fs.existsSync(testLogPath)) {
+          fs.unlinkSync(testLogPath);
+        }
+      } catch {
+        // Ignore parse errors; guard does not apply
+      }
+    }
+  }
+
   const skillContent = loadSkillFile(phaseName);
   let instruction = skillContent
     ? `# Your skill for this session\n\n${skillContent}`
@@ -334,99 +391,6 @@ function writePhaseNotes(
   fs.writeFileSync(path.join(notesDir, notesFileName), phaseOutput, "utf-8");
 }
 
-/**
- * Run the test-writer phase in parallel with developer.
- * Returns the test-writer response or throws if creation fails.
- */
-async function runTestWriterPhase(
-  workspaceRoot: string,
-  runId: string,
-): Promise<string> {
-  const { Auggie } = await import("@augmentcode/auggie-sdk");
-
-  // Close and discard any existing test-writer client from a different run
-  if (testWriterClient && testWriterClientRunId !== runId) {
-    try {
-      await testWriterClient.close();
-    } catch {
-      // Best-effort close
-    }
-    testWriterClient = null;
-    testWriterClientRunId = null;
-  }
-
-  // Create a new test-writer client if needed
-  if (!testWriterClient) {
-    console.log(`[Timing] Auggie.create entry test-writer/haiku4.5`);
-    const auggleCreateStart = Date.now();
-    testWriterClient = await Auggie.create({
-      workspaceRoot: workspaceRoot,
-      model: "haiku4.5",
-      allowIndexing: true,
-    });
-    const auggleCreateDuration = Date.now() - auggleCreateStart;
-    logTimingDuration(
-      workspaceRoot,
-      runId,
-      "Auggie.create",
-      "test-writer/haiku4.5",
-      auggleCreateDuration,
-      "test-writer",
-      "haiku4.5",
-    );
-    testWriterClientRunId = runId;
-  }
-
-  testWriterClient.onSessionUpdate((notification: any) => {
-    const update = notification.update;
-    if (update) {
-      if (update.sessionUpdate === "tool_call") {
-        console.log(
-          `\n  [test-writer/haiku4.5] Running tool: ${update.title || "unknown"}...`,
-        );
-      } else if (update.sessionUpdate === "agent_thought_chunk") {
-        if (update.content && update.content.text) {
-          process.stdout.write(`\x1b[90m${update.content.text}\x1b[0m`);
-        }
-      }
-    }
-  });
-
-  const testWriterInstruction = buildSkillInstruction(
-    "test-writer",
-    workspaceRoot,
-  );
-  console.log(
-    `  [System] Agent initialized. Sending prompt and awaiting response...`,
-  );
-  console.log(`[Timing] prompt entry test-writer/haiku4.5`);
-  const testWriterPromptStart = Date.now();
-  const testWriterResponseRaw = await testWriterClient.prompt(
-    testWriterInstruction,
-    { isAnswerOnly: true },
-  );
-  const [testWriterResponse, testWriterUsage] = extractPromptResponseText(
-    testWriterResponseRaw,
-  );
-  const testWriterPromptDuration = Date.now() - testWriterPromptStart;
-  logTimingDuration(
-    workspaceRoot,
-    runId,
-    "prompt",
-    "test-writer/haiku4.5",
-    testWriterPromptDuration,
-    "test-writer",
-    "haiku4.5",
-    {
-      prompt_chars: testWriterInstruction.length,
-      response_chars: testWriterResponse.length,
-      ...(testWriterUsage && { usage: testWriterUsage }),
-    },
-  );
-
-  return testWriterResponse;
-}
-
 export async function runLoop(stateManager: StateManager): Promise<void> {
   let state = stateManager.load();
 
@@ -449,6 +413,79 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
     const phaseName = state.current_phase;
     const model = getPhaseModel(phaseName);
     const phaseStartTime = Date.now();
+
+    // Check if developer phase should be skipped due to no open tickets (t-4: gating on ticket presence)
+    const devTicketsPath = path.join(
+      state.workspace_path,
+      ".agent",
+      "dev-tickets.md",
+    );
+    const testTicketsPath = path.join(
+      state.workspace_path,
+      ".agent",
+      "test-tickets.md",
+    );
+    const hasDevTickets = hasOpenTickets(devTicketsPath);
+    const hasTestTickets = hasOpenTickets(testTicketsPath);
+
+    if (phaseName === "developer" && !hasDevTickets && !hasTestTickets) {
+      // No open developer or test tickets - skip the phase entirely
+      console.log(
+        `[System] No open developer or test tickets. Skipping developer phase.`,
+      );
+
+      const history = state.history || [];
+      const phaseDuration = Date.now() - phaseStartTime;
+
+      // Record both entries as success (no-op)
+      history.push({
+        phase: "developer",
+        model: model,
+        status: "success",
+        outputs: "",
+      });
+
+      history.push({
+        phase: "test-writer",
+        model: "haiku4.5",
+        status: "success",
+        outputs: "",
+      });
+
+      // Log phase events
+      logTimingDuration(
+        state.workspace_path,
+        runId,
+        "phase",
+        "developer",
+        phaseDuration,
+        "developer",
+        model,
+        { status: "success", blocked: false },
+      );
+
+      logTimingDuration(
+        state.workspace_path,
+        runId,
+        "phase",
+        "test-writer",
+        phaseDuration,
+        "test-writer",
+        "haiku4.5",
+        { status: "success", blocked: false },
+      );
+
+      // Transition to next phase
+      const nextPhase = getNextPhase("developer");
+      if (nextPhase) {
+        state = stateManager.update({
+          history,
+          current_phase: nextPhase,
+        });
+        console.log(`[System] Transitioning to: ${nextPhase}`);
+      }
+      continue;
+    }
 
     console.log(`Starting phase: ${phaseName}`);
     console.log(
@@ -569,82 +606,10 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
       let response: string;
       let isBlocked: boolean;
 
-      // Check if developer/test-writer should be skipped due to no open tickets
-      const devTicketsPath = path.join(
-        state.workspace_path,
-        ".agent",
-        "dev-tickets.md",
-      );
-      const testTicketsPath = path.join(
-        state.workspace_path,
-        ".agent",
-        "test-tickets.md",
-      );
-      const hasDevTickets = hasOpenTickets(devTicketsPath);
-      const hasTestTickets = hasOpenTickets(testTicketsPath);
-
-      // Run coder and test-writer in parallel for the developer phase
-      // If BOTH have no tickets, skip the entire phase; otherwise run what we can
-      if (phaseName === "developer" && !hasDevTickets && !hasTestTickets) {
-        // No open developer or test tickets - skip the phase entirely
-        console.log(
-          `[System] No open developer or test tickets. Skipping developer phase.`,
-        );
-
-        const history = state.history || [];
-        const phaseStartTime = Date.now();
-        const phaseDuration = Date.now() - phaseStartTime;
-
-        // Record both entries as success (no-op)
-        history.push({
-          phase: "developer",
-          model: model,
-          status: "success",
-          outputs: "",
-        });
-
-        history.push({
-          phase: "test-writer",
-          model: "haiku4.5",
-          status: "success",
-          outputs: "",
-        });
-
-        // Log phase events
-        logTimingDuration(
-          state.workspace_path,
-          runId,
-          "phase",
-          "developer",
-          phaseDuration,
-          "developer",
-          model,
-          { status: "success", blocked: false },
-        );
-
-        logTimingDuration(
-          state.workspace_path,
-          runId,
-          "phase",
-          "test-writer",
-          phaseDuration,
-          "test-writer",
-          "haiku4.5",
-          { status: "success", blocked: false },
-        );
-
-        // Transition to next phase
-        const nextPhase = getNextPhase("developer");
-        if (nextPhase) {
-          state = stateManager.update({
-            history,
-            current_phase: nextPhase,
-          });
-          console.log(`[System] Transitioning to: ${nextPhase}`);
-        }
-        continue;
-      } else if (phaseName === "developer") {
-        // At least one of dev or test has tickets (we skipped both above)
+      // At this point, we know developer phase is NOT being skipped (no-ticket check is done earlier)
+      // Now we check which agents (coder vs test-writer) have tickets
+      if (phaseName === "developer") {
+        // At least one of dev or test has tickets
         const coderRunsPrompt = hasDevTickets;
         const testWriterRunsPrompt = hasTestTickets;
 
@@ -747,24 +712,42 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
           coderResponse = ""; // No-op
         }
 
+        // Log prompt events independently for each agent that actually ran
         const promptDuration = Date.now() - promptStart;
-        logTimingDuration(
-          state.workspace_path,
-          runId,
-          "prompt",
-          `coder/${model} and test-writer/haiku4.5`,
-          promptDuration,
-          phaseName,
-          model,
-          {
-            prompt_chars: instruction.length,
-            response_chars: coderResponse.length,
-            blocked:
-              /block(?:ed|er):/i.test(coderResponse) ||
-              /block(?:ed|er):/i.test(testWriterResponse),
-            ...(coderUsage && { usage: coderUsage }),
-          },
-        );
+        if (coderRunsPrompt) {
+          logTimingDuration(
+            state.workspace_path,
+            runId,
+            "prompt",
+            `coder/${model}`,
+            promptDuration,
+            "developer",
+            model,
+            {
+              prompt_chars: instruction.length,
+              response_chars: coderResponse.length,
+              blocked: /block(?:ed|er):/i.test(coderResponse),
+              ...(coderUsage && { usage: coderUsage }),
+            },
+          );
+        }
+
+        if (testWriterRunsPrompt) {
+          logTimingDuration(
+            state.workspace_path,
+            runId,
+            "prompt",
+            `test-writer/haiku4.5`,
+            promptDuration,
+            "test-writer",
+            "haiku4.5",
+            {
+              prompt_chars: testWriterInstruction.length,
+              response_chars: testWriterResponse.length,
+              blocked: /block(?:ed|er):/i.test(testWriterResponse),
+            },
+          );
+        }
 
         response = coderResponse;
         isBlocked = /block(?:ed|er):/i.test(response);
@@ -863,6 +846,27 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
       }
 
       // Log phase event with status
+      const phaseMeta: Record<string, any> = {
+        status: phaseStatus,
+        ...(phaseName === "developer" && { blocked: developerPhaseBlocked }),
+      };
+
+      // Add ticket counts for architect phase (t-5)
+      if (phaseName === "architect") {
+        const devTicketsPath = path.join(
+          state.workspace_path,
+          ".agent",
+          "dev-tickets.md",
+        );
+        const testTicketsPath = path.join(
+          state.workspace_path,
+          ".agent",
+          "test-tickets.md",
+        );
+        phaseMeta.dev_open_tickets = countOpenTickets(devTicketsPath);
+        phaseMeta.test_open_tickets = countOpenTickets(testTicketsPath);
+      }
+
       logTimingDuration(
         state.workspace_path,
         runId,
@@ -871,10 +875,7 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
         phaseDuration,
         phaseName,
         model,
-        {
-          status: phaseStatus,
-          ...(phaseName === "developer" && { blocked: developerPhaseBlocked }),
-        },
+        phaseMeta,
       );
 
       if (isBlocked) {
