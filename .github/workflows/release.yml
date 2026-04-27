@@ -81,12 +81,9 @@ jobs:
 
       - name: Update Formula/carl-ai.rb
         run: |
-          VERSION=${{ steps.version.outputs.version }}
           URL=${{ steps.sha.outputs.url }}
           SHA256=${{ steps.sha.outputs.sha256 }}
-          sed -i "s|url \".*\"|url \"${URL}\"|" Formula/carl-ai.rb
-          sed -i "s|version \".*\"|version \"${VERSION}\"|" Formula/carl-ai.rb
-          sed -i "s|sha256 \".*\"|sha256 \"${SHA256}\"|" Formula/carl-ai.rb
+          npx ts-node scripts/sync-homebrew-formula.ts --url "${URL}" --sha256 "${SHA256}"
 
       - name: Commit and push updated formula
         run: |

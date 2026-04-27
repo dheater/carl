@@ -3,10 +3,15 @@ import * as path from "path";
 
 describe("homebrew-formula", () => {
   let formulaContent: string;
+  let packageJson: { version: string };
 
   beforeAll(() => {
     const formulaPath = path.join(__dirname, "..", "Formula", "carl-ai.rb");
     formulaContent = fs.readFileSync(formulaPath, "utf-8");
+
+    const packageJsonPath = path.join(__dirname, "..", "package.json");
+    const packageJsonContent = fs.readFileSync(packageJsonPath, "utf-8");
+    packageJson = JSON.parse(packageJsonContent);
   });
 
   describe("Formula structure", () => {
@@ -53,6 +58,25 @@ describe("homebrew-formula", () => {
       if (testBlock) {
         expect(testBlock[0]).not.toMatch(/~/);
         expect(testBlock[0]).not.toMatch(/\.augment/);
+      }
+    });
+  });
+
+  describe("Version synchronization with package.json", () => {
+    it("should have version field that matches package.json.version", () => {
+      const versionMatch = formulaContent.match(/version\s+["']([^"']+)["']/);
+      expect(versionMatch).toBeTruthy();
+      if (versionMatch) {
+        expect(versionMatch[1]).toBe(packageJson.version);
+      }
+    });
+
+    it("should have url field that includes releases/download/v<version>/carl.js", () => {
+      const urlMatch = formulaContent.match(/url\s+["']([^"']+)["']/);
+      expect(urlMatch).toBeTruthy();
+      if (urlMatch) {
+        const expectedUrl = `https://github.com/dheater/carl/releases/download/v${packageJson.version}/carl.js`;
+        expect(urlMatch[1]).toBe(expectedUrl);
       }
     });
   });
