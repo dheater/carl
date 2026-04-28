@@ -1,19 +1,19 @@
 import { loadSkillContent } from "./skill-markdown-test-utils";
 
-describe("Verifier skill file structure and parsing (t-3)", () => {
+describe("cleanup skill file structure and parsing (t-3)", () => {
   let skillContent: string;
 
   beforeEach(() => {
-    skillContent = loadSkillContent("verifier");
+    skillContent = loadSkillContent("cleanup");
   });
 
-  test("verifier.md has valid YAML frontmatter", () => {
+  test("cleanup.md has valid YAML frontmatter", () => {
     // Should start with --- and have closing ---
     const frontmatterMatch = skillContent.match(/^---\n([\s\S]*?)\n---\n/);
     expect(frontmatterMatch).toBeTruthy();
   });
 
-  test("verifier.md frontmatter includes required fields", () => {
+  test("cleanup.md frontmatter includes required fields", () => {
     const frontmatterMatch = skillContent.match(/^---\n([\s\S]*?)\n---\n/);
     expect(frontmatterMatch).toBeTruthy();
 
@@ -21,7 +21,7 @@ describe("Verifier skill file structure and parsing (t-3)", () => {
 
     // Check required fields
     expect(frontmatter).toMatch(/type:\s*agent_requested/);
-    expect(frontmatter).toMatch(/name:\s*Verifier/);
+    expect(frontmatter).toMatch(/name:\s*Cleanup/);
     expect(frontmatter).toMatch(/description:/);
     expect(frontmatter).toMatch(/when_to_use:/);
     expect(frontmatter).toMatch(/version:\s*1\.0\.0/);
@@ -29,19 +29,19 @@ describe("Verifier skill file structure and parsing (t-3)", () => {
     expect(frontmatter).toMatch(/next_skills:/);
   });
 
-  test("verifier.md frontmatter includes 'developer' in prerequisites", () => {
+  test("cleanup.md frontmatter includes 'developer' in prerequisites", () => {
     const frontmatterMatch = skillContent.match(/^---\n([\s\S]*?)\n---\n/);
     const frontmatter = frontmatterMatch![1];
     expect(frontmatter).toMatch(/prerequisites:\s*\n\s*-\s*developer/);
   });
 
-  test("verifier.md frontmatter includes 'reviewer' in next_skills", () => {
+  test("cleanup.md frontmatter includes 'reviewer' in next_skills", () => {
     const frontmatterMatch = skillContent.match(/^---\n([\s\S]*?)\n---\n/);
     const frontmatter = frontmatterMatch![1];
     expect(frontmatter).toMatch(/next_skills:\s*\n\s*-\s*reviewer/);
   });
 
-  test("verifier.md does NOT include 'developer' in next_skills", () => {
+  test("cleanup.md does NOT include 'developer' in next_skills", () => {
     const frontmatterMatch = skillContent.match(/^---\n([\s\S]*?)\n---\n/);
     const frontmatter = frontmatterMatch![1];
 
@@ -54,49 +54,34 @@ describe("Verifier skill file structure and parsing (t-3)", () => {
     }
   });
 
-  test("verifier.md description mentions cleanup/check phase", () => {
+  test("cleanup.md description mentions cleanup/check phase", () => {
     expect(skillContent).toMatch(/cleanup|check/i);
   });
 
-  test("verifier.md content includes 'Lint and test status' section", () => {
-    // Should have this as an output structure example
-    expect(skillContent).toMatch(/Lint and test status/);
-  });
-
-  test("verifier.md content includes 'Changes made' section", () => {
+  test("cleanup.md content includes 'Changes made' section", () => {
     expect(skillContent).toMatch(/Changes made/);
   });
 
-  test("verifier.md content includes 'Recommendations for Developer and TestWriter' sections", () => {
+  test("cleanup.md content includes 'Recommendations for Developer and TestWriter' sections", () => {
     expect(skillContent).toMatch(/Recommendations for Developer/);
     expect(skillContent).toMatch(/Recommendations for TestWriter/);
   });
 
-  test("verifier.md mentions deterministic artifacts", () => {
-    expect(skillContent).toMatch(/\.agent\/tests-summary\.json/);
-    expect(skillContent).toMatch(/\.agent\/tests\.log/);
-    expect(skillContent).toMatch(/\.agent\/lint\.log/);
-  });
-
-  test("verifier.md instructs NOT to re-run tests or lint", () => {
-    expect(skillContent).toMatch(/Do NOT.*re-run.*just lint.*just test/is);
-  });
-
-  test("verifier.md explains subtract-first cleanup approach", () => {
+  test("cleanup.md explains subtract-first cleanup approach", () => {
     expect(skillContent).toMatch(/Subtract-First Cleanup/);
     expect(skillContent).toMatch(/Remove low-value tests/i);
     expect(skillContent).toMatch(/Remove or simplify low-value comments/i);
   });
 
-  test("verifier.md explicitly mentions that Verifier does not directly edit ticket files", () => {
-    // Verifier should provide recommendations, not edit tickets directly
+  test("cleanup.md explicitly mentions that cleanup does not directly edit ticket files", () => {
+    // cleanup should provide recommendations, not edit tickets directly
     expect(skillContent).toMatch(
       /does not.*directly edit.*\.agent\/dev-tickets\.md|does not.*directly edit.*\.agent\/test-tickets\.md/i,
     );
   });
 
-  test("verifier.md instructs Verifier to provide recommendations for Architect to turn into tickets", () => {
-    // Verifier's role is to recommend, not to create tickets
+  test("cleanup.md instructs cleanup to provide recommendations for Architect to turn into tickets", () => {
+    // cleanup's role is to recommend, not to create tickets
     expect(skillContent).toMatch(
       /provides.*recommendations.*Architect|recommendations.*turn into tickets/i,
     );

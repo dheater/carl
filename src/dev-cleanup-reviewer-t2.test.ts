@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 
-describe("t-2: Update Coder/Verifier/Reviewer skills for split tickets", () => {
+describe("t-2: Update Coder/Cleanup/Reviewer skills for split tickets", () => {
   describe("skills/developer.md", () => {
     let skillContent: string;
 
@@ -26,32 +26,32 @@ describe("t-2: Update Coder/Verifier/Reviewer skills for split tickets", () => {
     });
   });
 
-  describe("skills/verifier.md", () => {
+  describe("skills/cleanup.md", () => {
     let skillContent: string;
 
     beforeEach(() => {
-      const skillPath = path.join(__dirname, "..", "skills", "verifier.md");
+      const skillPath = path.join(__dirname, "..", "skills", "cleanup.md");
       skillContent = fs.readFileSync(skillPath, "utf-8");
     });
 
-    test("verifier.md mentions both .agent/dev-tickets.md and .agent/test-tickets.md", () => {
+    test("cleanup.md mentions both .agent/dev-tickets.md and .agent/test-tickets.md", () => {
       expect(skillContent).toMatch(/\.agent\/dev-tickets\.md/);
       expect(skillContent).toMatch(/\.agent\/test-tickets\.md/);
     });
 
-    test("verifier.md Recommendations section includes 'Recommendations for Developer' heading", () => {
+    test("cleanup.md Recommendations section includes 'Recommendations for Developer' heading", () => {
       expect(skillContent).toMatch(/Recommendations for Developer/);
     });
 
-    test("verifier.md Recommendations section includes 'Recommendations for TestWriter' heading", () => {
+    test("cleanup.md Recommendations section includes 'Recommendations for TestWriter' heading", () => {
       expect(skillContent).toMatch(/Recommendations for TestWriter/);
     });
 
-    test("verifier.md states implementation/code issues should become Developer tickets", () => {
+    test("cleanup.md states implementation/code issues should become Developer tickets", () => {
       expect(skillContent).toMatch(/implementation|code.*Developer.*ticket/is);
     });
 
-    test("verifier.md states weak regression tests should become TestWriter tickets", () => {
+    test("cleanup.md states weak regression tests should become TestWriter tickets", () => {
       expect(skillContent).toMatch(/regression|behavior.*TestWriter.*ticket/is);
     });
   });
