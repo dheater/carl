@@ -428,8 +428,26 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
     const hasDevTickets = hasOpenTickets(devTicketsPath);
     const hasTestTickets = hasOpenTickets(testTicketsPath);
 
-    if (phaseName === "developer" && !hasDevTickets && !hasTestTickets) {
-      // No open developer or test tickets - skip the phase entirely
+    // t-15: Enforce no-open-tickets invariant before reviewer gate
+    // Use countOpenTickets to check for actual open tickets (returns 0 for missing files)
+    const devOpenTicketCount = countOpenTickets(devTicketsPath);
+    const testOpenTicketCount = countOpenTickets(testTicketsPath);
+    if (
+      phaseName === "reviewer" &&
+      (devOpenTicketCount > 0 || testOpenTicketCount > 0)
+    ) {
+      throw new Error(
+        "Cannot proceed with open tickets. Please complete or mark as blocked the remaining tickets and re-run the workflow.",
+      );
+    }
+
+    if (
+      phaseName === "developer" &&
+      !hasDevTickets &&
+      !hasTestTickets &&
+      (state.developer_test_failures ?? 0) === 0
+    ) {
+      // No open developer or test tickets AND no outstanding test failures - skip the phase entirely
       console.log(
         `[System] No open developer or test tickets. Skipping developer phase.`,
       );
@@ -609,169 +627,190 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
       // At this point, we know developer phase is NOT being skipped (no-ticket check is done earlier)
       // Now we check which agents (coder vs test-writer) have tickets
       if (phaseName === "developer") {
-        // At least one of dev or test has tickets
         const coderRunsPrompt = hasDevTickets;
         const testWriterRunsPrompt = hasTestTickets;
 
-        if (coderRunsPrompt && testWriterRunsPrompt) {
+        // Special case: if no tickets but test_failures > 0, skip prompts and go straight to deterministic tests
+        if (
+          !coderRunsPrompt &&
+          !testWriterRunsPrompt &&
+          (state.developer_test_failures ?? 0) > 0
+        ) {
           console.log(
-            `[Timing] prompt entry coder/${model} and test-writer/haiku4.5 in parallel`,
+            `[System] No open tickets but test failures outstanding. Running deterministic tests to verify fix...`,
           );
-        } else if (coderRunsPrompt) {
-          console.log(
-            `[Timing] prompt entry coder/${model} (test-writer has no tickets)`,
+          // Skip prompts, proceed to deterministic tests below
+          response = "";
+          isBlocked = false;
+        } else if (!coderRunsPrompt && !testWriterRunsPrompt) {
+          // This should not happen since we check gating earlier, but be defensive
+          throw new Error(
+            "Developer phase not skipped but no open tickets and no test failures - this is unexpected",
           );
         } else {
-          console.log(
-            `[Timing] prompt entry test-writer/haiku4.5 (coder has no tickets)`,
-          );
-        }
+          // At least one of dev or test has tickets - run prompts
+          if (coderRunsPrompt && testWriterRunsPrompt) {
+            console.log(
+              `[Timing] prompt entry coder/${model} and test-writer/haiku4.5 in parallel`,
+            );
+          } else if (coderRunsPrompt) {
+            console.log(
+              `[Timing] prompt entry coder/${model} (test-writer has no tickets)`,
+            );
+          } else {
+            console.log(
+              `[Timing] prompt entry test-writer/haiku4.5 (coder has no tickets)`,
+            );
+          }
 
-        const promptStart = Date.now();
+          const promptStart = Date.now();
 
-        // Prepare test-writer instruction in advance if needed
-        let testWriterInstruction = "";
-        let twClient: any = null;
-        if (testWriterRunsPrompt) {
-          testWriterInstruction = buildSkillInstruction(
-            "test-writer",
-            state.workspace_path,
-          );
+          // Prepare test-writer instruction in advance if needed
+          let testWriterInstruction = "";
+          let twClient: any = null;
+          if (testWriterRunsPrompt) {
+            testWriterInstruction = buildSkillInstruction(
+              "test-writer",
+              state.workspace_path,
+            );
 
-          // Ensure test-writer client is ready
-          twClient = testWriterClient;
-          if (!twClient) {
-            console.log(`[Timing] Auggie.create entry test-writer/haiku4.5`);
-            const auggleCreateStart = Date.now();
-            twClient = await Auggie.create({
-              workspaceRoot: state.workspace_path,
-              model: "haiku4.5",
-              allowIndexing: true,
+            // Ensure test-writer client is ready
+            twClient = testWriterClient;
+            if (!twClient) {
+              console.log(`[Timing] Auggie.create entry test-writer/haiku4.5`);
+              const auggleCreateStart = Date.now();
+              twClient = await Auggie.create({
+                workspaceRoot: state.workspace_path,
+                model: "haiku4.5",
+                allowIndexing: true,
+              });
+              const auggleCreateDuration = Date.now() - auggleCreateStart;
+              logTimingDuration(
+                state.workspace_path,
+                runId,
+                "Auggie.create",
+                "test-writer/haiku4.5",
+                auggleCreateDuration,
+                "test-writer",
+                "haiku4.5",
+              );
+              testWriterClient = twClient;
+              testWriterClientRunId = runId;
+            }
+
+            twClient.onSessionUpdate((notification: any) => {
+              const update = notification.update;
+              if (update) {
+                if (update.sessionUpdate === "tool_call") {
+                  console.log(
+                    `\n  [test-writer/haiku4.5] Running tool: ${update.title || "unknown"}...`,
+                  );
+                } else if (update.sessionUpdate === "agent_thought_chunk") {
+                  if (update.content && update.content.text) {
+                    process.stdout.write(
+                      `\x1b[90m${update.content.text}\x1b[0m`,
+                    );
+                  }
+                }
+              }
             });
-            const auggleCreateDuration = Date.now() - auggleCreateStart;
+          }
+
+          // Run prompts conditionally
+          let coderResponse = "";
+          let testWriterResponse = "";
+          let coderUsage: Record<string, any> | undefined = undefined;
+          if (coderRunsPrompt && testWriterRunsPrompt) {
+            // Both run in parallel
+            const [crRaw, trRaw] = await Promise.all([
+              client.prompt(instruction, { isAnswerOnly: true }),
+              twClient!.prompt(testWriterInstruction, { isAnswerOnly: true }),
+            ]);
+            const [cr, crUsage] = extractPromptResponseText(crRaw);
+            const [tr] = extractPromptResponseText(trRaw);
+            coderResponse = cr;
+            testWriterResponse = tr;
+            coderUsage = crUsage;
+          } else if (coderRunsPrompt) {
+            // Only coder runs
+            const crRaw = await client.prompt(instruction, {
+              isAnswerOnly: true,
+            });
+            const [cr, crUsage] = extractPromptResponseText(crRaw);
+            coderResponse = cr;
+            testWriterResponse = ""; // No-op
+            coderUsage = crUsage;
+          } else {
+            // Only test-writer runs
+            const trRaw = await twClient!.prompt(testWriterInstruction, {
+              isAnswerOnly: true,
+            });
+            const [tr] = extractPromptResponseText(trRaw);
+            testWriterResponse = tr;
+            coderResponse = ""; // No-op
+          }
+
+          // Log prompt events independently for each agent that actually ran
+          const promptDuration = Date.now() - promptStart;
+          if (coderRunsPrompt) {
             logTimingDuration(
               state.workspace_path,
               runId,
-              "Auggie.create",
-              "test-writer/haiku4.5",
-              auggleCreateDuration,
-              "test-writer",
-              "haiku4.5",
+              "prompt",
+              `coder/${model}`,
+              promptDuration,
+              "developer",
+              model,
+              {
+                prompt_chars: instruction.length,
+                response_chars: coderResponse.length,
+                blocked: /block(?:ed|er):/i.test(coderResponse),
+                ...(coderUsage && { usage: coderUsage }),
+              },
             );
-            testWriterClient = twClient;
-            testWriterClientRunId = runId;
           }
 
-          twClient.onSessionUpdate((notification: any) => {
-            const update = notification.update;
-            if (update) {
-              if (update.sessionUpdate === "tool_call") {
-                console.log(
-                  `\n  [test-writer/haiku4.5] Running tool: ${update.title || "unknown"}...`,
-                );
-              } else if (update.sessionUpdate === "agent_thought_chunk") {
-                if (update.content && update.content.text) {
-                  process.stdout.write(`\x1b[90m${update.content.text}\x1b[0m`);
-                }
-              }
-            }
+          if (testWriterRunsPrompt) {
+            logTimingDuration(
+              state.workspace_path,
+              runId,
+              "prompt",
+              `test-writer/haiku4.5`,
+              promptDuration,
+              "test-writer",
+              "haiku4.5",
+              {
+                prompt_chars: testWriterInstruction.length,
+                response_chars: testWriterResponse.length,
+                blocked: /block(?:ed|er):/i.test(testWriterResponse),
+              },
+            );
+          }
+
+          response = coderResponse;
+          isBlocked = /block(?:ed|er):/i.test(response);
+
+          // Add developer entry first (deterministic order)
+          history.push({
+            phase: phaseName,
+            model: model,
+            status: isBlocked ? "blocked" : "success",
+            outputs: response,
           });
-        }
 
-        // Run prompts conditionally
-        let coderResponse = "";
-        let testWriterResponse = "";
-        let coderUsage: Record<string, any> | undefined = undefined;
-        if (coderRunsPrompt && testWriterRunsPrompt) {
-          // Both run in parallel
-          const [crRaw, trRaw] = await Promise.all([
-            client.prompt(instruction, { isAnswerOnly: true }),
-            twClient!.prompt(testWriterInstruction, { isAnswerOnly: true }),
-          ]);
-          const [cr, crUsage] = extractPromptResponseText(crRaw);
-          const [tr] = extractPromptResponseText(trRaw);
-          coderResponse = cr;
-          testWriterResponse = tr;
-          coderUsage = crUsage;
-        } else if (coderRunsPrompt) {
-          // Only coder runs
-          const crRaw = await client.prompt(instruction, {
-            isAnswerOnly: true,
+          // Add test-writer entry (always after developer in deterministic order)
+          const testWriterBlocked = /block(?:ed|er):/i.test(testWriterResponse);
+          history.push({
+            phase: "test-writer",
+            model: "haiku4.5",
+            status: testWriterBlocked ? "blocked" : "success",
+            outputs: testWriterResponse,
           });
-          const [cr, crUsage] = extractPromptResponseText(crRaw);
-          coderResponse = cr;
-          testWriterResponse = ""; // No-op
-          coderUsage = crUsage;
-        } else {
-          // Only test-writer runs
-          const trRaw = await twClient!.prompt(testWriterInstruction, {
-            isAnswerOnly: true,
-          });
-          const [tr] = extractPromptResponseText(trRaw);
-          testWriterResponse = tr;
-          coderResponse = ""; // No-op
-        }
 
-        // Log prompt events independently for each agent that actually ran
-        const promptDuration = Date.now() - promptStart;
-        if (coderRunsPrompt) {
-          logTimingDuration(
-            state.workspace_path,
-            runId,
-            "prompt",
-            `coder/${model}`,
-            promptDuration,
-            "developer",
-            model,
-            {
-              prompt_chars: instruction.length,
-              response_chars: coderResponse.length,
-              blocked: /block(?:ed|er):/i.test(coderResponse),
-              ...(coderUsage && { usage: coderUsage }),
-            },
-          );
-        }
-
-        if (testWriterRunsPrompt) {
-          logTimingDuration(
-            state.workspace_path,
-            runId,
-            "prompt",
-            `test-writer/haiku4.5`,
-            promptDuration,
-            "test-writer",
-            "haiku4.5",
-            {
-              prompt_chars: testWriterInstruction.length,
-              response_chars: testWriterResponse.length,
-              blocked: /block(?:ed|er):/i.test(testWriterResponse),
-            },
-          );
-        }
-
-        response = coderResponse;
-        isBlocked = /block(?:ed|er):/i.test(response);
-
-        // Add developer entry first (deterministic order)
-        history.push({
-          phase: phaseName,
-          model: model,
-          status: isBlocked ? "blocked" : "success",
-          outputs: response,
-        });
-
-        // Add test-writer entry (always after developer in deterministic order)
-        const testWriterBlocked = /block(?:ed|er):/i.test(testWriterResponse);
-        history.push({
-          phase: "test-writer",
-          model: "haiku4.5",
-          status: testWriterBlocked ? "blocked" : "success",
-          outputs: testWriterResponse,
-        });
-
-        // If either is blocked, we'll handle it below
-        if (testWriterBlocked && !isBlocked) {
-          isBlocked = true; // Treat as blocked for the gating logic
+          // If either is blocked, we'll handle it below
+          if (testWriterBlocked && !isBlocked) {
+            isBlocked = true; // Treat as blocked for the gating logic
+          }
         }
       } else {
         // Non-developer phases run normally (sequential)
@@ -949,7 +988,7 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
                   `Tests have failed ${currentFailures} times. Escalating to architect for scope/AC adjustment.`,
                 ),
               );
-              return;
+              continue;
             } else {
               // Stay in developer phase
               state = stateManager.update({
@@ -961,7 +1000,7 @@ export async function runLoop(stateManager: StateManager): Promise<void> {
                   `Tests failed (${currentFailures} strike). Staying in developer phase.`,
                 ),
               );
-              return;
+              continue;
             }
           }
           // Tests passed, reset counter

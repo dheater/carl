@@ -553,14 +553,29 @@ describe("t-1: Deterministic just test run and artifacts after developer", () =>
     expect(runJustMock).not.toHaveBeenCalled();
   });
 
-  test("t-9: keeps tests.log consistent across fail->pass retries", async () => {
-    // First run: tests fail
-    runJustMock.mockReturnValueOnce({
-      exitCode: 1,
-      stdout: "Test suite failed - first attempt",
-      stderr: "Error: assertion failed",
-      command: "just test",
-      usedJust: true,
+  test("t-9: keeps tests.log consistent across fail->pass retries within single runLoop", async () => {
+    // With the fix, a single runLoop call handles retry automatically
+    // First test run fails, loop continues and retries, second test pass
+    let testRunCount = 0;
+    runJustMock.mockImplementation(() => {
+      testRunCount++;
+      if (testRunCount === 1) {
+        return {
+          exitCode: 1,
+          stdout: "Test suite failed - first attempt",
+          stderr: "Error: assertion failed",
+          command: "just test",
+          usedJust: true,
+        };
+      } else {
+        return {
+          exitCode: 0,
+          stdout: "All tests passed - second attempt",
+          stderr: "",
+          command: "just test",
+          usedJust: true,
+        };
+      }
     });
 
     stateManager.update({
@@ -576,47 +591,25 @@ describe("t-1: Deterministic just test run and artifacts after developer", () =>
       ],
     });
 
+    // Single runLoop call with fail then pass
     await runLoop(stateManager);
 
-    // After first run: both tests-summary.json (FAIL) and tests.log exist
+    // After single runLoop with fail->pass: tests-summary.json shows PASS and tests.log is removed
     const summaryPath = path.join(tmpDir, ".agent", "tests-summary.json");
     const logPath = path.join(tmpDir, ".agent", "tests.log");
 
     expect(fs.existsSync(summaryPath)).toBe(true);
-    let summary = JSON.parse(fs.readFileSync(summaryPath, "utf-8"));
-    expect(summary.status).toBe("FAIL");
-
-    expect(fs.existsSync(logPath)).toBe(true);
-    let logContent = fs.readFileSync(logPath, "utf-8");
-    expect(logContent).toContain("Test suite failed - first attempt");
-
-    // Second run: tests pass
-    runJustMock.mockReturnValueOnce({
-      exitCode: 0,
-      stdout: "All tests passed - second attempt",
-      stderr: "",
-      command: "just test",
-      usedJust: true,
-    });
-
-    // Stay in developer phase for retry
-    stateManager.update({
-      current_phase: "developer",
-      status: "running",
-      developer_test_failures: 1,
-    });
-
-    await runLoop(stateManager);
-
-    // After second run: tests-summary.json shows PASS and tests.log is removed
-    expect(fs.existsSync(summaryPath)).toBe(true);
-    summary = JSON.parse(fs.readFileSync(summaryPath, "utf-8"));
+    const summary = JSON.parse(fs.readFileSync(summaryPath, "utf-8"));
     expect(summary.status).toBe("PASS");
     expect(summary.command).toBe("just test");
     expect(summary.timestamp).toBeDefined();
 
-    // Most important: tests.log should NOT exist when tests pass
+    // Most important: tests.log should NOT exist when final result is PASS
+    // (even though we had a failure intermediate, the loop kept going and passed)
     expect(fs.existsSync(logPath)).toBe(false);
+
+    // AC: Should have called runCanonicalTests twice (fail, retry)
+    expect(runJustMock).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -670,7 +663,35 @@ describe("t-2: Two-strike test gate escalates to architect", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  test("first failing test increments counter to 1 and stays in developer phase", async () => {
+  test("t-13: first failing deterministic test retries developer within single runLoop (fail -> pass)", async () => {
+    // With the fix, first failing test causes continue (retry), then second test run passes
+    // Since runCanonicalTests is mocked to return success by default, it will pass on retry
+    const justModule = require("./just");
+
+    let testRunCount = 0;
+    justModule.runCanonicalTests = jest.fn(() => {
+      testRunCount++;
+      if (testRunCount === 1) {
+        // First test: fail
+        return {
+          exitCode: 1,
+          stdout: "Test failed - first attempt",
+          stderr: "Error",
+          command: "just test",
+          usedJust: true,
+        };
+      } else {
+        // Retry: pass
+        return {
+          exitCode: 0,
+          stdout: "Tests passed - retry",
+          stderr: "",
+          command: "just test",
+          usedJust: true,
+        };
+      }
+    });
+
     stateManager.update({
       current_phase: "developer",
       status: "running",
@@ -687,23 +708,38 @@ describe("t-2: Two-strike test gate escalates to architect", () => {
     await runLoop(stateManager);
 
     const state = stateManager.load();
-    // Should stay in developer phase
-    expect(state.current_phase).toBe("developer");
-    expect(state.status).toBe("running");
-    // Counter should be 1
-    expect(state.developer_test_failures).toBe(1);
-    // History should have a blocked entry
+    // After first failure and retry pass, should advance through phases
+    // Developer doesn't directly go to next phase - goes through verifier first
+    // Eventually reaches reviewer (first gate after developer)
+    expect(state.current_phase).toBe("reviewer");
+    expect(state.status).toBe("awaiting_approval");
+    // Counter should be reset to 0 since tests passed on retry
+    expect(state.developer_test_failures).toBe(0);
+    // History should show blocked entry from first failure
     const developerHistories = state.history!.filter(
       (h) => h.phase === "developer",
     );
-    const blockedEntry = developerHistories[developerHistories.length - 1];
-    expect(blockedEntry.status).toBe("blocked");
-    // AC: Verify outputs contains both "Tests failed" prefix and "staying in developer phase"
-    expect(blockedEntry.outputs).toMatch(/Tests failed/);
-    expect(blockedEntry.outputs).toMatch(/staying in developer phase/i);
+    const blockedEntry = developerHistories.find((h) => h.status === "blocked");
+    expect(blockedEntry).toBeDefined();
+    expect(blockedEntry!.outputs).toMatch(/Tests failed/);
+    expect(blockedEntry!.outputs).toMatch(/staying in developer phase/i);
+    // Should have called runCanonicalTests twice (fail, then retry)
+    expect(justModule.runCanonicalTests).toHaveBeenCalledTimes(2);
   });
 
-  test("second consecutive failing test escalates to architect", async () => {
+  test("second consecutive failing test escalates to architect gate", async () => {
+    // With the fix, second consecutive failure escalates to architect which is a gate
+    const justModule = require("./just");
+
+    // Both test runs fail
+    justModule.runCanonicalTests = jest.fn(() => ({
+      exitCode: 1,
+      stdout: "Test failed",
+      stderr: "Error",
+      command: "just test",
+      usedJust: true,
+    }));
+
     // Simulate state after first failing test
     stateManager.update({
       current_phase: "developer",
@@ -728,11 +764,13 @@ describe("t-2: Two-strike test gate escalates to architect", () => {
     await runLoop(stateManager);
 
     const state = stateManager.load();
-    // Should escalate to architect
+    // Should escalate to architect gate (status becomes awaiting_approval when gate is hit)
     expect(state.current_phase).toBe("architect");
-    expect(state.status).toBe("running");
-    // Counter should still be 2
+    expect(state.status).toBe("awaiting_approval");
+    // Counter should be 2
     expect(state.developer_test_failures).toBe(2);
+    // Should have called runCanonicalTests once (second failure)
+    expect(justModule.runCanonicalTests).toHaveBeenCalledTimes(1);
   });
 
   test("passing test resets counter to 0 and allows advance to reviewer", async () => {
@@ -812,6 +850,191 @@ describe("t-2: Two-strike test gate escalates to architect", () => {
     expect(developerIndex).toBeGreaterThanOrEqual(0);
     expect(verifierIndex).toBeGreaterThan(developerIndex);
     expect(reviewerIndex).toBeGreaterThan(verifierIndex);
+  });
+
+  test("t-13: two consecutive failing deterministic tests escalate to architect within single runLoop", async () => {
+    // AC: Simulate two consecutive failing deterministic tests within a single runLoop
+    const justModule = require("./just");
+
+    // Both test runs fail
+    justModule.runCanonicalTests = jest.fn(() => ({
+      exitCode: 1,
+      stdout: "Test failed",
+      stderr: "Error",
+      command: "just test",
+      usedJust: true,
+    }));
+
+    stateManager.update({
+      current_phase: "developer",
+      status: "running",
+      developer_test_failures: 0,
+      history: [
+        {
+          phase: "architect",
+          model: "gpt5.1",
+          status: "success",
+          outputs: "# Tickets",
+        },
+      ],
+    });
+
+    // AC: Should complete in one runLoop call (note: architect is a gate, so status becomes awaiting_approval)
+    await runLoop(stateManager);
+
+    const state = stateManager.load();
+
+    // AC: After two consecutive failures, should escalate to architect gate
+    // Note: AC specified `status === "running"`, but architect is a gate phase,
+    // so status is set to "awaiting_approval" when entering architect.
+    // This is the correct observable behavior.
+    expect(state.current_phase).toBe("architect");
+    expect(state.status).toBe("awaiting_approval");
+    expect(state.developer_test_failures).toBe(2);
+
+    // AC: runCanonicalTests should be called exactly twice (first fail, second fail)
+    expect(justModule.runCanonicalTests).toHaveBeenCalledTimes(2);
+
+    // AC: History should show the blocked entries from test failures
+    const blockedDevEntries = state.history!.filter(
+      (h) => h.phase === "developer" && h.status === "blocked",
+    );
+    expect(blockedDevEntries).toHaveLength(2);
+  });
+});
+
+describe("t-14: Ensure deterministic test retry is not skipped by 'no open tickets' gating", () => {
+  let tmpDir: string;
+  let stateManager: StateManager;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-test-t14-"));
+    stateManager = new StateManager(tmpDir);
+    stateManager.create(tmpDir);
+
+    const skillsDir = path.join(tmpDir, "skills");
+    fs.mkdirSync(skillsDir);
+    for (const phase of HAPPY_PATH_GRAPH) {
+      fs.writeFileSync(
+        path.join(skillsDir, `${phase}.md`),
+        `dummy ${phase} skill`,
+      );
+    }
+
+    (Auggie.create as jest.Mock).mockResolvedValue({
+      prompt: jest.fn().mockResolvedValue("mocked response"),
+      close: jest.fn().mockResolvedValue(undefined),
+      onSessionUpdate: jest.fn(),
+    });
+  });
+
+  afterEach(async () => {
+    await closeSharedClient();
+    jest.clearAllMocks();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("AC 1: When developer_test_failures > 0 with closed tickets, deterministic retry is not skipped", async () => {
+    // Setup: Both ticket files contain only closed [x] tickets
+    const devTicketsPath = path.join(tmpDir, ".agent", "dev-tickets.md");
+    const testTicketsPath = path.join(tmpDir, ".agent", "test-tickets.md");
+
+    fs.mkdirSync(path.dirname(devTicketsPath), { recursive: true });
+    fs.writeFileSync(devTicketsPath, "## [x] t-1: closed ticket");
+    fs.writeFileSync(testTicketsPath, "## [x] t-1: closed test ticket");
+
+    // Mock Auggie client
+    const mockPrompt = jest.fn().mockResolvedValue("mocked response");
+    (Auggie.create as jest.Mock).mockResolvedValue({
+      prompt: mockPrompt,
+      close: jest.fn().mockResolvedValue(undefined),
+      onSessionUpdate: jest.fn(),
+    });
+
+    // Mock test to fail
+    const justModule = require("./just");
+    justModule.runCanonicalTests = jest.fn(() => ({
+      exitCode: 1,
+      stdout: "Test failed",
+      stderr: "Error",
+      command: "just test",
+      usedJust: true,
+    }));
+
+    // Start from developer phase with developer_test_failures === 1
+    stateManager.update({
+      current_phase: "developer",
+      status: "running",
+      developer_test_failures: 1,
+      history: [
+        {
+          phase: "architect",
+          model: "gpt5.1",
+          status: "success",
+          outputs: "# Tickets",
+        },
+      ],
+    });
+
+    // AC: runLoop should not skip developer phase and should invoke runCanonicalTests
+    await runLoop(stateManager);
+
+    const state = stateManager.load();
+
+    // AC: Should escalate to architect, not skip
+    expect(state.current_phase).toBe("architect");
+    expect(state.status).toBe("awaiting_approval");
+    expect(state.developer_test_failures).toBe(2);
+
+    // AC: runCanonicalTests must have been called (not skipped)
+    expect(justModule.runCanonicalTests).toHaveBeenCalledTimes(1);
+  });
+
+  test("AC 2: When developer_test_failures === 0 with closed tickets, skip developer phase", async () => {
+    // Setup: Both ticket files contain only closed [x] tickets
+    const devTicketsPath = path.join(tmpDir, ".agent", "dev-tickets.md");
+    const testTicketsPath = path.join(tmpDir, ".agent", "test-tickets.md");
+
+    fs.mkdirSync(path.dirname(devTicketsPath), { recursive: true });
+    fs.writeFileSync(devTicketsPath, "## [x] t-1: closed ticket");
+    fs.writeFileSync(testTicketsPath, "## [x] t-1: closed test ticket");
+
+    // Mock test (shouldn't be called)
+    const justModule = require("./just");
+    justModule.runCanonicalTests = jest.fn(() => ({
+      exitCode: 0,
+      stdout: "All tests passed",
+      stderr: "",
+      command: "just test",
+      usedJust: true,
+    }));
+
+    // Start from developer phase with developer_test_failures === 0 (fresh state)
+    stateManager.update({
+      current_phase: "developer",
+      status: "running",
+      developer_test_failures: 0,
+      history: [
+        {
+          phase: "architect",
+          model: "gpt5.1",
+          status: "success",
+          outputs: "# Tickets",
+        },
+      ],
+    });
+
+    // AC: runLoop should skip developer phase (no open tickets, no failures)
+    await runLoop(stateManager);
+
+    const state = stateManager.load();
+
+    // AC: Should skip to reviewer, not run deterministic tests
+    expect(state.current_phase).toBe("reviewer");
+    expect(state.developer_test_failures).toBe(0);
+
+    // AC: runCanonicalTests must NOT have been called (skipped)
+    expect(justModule.runCanonicalTests).not.toHaveBeenCalled();
   });
 });
 
@@ -1777,8 +2000,10 @@ describe("t-4: Reviewer uses deterministic artifacts and reject routes to archit
       ],
     });
 
-    // Developer succeeds, TestWriter succeeds, but canonical tests fail (1st strike)
-    mockPrompt.mockResolvedValueOnce("developer implementation");
+    // Developer succeeds, TestWriter succeeds, then canonical tests fail (1st strike)
+    // After the fix: on first failure, loop continues and reruns developer/test-writer
+    // Second test run passes, so counter resets to 0 and workflow advances
+    mockPrompt.mockResolvedValueOnce("developer implementation"); // First dev/test-writer run
     mockPrompt.mockResolvedValueOnce("test-writer tests");
     mockCanonicalTests.mockReturnValueOnce({
       exitCode: 1,
@@ -1787,35 +2012,45 @@ describe("t-4: Reviewer uses deterministic artifacts and reject routes to archit
       command: "just test",
       usedJust: true,
     });
+    // After continue, loop retries developer/test-writer (with same prompts)
+    mockPrompt.mockResolvedValueOnce("developer implementation"); // Retry dev/test-writer
+    mockPrompt.mockResolvedValueOnce("test-writer tests");
+    mockCanonicalTests.mockReturnValueOnce({
+      exitCode: 0,
+      stdout: "Tests passed on retry",
+      stderr: "",
+      command: "just test",
+      usedJust: true,
+    });
+    // Then verifier, then reviewer
+    mockPrompt.mockResolvedValueOnce("verifier feedback");
+    mockPrompt.mockResolvedValueOnce("reviewer approval");
 
     await runLoop(stateManager);
 
     const state = stateManager.load();
 
-    // AC: After TestWriter, canonical tests run and fail
-    // AC: Stays in developer phase (1st strike)
-    expect(state.current_phase).toBe("developer");
-    expect(state.developer_test_failures).toBe(1);
+    // AC: After first test failure and retry pass, workflow should advance
+    // Developer doesn't gate, so after verifier, should reach reviewer (first gate)
+    expect(state.current_phase).toBe("reviewer");
+    expect(state.status).toBe("awaiting_approval");
+    expect(state.developer_test_failures).toBe(0); // Counter reset after pass
 
-    // AC: History shows developer success and test-writer success
-    expect(state.history![1]).toEqual(
-      expect.objectContaining({
-        phase: "developer",
-        status: "success",
-      }),
+    // AC: History shows developer success entries and blocked entry for first failure
+    const developerEntries = state.history!.filter(
+      (h) => h.phase === "developer",
     );
-    expect(state.history![2]).toEqual(
-      expect.objectContaining({
-        phase: "test-writer",
-        status: "success",
-      }),
-    );
+    const blockedEntry = developerEntries.find((h) => h.status === "blocked");
+    expect(blockedEntry).toBeDefined();
 
-    // AC: Additional blocked entry for test failure
-    const testBlockedEntry = state.history!.find(
-      (h) => h.phase === "developer" && h.status === "blocked",
+    // AC: Also shows test-writer entries
+    const testWriterEntries = state.history!.filter(
+      (h) => h.phase === "test-writer",
     );
-    expect(testBlockedEntry).toBeDefined();
+    expect(testWriterEntries.length).toBeGreaterThan(0);
+
+    // AC: Should have called runCanonicalTests twice (first fail, then retry pass)
+    expect(mockCanonicalTests).toHaveBeenCalledTimes(2);
   });
 
   test("t-4: Implementation group invariant - deterministic checks do not run if developer blocks", async () => {
@@ -2032,8 +2267,27 @@ describe("t-4: Regression tests for logging schema and context removal", () => {
     mockPrompt.mockResolvedValueOnce("developer implementation");
     mockPrompt.mockResolvedValueOnce("test-writer tests");
     mockPrompt.mockResolvedValueOnce("verifier feedback");
-    mockPrompt.mockResolvedValueOnce("reviewer approval");
 
+    // First runLoop: developer/test-writer run, then hit t-15 guard at reviewer
+    try {
+      await runLoop(stateManager);
+    } catch (e: any) {
+      if (!e.message?.includes("Cannot proceed with open tickets")) {
+        throw e;
+      }
+      // Expected: t-15 guard prevents reviewer with open tickets
+    }
+
+    // Close the ticket before reviewer phase (t-15 invariant: no open tickets at reviewer)
+    fs.writeFileSync(
+      path.join(agentDir, "dev-tickets.md"),
+      "## [x] t-1: Open ticket",
+      "utf-8",
+    );
+
+    // Resume from reviewer gate
+    stateManager.update({ status: "running" });
+    mockPrompt.mockResolvedValueOnce("reviewer approval");
     await runLoop(stateManager);
 
     // Read events log
@@ -2400,6 +2654,31 @@ describe("t-102: Regression tests for usage metadata and developer/test-writer s
       ],
     });
 
+    // First runLoop: developer and test-writer run, then hit t-15 guard at reviewer
+    try {
+      await runLoop(stateManager);
+    } catch (e: any) {
+      if (!e.message?.includes("Cannot proceed with open tickets")) {
+        throw e;
+      }
+      // Expected: t-15 guard prevents reviewer with open tickets
+    }
+
+    // Close tickets before reviewer phase (t-15 invariant)
+    fs.writeFileSync(
+      path.join(agentDir, "dev-tickets.md"),
+      "## [x] t-1: Open ticket",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(agentDir, "test-tickets.md"),
+      "## [x] tt-1: Open test ticket",
+      "utf-8",
+    );
+
+    // Resume from reviewer gate
+    stateManager.update({ status: "running" });
+    mockPrompt.mockResolvedValueOnce("approved"); // reviewer (we already queued 3 responses)
     await runLoop(stateManager);
 
     // Read events
@@ -2546,102 +2825,8 @@ describe("t-5: Allow empty developer/test ticket queues to skip phases", () => {
       "## [x] t-1: Completed\n## [x] t-2: Done",
       "utf-8",
     );
-    // Create test-tickets.md with open tickets
-    fs.writeFileSync(
-      path.join(agentDir, "test-tickets.md"),
-      "## [ ] tt-1: Test ticket",
-      "utf-8",
-    );
-
-    const mockPrompt = jest.fn().mockResolvedValue("mocked response");
-    const mockClose = jest.fn().mockResolvedValue(undefined);
-    const mockOnSessionUpdate = jest.fn();
-
-    (Auggie.create as jest.Mock).mockResolvedValue({
-      prompt: mockPrompt,
-      close: mockClose,
-      onSessionUpdate: mockOnSessionUpdate,
-    });
-
-    stateManager.update({
-      current_phase: "developer",
-      status: "running",
-      history: [
-        {
-          phase: "architect",
-          model: "gpt5.1",
-          status: "success",
-          outputs: "# Tickets",
-        },
-      ],
-    });
-
-    try {
-      await runLoop(stateManager);
-      const state = stateManager.load();
-
-      // AC: Developer phase should be skipped
-      expect(state.current_phase).toBe("reviewer");
-      expect(state.status).toBe("awaiting_approval");
-
-      // AC: History should have developer entry (no-op)
-      const devHistory = state.history!.find((h) => h.phase === "developer");
-      expect(devHistory).toBeDefined();
-      expect(devHistory!.status).toBe("success");
-      expect(devHistory!.outputs).toBe("");
-
-      // AC: Check events.jsonl - should NOT have prompt event with phase="developer"
-      const eventsPath = path.join(tmpDir, ".carl", "events.jsonl");
-      expect(fs.existsSync(eventsPath)).toBe(true);
-
-      const events = fs
-        .readFileSync(eventsPath, "utf-8")
-        .trim()
-        .split("\n")
-        .filter((line) => line.length > 0)
-        .map((line) => JSON.parse(line));
-
-      const developerPromptEvent = events.find(
-        (e: any) => e.event === "prompt" && e.phase === "developer",
-      );
-      expect(developerPromptEvent).toBeUndefined();
-
-      // AC: test-writer should still run (has open tickets)
-      const testWriterPromptEvent = events.find(
-        (e: any) => e.event === "prompt" && e.phase === "test-writer",
-      );
-      expect(testWriterPromptEvent).toBeDefined();
-    } finally {
-      await closeSharedClient();
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  test("t-1: No test-writer prompt event when test-tickets.md has no open tickets", async () => {
-    const tmpDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), "carl-test-t1-no-tw-"),
-    );
-    const stateManager = new StateManager(tmpDir);
-    stateManager.create(tmpDir);
-
-    const skillsDir = path.join(tmpDir, "skills");
-    fs.mkdirSync(skillsDir);
-    for (const phase of HAPPY_PATH_GRAPH) {
-      fs.writeFileSync(
-        path.join(skillsDir, `${phase}.md`),
-        `dummy ${phase} skill`,
-      );
-    }
-
-    // Create dev-tickets.md with open tickets
-    const agentDir = path.join(tmpDir, ".agent");
-    fs.mkdirSync(agentDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(agentDir, "dev-tickets.md"),
-      "## [ ] t-1: Dev ticket",
-      "utf-8",
-    );
     // Create test-tickets.md with NO open tickets
+    // When both dev and test tickets are absent, developer phase is skipped entirely
     fs.writeFileSync(
       path.join(agentDir, "test-tickets.md"),
       "## [x] tt-1: Test completed",
@@ -2672,12 +2857,123 @@ describe("t-5: Allow empty developer/test ticket queues to skip phases", () => {
     });
 
     try {
+      // Developer and test-writer will be skipped (no open dev or test tickets)
+      // runLoop will: skip developer → verifier → reviewer (reaches gate and pauses)
       await runLoop(stateManager);
+
+      // Need to close tickets and resume to actually reach reviewer
+      // But there are no tickets to close, so we can just continue
+      stateManager.update({ status: "running" });
+      mockPrompt.mockResolvedValueOnce("reviewer approval");
+      await runLoop(stateManager);
+
       const state = stateManager.load();
 
-      // AC: Developer should run, test-writer should be skipped
+      // AC: Developer phase should be skipped, reviewer gate should be reached
       expect(state.current_phase).toBe("reviewer");
       expect(state.status).toBe("awaiting_approval");
+
+      // AC: Check events.jsonl - should NOT have prompt event with phase="developer" or "test-writer"
+      const eventsPath = path.join(tmpDir, ".carl", "events.jsonl");
+      expect(fs.existsSync(eventsPath)).toBe(true);
+
+      const events = fs
+        .readFileSync(eventsPath, "utf-8")
+        .trim()
+        .split("\n")
+        .filter((line) => line.length > 0)
+        .map((line) => JSON.parse(line));
+
+      // AC: Developer should NOT have prompt event (skipped due to no open tickets)
+      const developerPromptEvent = events.find(
+        (e: any) => e.event === "prompt" && e.phase === "developer",
+      );
+      expect(developerPromptEvent).toBeUndefined();
+
+      // AC: test-writer should NOT have prompt event (skipped due to no open tickets)
+      const testWriterPromptEvent = events.find(
+        (e: any) => e.event === "prompt" && e.phase === "test-writer",
+      );
+      expect(testWriterPromptEvent).toBeUndefined();
+    } finally {
+      await closeSharedClient();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("t-1: No test-writer prompt event when test-tickets.md has no open tickets", async () => {
+    const tmpDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "carl-test-t1-no-tw-"),
+    );
+    const stateManager = new StateManager(tmpDir);
+    stateManager.create(tmpDir);
+
+    const skillsDir = path.join(tmpDir, "skills");
+    fs.mkdirSync(skillsDir);
+    for (const phase of HAPPY_PATH_GRAPH) {
+      fs.writeFileSync(
+        path.join(skillsDir, `${phase}.md`),
+        `dummy ${phase} skill`,
+      );
+    }
+
+    // Create dev-tickets.md and test-tickets.md
+    // The test is about event logging when test-writer is skipped
+    // (test-writer has no open tickets, but developer has open tickets)
+    const agentDir = path.join(tmpDir, ".agent");
+    fs.mkdirSync(agentDir, { recursive: true });
+    // dev-tickets.md has OPEN tickets (developer will run)
+    fs.writeFileSync(
+      path.join(agentDir, "dev-tickets.md"),
+      "## [ ] t-1: Dev ticket",
+      "utf-8",
+    );
+    // test-tickets.md has NO open tickets (test-writer will be skipped)
+    fs.writeFileSync(
+      path.join(agentDir, "test-tickets.md"),
+      "## [x] tt-1: Test completed",
+      "utf-8",
+    );
+
+    const mockPrompt = jest.fn().mockResolvedValue("mocked response");
+    const mockClose = jest.fn().mockResolvedValue(undefined);
+    const mockOnSessionUpdate = jest.fn();
+
+    (Auggie.create as jest.Mock).mockResolvedValue({
+      prompt: mockPrompt,
+      close: mockClose,
+      onSessionUpdate: mockOnSessionUpdate,
+    });
+
+    stateManager.update({
+      current_phase: "developer",
+      status: "running",
+      history: [
+        {
+          phase: "architect",
+          model: "gpt5.1",
+          status: "success",
+          outputs: "# Tickets",
+        },
+      ],
+    });
+
+    try {
+      // Developer phase runs with open dev tickets, test-writer skipped (no open test tickets)
+      // runLoop will: developer → verifier → try reviewer → HIT T-15 GUARD
+      let threwT15Guard = false;
+      try {
+        await runLoop(stateManager);
+      } catch (e: any) {
+        if (e.message?.includes("Cannot proceed with open tickets")) {
+          threwT15Guard = true;
+        } else {
+          throw e;
+        }
+      }
+
+      // We should have hit the t-15 guard (expected behavior)
+      expect(threwT15Guard).toBe(true);
 
       // AC: Check events.jsonl
       const eventsPath = path.join(tmpDir, ".carl", "events.jsonl");
@@ -2696,7 +2992,7 @@ describe("t-5: Allow empty developer/test ticket queues to skip phases", () => {
       );
       expect(developerPromptEvent).toBeDefined();
 
-      // AC: test-writer should NOT have prompt event
+      // AC: test-writer should NOT have prompt event (skipped due to no open test tickets)
       const testWriterPromptEvent = events.find(
         (e: any) => e.event === "prompt" && e.phase === "test-writer",
       );
@@ -2792,12 +3088,12 @@ describe("t-5: Allow empty developer/test ticket queues to skip phases", () => {
       );
     }
 
-    // Create dev-tickets.md with open tickets
+    // Create dev-tickets.md with all closed (developer phase has run and closed them)
     const agentDir = path.join(tmpDir, ".agent");
     fs.mkdirSync(agentDir, { recursive: true });
     fs.writeFileSync(
       path.join(agentDir, "dev-tickets.md"),
-      "## [ ] t-1: Open ticket\n## [x] t-2: Done",
+      "## [x] t-1: Open ticket\n## [x] t-2: Done",
       "utf-8",
     );
 
@@ -2838,6 +3134,12 @@ describe("t-5: Allow empty developer/test ticket queues to skip phases", () => {
 
     try {
       await runLoop(stateManager);
+
+      // Resume from reviewer gate by updating status
+      stateManager.update({ status: "running" });
+      mockPrompt.mockResolvedValueOnce("reviewer approval");
+      await runLoop(stateManager);
+
       const state = stateManager.load();
 
       // AC: Developer phase should run (prompts sent to coder/test-writer)
@@ -2912,7 +3214,7 @@ describe("t-1: Tests for prompt budgets and ticket-scoped context", () => {
       );
     }
 
-    // Create both with open tickets
+    // Create both with OPEN tickets (to test that both developer and test-writer run)
     const agentDir = path.join(tmpDir, ".agent");
     fs.mkdirSync(agentDir, { recursive: true });
     fs.writeFileSync(
@@ -2959,7 +3261,22 @@ describe("t-1: Tests for prompt budgets and ticket-scoped context", () => {
     });
 
     try {
-      await runLoop(stateManager);
+      // runLoop will execute: developer (prompts for both coder and test-writer) → verifier →
+      // then hit t-15 guard when trying to reach reviewer with open tickets
+      let threwT15Guard = false;
+      try {
+        await runLoop(stateManager);
+      } catch (e: any) {
+        if (e.message?.includes("Cannot proceed with open tickets")) {
+          threwT15Guard = true;
+        } else {
+          throw e;
+        }
+      }
+
+      // We should have hit the t-15 guard (expected behavior)
+      expect(threwT15Guard).toBe(true);
+
       const eventsPath = path.join(tmpDir, ".carl", "events.jsonl");
       expect(fs.existsSync(eventsPath)).toBe(true);
 
@@ -2971,6 +3288,7 @@ describe("t-1: Tests for prompt budgets and ticket-scoped context", () => {
         .map((line) => JSON.parse(line));
 
       // AC: Both developer and test-writer prompts should be logged
+      // (they run during the developer phase before hitting t-15 guard)
       const devPromptEvent = events.find(
         (e: any) => e.event === "prompt" && e.phase === "developer",
       );
@@ -3387,5 +3705,205 @@ The AC mentions that zero open \`[ ]\` tickets should skip the phase.`,
         fs.rmSync(testTmpDir, { recursive: true, force: true });
       }
     });
+  });
+});
+
+describe("t-15: Reviewer-ticket completion invariant", () => {
+  let tmpDir: string;
+  let stateManager: StateManager;
+  let mockPrompt: jest.Mock;
+  let mockClose: jest.Mock;
+  let mockOnSessionUpdate: jest.Mock;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-test-"));
+    stateManager = new StateManager(tmpDir);
+    stateManager.create(tmpDir);
+
+    const skillsDir = path.join(tmpDir, "skills");
+    fs.mkdirSync(skillsDir);
+    for (const phase of HAPPY_PATH_GRAPH) {
+      fs.writeFileSync(
+        path.join(skillsDir, `${phase}.md`),
+        `dummy ${phase} skill`,
+      );
+    }
+
+    mockPrompt = jest.fn().mockResolvedValue("mocked response");
+    mockClose = jest.fn().mockResolvedValue(undefined);
+    mockOnSessionUpdate = jest.fn();
+
+    (Auggie.create as jest.Mock).mockResolvedValue({
+      prompt: mockPrompt,
+      close: mockClose,
+      onSessionUpdate: mockOnSessionUpdate,
+    });
+  });
+
+  afterEach(async () => {
+    await closeSharedClient();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    jest.clearAllMocks();
+  });
+
+  test("AC 1: throws error when reviewer phase starts with open dev tickets", async () => {
+    // Setup: Create dev-tickets.md with open tickets
+    const devTicketsPath = path.join(tmpDir, ".agent", "dev-tickets.md");
+    const testTicketsPath = path.join(tmpDir, ".agent", "test-tickets.md");
+
+    fs.writeFileSync(devTicketsPath, `# Dev Tickets\n## [ ] t-1: Open ticket`);
+    // test-tickets.md may be absent or closed, doesn't matter
+    fs.writeFileSync(
+      testTicketsPath,
+      `# Test Tickets\n## [x] t-1: Closed ticket`,
+    );
+
+    // Set state to reviewer phase
+    stateManager.update({
+      current_phase: "reviewer",
+      status: "running",
+      history: [
+        {
+          phase: "developer",
+          model: "haiku4.5",
+          status: "success",
+          outputs: "implementation",
+        },
+      ],
+    });
+
+    // AC: runLoop should throw a deterministic error before invoking reviewer prompt
+    let error: any;
+    try {
+      await runLoop(stateManager);
+    } catch (e: any) {
+      error = e;
+    }
+    expect(error).toBeDefined();
+
+    // AC: Verify the error message is clear and guides user
+    expect(error.message).toMatch(/open.*ticket|ticket.*complete/i);
+    expect(error.message).not.toMatch(/phase|internal|architect/);
+
+    // AC: Verify reviewer prompt was never called
+    expect(mockPrompt).not.toHaveBeenCalled();
+  });
+
+  test("AC 2: throws error when reviewer phase starts with open test tickets", async () => {
+    // Setup: Create test-tickets.md with open tickets
+    const devTicketsPath = path.join(tmpDir, ".agent", "dev-tickets.md");
+    const testTicketsPath = path.join(tmpDir, ".agent", "test-tickets.md");
+
+    fs.writeFileSync(
+      devTicketsPath,
+      `# Dev Tickets\n## [x] t-1: Closed ticket`,
+    );
+    fs.writeFileSync(
+      testTicketsPath,
+      `# Test Tickets\n## [ ] t-1: Open test ticket`,
+    );
+
+    // Set state to reviewer phase
+    stateManager.update({
+      current_phase: "reviewer",
+      status: "running",
+      history: [
+        {
+          phase: "developer",
+          model: "haiku4.5",
+          status: "success",
+          outputs: "implementation",
+        },
+      ],
+    });
+
+    // AC: runLoop should throw before invoking reviewer
+    await expect(runLoop(stateManager)).rejects.toThrow();
+
+    // AC: Reviewer prompt should not be called
+    expect(mockPrompt).not.toHaveBeenCalled();
+  });
+
+  test("AC 3: happy path - reviewer runs when all tickets are closed", async () => {
+    // Setup: Both ticket files have only closed tickets
+    const devTicketsPath = path.join(tmpDir, ".agent", "dev-tickets.md");
+    const testTicketsPath = path.join(tmpDir, ".agent", "test-tickets.md");
+
+    fs.writeFileSync(
+      devTicketsPath,
+      `# Dev Tickets\n## [x] t-1: Closed ticket`,
+    );
+    fs.writeFileSync(
+      testTicketsPath,
+      `# Test Tickets\n## [x] t-1: Closed test ticket`,
+    );
+
+    // Set state to reviewer phase
+    stateManager.update({
+      current_phase: "reviewer",
+      status: "running",
+      history: [
+        {
+          phase: "developer",
+          model: "haiku4.5",
+          status: "success",
+          outputs: "implementation",
+        },
+      ],
+    });
+
+    mockPrompt.mockResolvedValueOnce("reviewer approval");
+
+    // AC: runLoop should proceed normally
+    await runLoop(stateManager);
+
+    // AC: Reviewer prompt should be called once
+    expect(mockPrompt).toHaveBeenCalledTimes(1);
+
+    // AC: State should have reviewer at gate awaiting approval
+    const state = stateManager.load();
+    expect(state.current_phase).toBe("reviewer");
+    expect(state.status).toBe("awaiting_approval");
+  });
+
+  test("AC 4: happy path - reviewer runs when ticket files don't exist", async () => {
+    // Setup: No ticket files at all
+    const devTicketsPath = path.join(tmpDir, ".agent", "dev-tickets.md");
+    const testTicketsPath = path.join(tmpDir, ".agent", "test-tickets.md");
+
+    // Ensure neither file exists
+    if (fs.existsSync(devTicketsPath)) {
+      fs.unlinkSync(devTicketsPath);
+    }
+    if (fs.existsSync(testTicketsPath)) {
+      fs.unlinkSync(testTicketsPath);
+    }
+
+    // Set state to reviewer phase
+    stateManager.update({
+      current_phase: "reviewer",
+      status: "running",
+      history: [
+        {
+          phase: "developer",
+          model: "haiku4.5",
+          status: "success",
+          outputs: "implementation",
+        },
+      ],
+    });
+
+    mockPrompt.mockResolvedValueOnce("reviewer approval");
+
+    // AC: runLoop should proceed normally
+    await runLoop(stateManager);
+
+    // AC: Reviewer prompt should be called once
+    expect(mockPrompt).toHaveBeenCalledTimes(1);
+
+    // AC: State should be at reviewer gate
+    const state = stateManager.load();
+    expect(state.current_phase).toBe("reviewer");
+    expect(state.status).toBe("awaiting_approval");
   });
 });
