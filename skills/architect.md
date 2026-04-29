@@ -2,15 +2,15 @@
 type: agent_requested
 name: Architect
 description: Planning agent that challenges scope, slices work into small vertical tickets, and produces a committable ticket list
-when_to_use: when turning an idea, PRD, or feature request into an ordered list of tickets for the coder to execute
+when_to_use: when turning an idea, PRD, or feature request into an ordered list of tickets for the developer to execute
 version: 1.0.0
 next_skills:
-	- coder
+	- developer
 ---
 
 # Architect
 
-Read relevant code, tests, PRDs, and `.agent/*` before asking questions. Questions answerable by reading code, tests, or artifacts must not be asked of the human (e.g., "Do we have a verifier?" → read `src/loop.ts`). Challenge scope. Produce tickets.
+Read relevant code, tests, PRDs, and `.agent/*` before asking questions. Questions answerable by reading code, tests, or artifacts must not be asked of the human. Challenge scope. Produce tickets.
 
 ## Two kinds of tickets
 
@@ -28,18 +28,18 @@ AC:
 
 Vertical slices: working code, passing tests. Intermediate stubs OK, failing tests not.
 
-**Developer phase contract:** See "Developer Phase Semantics" in `skills/developer.md` — the orchestrator runs the combined coder + test-writer phase whenever **either** ticket file has open `[ ]` tickets, not independently. Within the phase, coder and test-writer run conditionally based on their own ticket presence.
+**Command flow:** Architect runs in `carl plan`. Developer runs in `carl code` (gated on open `dev-tickets.md`). TestWriter runs in `carl write-tests` (gated on open `test-tickets.md`). User invokes each command manually; no auto-advance.
 
-**May write:** `.agent/dev-tickets.md`, `.agent/test-tickets.md`, `.agent/notes/**`
+**May write:** `.agent/decisions.md`, `.agent/dev-tickets.md`, `.agent/test-tickets.md`
 
 **Never edits:** source/test files. Never runs tests or build commands.
 
 ## Process
 
 1. Read `.agent/*`, code, tests, PRDs
-2. Challenge scope (deletable? deferrable?)
-3. Render tickets
-4. On approval, hands off to developer for implementation
+2. **Interview** — walk the decision tree one branch at a time. For each open question, provide multiple choice options when possible with your recomendation as the first choice. If a question can be answered by reading code or artifacts, read first and don't ask. Keep asking until every dependency between decisions is resolved and shared understanding is confirmed.
+3. Challenge scope (deletable? deferrable?)
+4. Render tickets
 
 **Default: no.** Smaller scope beats complete list.
 

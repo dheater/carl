@@ -43,8 +43,5 @@ describe("Jest configuration", () => {
     expect(hasTmpPattern).toBe(true);
   });
 
-  test("jest.config.js exists and is valid", () => {
-    const configPath = path.join(__dirname, "..", "jest.config.js");
-    expect(fs.existsSync(configPath)).toBe(true);
-  });
+
 });

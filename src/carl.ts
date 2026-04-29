@@ -1,198 +1,124 @@
 #!/usr/bin/env node
 
-import { StateManager } from "./state";
-import { runLoop, closeSharedClient } from "./loop";
-import { approveCommand, rejectCommand, replyCommand } from "./commands";
-import { openEditorForGate, collectPrompt } from "./editor";
-import { red, blue } from "./colors";
+import { runPhase } from "./phase";
+import { collectPrompt, openFileInEditor, getPhaseOutputPath } from "./editor";
+import { red } from "./colors";
+import * as fs from "fs";
+import * as path from "path";
 
-async function runWithEditor(
-  stateManager: StateManager,
-  workspaceRoot: string,
-): Promise<void> {
-  try {
-    while (true) {
-      await runLoop(stateManager);
-      const state = stateManager.load();
+async function cmdPlan(workspaceRoot: string, promptFile?: string): Promise<void> {
+  const pendingPromptPath = path.join(workspaceRoot, ".agent", "pending-prompt.md");
 
-      if (state.status !== "awaiting_approval") break;
-
-      const phase = state.current_phase;
-      const lastOutput =
-        state.history
-          ?.slice()
-          .reverse()
-          .find((h) => h.phase === phase && h.status !== "rejected")?.outputs ??
-        "";
-      console.log(
-        `\n  [System] ${phase} is waiting for your input. Opening editor...\n`,
-      );
-      const result = openEditorForGate(phase, lastOutput);
-
-      if (result.action === "approve") {
-        approveCommand(workspaceRoot, result.fullBuffer);
-        const next = stateManager.load();
-        if (next.status === "completed") {
-          console.log("\n  [System] Workflow complete. Sprint approved.\n");
-          break;
-        }
-      } else if (result.action === "reject") {
-        rejectCommand(
-          workspaceRoot,
-          result.reason,
-          result.target,
-          result.fullBuffer,
-        );
-        const after = stateManager.load();
-        console.log(
-          blue(
-            `  [System] ${phase} rejected. Returning to ${after.current_phase}.`,
-          ),
-        );
-      } else {
-        replyCommand(workspaceRoot, result.message);
-      }
+  let userInput: string | null;
+  if (fs.existsSync(pendingPromptPath)) {
+    userInput = fs.readFileSync(pendingPromptPath, "utf-8");
+    console.log(`[System] Resuming saved prompt from previous network failure.`);
+    console.log(`[System] Run \`carl reset\` then \`carl plan\` to start fresh.`);
+  } else if (promptFile) {
+    if (!fs.existsSync(promptFile)) {
+      throw new Error(`Prompt file not found: ${promptFile}`);
     }
-  } finally {
-    // Close any lingering handles on normal completion or error
-    await closeSharedClient();
+    userInput = fs.readFileSync(promptFile, "utf-8").trim() || null;
+  } else {
+    userInput = collectPrompt();
+  }
+
+  if (!userInput) {
+    console.log("No prompt provided. Cancelled.");
+    return;
+  }
+
+  // Persist the prompt before the network call so a failure doesn't lose it.
+  const agentDir = path.join(workspaceRoot, ".agent");
+  if (!fs.existsSync(agentDir)) fs.mkdirSync(agentDir, { recursive: true });
+  fs.writeFileSync(pendingPromptPath, userInput, "utf-8");
+
+  const result = await runPhase(workspaceRoot, "architect", "plan", userInput);
+
+  try { fs.unlinkSync(pendingPromptPath); } catch { /* best-effort */ }
+
+  if (result.status !== "success" && result.status !== "blocked") return;
+
+  await runPhase(workspaceRoot, "planner", "plan");
+
+  const outputPath = getPhaseOutputPath(workspaceRoot, "architect");
+  if (fs.existsSync(outputPath)) openFileInEditor(outputPath);
+}
+
+async function cmdWriteTests(workspaceRoot: string): Promise<void> {
+  const result = await runPhase(workspaceRoot, "test-writer", "write-tests");
+  if (result.status === "skipped") return;
+  const outputPath = getPhaseOutputPath(workspaceRoot, "test-writer");
+  if (fs.existsSync(outputPath)) openFileInEditor(outputPath);
+}
+
+async function cmdCode(workspaceRoot: string): Promise<void> {
+  const result = await runPhase(workspaceRoot, "developer", "code");
+  if (result.status === "skipped") return;
+  const outputPath = getPhaseOutputPath(workspaceRoot, "developer");
+  if (fs.existsSync(outputPath)) openFileInEditor(outputPath);
+}
+
+async function cmdReview(workspaceRoot: string): Promise<void> {
+  const result = await runPhase(workspaceRoot, "reviewer", "review");
+  if (result.status === "skipped") return;
+  const outputPath = getPhaseOutputPath(workspaceRoot, "reviewer");
+  if (fs.existsSync(outputPath)) openFileInEditor(outputPath);
+}
+
+function cmdReset(workspaceRoot: string): void {
+  const agentDir = path.join(workspaceRoot, ".agent");
+  if (fs.existsSync(agentDir)) {
+    fs.rmSync(agentDir, { recursive: true, force: true });
+    console.log("Cleared .agent/.");
+  } else {
+    console.log("Nothing to clear.");
   }
 }
 
-async function main() {
+function usage(): void {
+  console.error("Usage: carl <command>");
+  console.error("");
+  console.error("Commands:");
+  console.error("  plan [<file>]  Read prompt from file or open editor; run architect");
+  console.error("  write-tests   Run test-writer once against test-tickets");
+  console.error("  code          Run developer once");
+  console.error("  review        Run reviewer once");
+  console.error("  reset         Clear .agent/");
+}
+
+async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const command = args[0];
-
   const workspaceRoot = process.cwd();
-  const stateManager = new StateManager(workspaceRoot);
 
-  if (command === "start") {
-    // Enforce editor-only prompt: reject any extra arguments
-    if (args.length > 1) {
-      console.error("Usage: carl start");
-      console.error("");
-      console.error(
-        "The prompt must be entered in the editor that opens after running this command.",
-      );
-      process.exit(1);
-    }
-
-    try {
-      // Guard against wiping an in-progress run
-      try {
-        const existing = stateManager.load();
-        if (existing.status !== "completed") {
-          console.error(
-            red(
-              `A workflow is already active (run: ${existing.run_id}, status: ${existing.status}, phase: ${existing.current_phase}).`,
-            ),
-          );
-          console.error(red(`Use 'carl run' to continue it.`));
+  try {
+    switch (command) {
+      case "plan":
+        if (args.length > 2) {
+          console.error("Usage: carl plan [<prompt-file>]");
           process.exit(1);
         }
-        // Cleanup old completed run before starting new one
-        stateManager.cleanupAgentDir();
-      } catch {}
-
-      const collected = collectPrompt();
-      if (!collected) {
-        console.log("No prompt provided. Cancelled.");
-        process.exit(0);
-      }
-      const prompt = collected;
-
-      const state = stateManager.create(workspaceRoot, prompt);
-      console.log(`Started workflow run: ${state.run_id}`);
-
-      await runWithEditor(stateManager, workspaceRoot);
-    } catch (error: any) {
-      console.error(red(error.message));
-      process.exit(1);
+        await cmdPlan(workspaceRoot, args[1]);
+        break;
+      case "write-tests":
+        await cmdWriteTests(workspaceRoot);
+        break;
+      case "code":
+        await cmdCode(workspaceRoot);
+        break;
+      case "review":
+        await cmdReview(workspaceRoot);
+        break;
+      case "reset":
+        cmdReset(workspaceRoot);
+        break;
+      default:
+        usage();
+        process.exit(1);
     }
-  } else if (command === "status") {
-    try {
-      const state = stateManager.load();
-      console.log(`Run ID: ${state.run_id}`);
-      console.log(`Workspace path: ${state.workspace_path}`);
-      console.log(`Current phase: ${state.current_phase}`);
-      console.log(`Status: ${state.status}`);
-    } catch (error: any) {
-      console.error(red(error.message));
-      process.exit(1);
-    }
-  } else if (command === "run") {
-    try {
-      const state = stateManager.load();
-      if (state.status === "completed") {
-        console.log(
-          `Workflow already completed (phase: ${state.current_phase}). Use 'carl start' to begin a new run, or 'carl reset' to clear state.`,
-        );
-        await closeSharedClient();
-        process.exit(0);
-      }
-      console.log(`Resuming workflow from phase: ${state.current_phase}`);
-      if (state.status === "awaiting_approval") {
-        const phase = state.current_phase;
-        const lastOutput =
-          state.history
-            ?.slice()
-            .reverse()
-            .find((h) => h.phase === phase && h.status !== "rejected")
-            ?.outputs ?? "";
-        console.log(
-          `\n  [System] ${phase} is waiting for your input. Opening editor...\n`,
-        );
-        const result = openEditorForGate(phase, lastOutput);
-        if (result.action === "approve") {
-          approveCommand(workspaceRoot, result.fullBuffer);
-          const updatedState = stateManager.load();
-          if (updatedState.status === "completed" && phase === "reviewer") {
-            console.log("\n  [System] Workflow complete. Sprint approved.\n");
-            await closeSharedClient();
-            return;
-          }
-        } else if (result.action === "reject") {
-          rejectCommand(
-            workspaceRoot,
-            result.reason,
-            result.target,
-            result.fullBuffer,
-          );
-          const after = stateManager.load();
-          console.log(
-            blue(
-              `  [System] ${phase} rejected. Returning to ${after.current_phase}.`,
-            ),
-          );
-        } else replyCommand(workspaceRoot, result.message);
-      }
-      await runWithEditor(stateManager, workspaceRoot);
-    } catch (error: any) {
-      console.error(red(`Workflow loop failed: ${error.message}`));
-      await closeSharedClient();
-      process.exit(1);
-    }
-  } else if (command === "reset") {
-    try {
-      const existing = stateManager.load();
-      console.log(
-        `Abandoning run: ${existing.run_id} (phase: ${existing.current_phase}, status: ${existing.status})`,
-      );
-    } catch {}
-    stateManager.cleanupAgentDir();
-    console.log("Run cleared. Use 'carl start' to begin a new run.");
-  } else {
-    console.error("Usage: carl <command>");
-    console.error("");
-    console.error("Commands:");
-    console.error(
-      "  start    Start a new workflow run (fails if one is already active)",
-    );
-    console.error(
-      "  run      Resume — opens editor at any gate waiting for input",
-    );
-    console.error("  status   Show the status of the current workflow run");
-    console.error("  reset    Abandon the current run and clear state");
+  } catch (error: any) {
+    console.error(red(error.message ?? String(error)));
     process.exit(1);
   }
 }

@@ -2,7 +2,7 @@
 type: agent_requested
 name: Reviewer
 description: Sprint-end gate — validates that the right thing was built, presents QA evidence, and pauses for human approval before declaring the sprint complete
-when_to_use: after developer has run TDD implementation and deterministic checks (format/lint)
+when_to_use: after developer has finished TDD implementation and the user has run their own format/lint/test checks
 version: 1.0.0
 prerequisites:
   - developer
@@ -12,8 +12,8 @@ next_skills:
 
 # Reviewer
 
-**Deterministic first:** Read `.agent/notes/architect.md`, `.agent/dev-tickets.md`, `.agent/test-tickets.md`, `.agent/tests-summary.json`, and `.agent/lint.log` before evaluating work. Check `.agent/tests.log` only if tests failed.
-**Verification focus:** Confirm the right thing was built. Subtract-first cleanup has already run in verifier; identify any remaining critical issues (security, correctness, egregious duplication).
+**Deterministic first:** Read `.agent/decisions.md`, `.agent/dev-tickets.md`, `.agent/test-tickets.md`, and review the changed files (the orchestrator injects branch context and a list of changed files into your prompt) before evaluating work. Use your tools (git commands, file viewers) to inspect the actual code changes.
+**Two responsibilities:** (1) Subtract-first cleanup — identify low-value tests, narration comments, and dead code to remove. (2) Verification — confirm the right thing was built and surface remaining critical issues (security, correctness, egregious duplication).
 **External side effects:** None until the human signs off.
 
 **Phase Separation:** Reviewer does not edit source code or tests and does not run tests. All implementation work is routed back to the developer phase via tickets if needed.
@@ -38,50 +38,66 @@ Present these sections in order:
 
 Be direct about gaps. Surface any divergence from AC.
 
-### 2. Deterministic Test & Lint Evidence
+### 2. Verification
 
-Read the deterministic artifacts produced after developer phase completion:
-
-- **`.agent/tests-summary.json`** — Always present after developer phase. Machine-readable summary with status (`PASS` or `FAIL`), command, and timestamp. **Authoritative source for test results.**
-- **`.agent/tests.log`** — **Only present when tests fail.** Contains full output (command, stdout, stderr) from the failing `just test` run. Omitted after passing tests.
-- **`.agent/lint.log`** — Full lint output from `just lint`.
-
-Do NOT run `just test` or `just lint` yourself. The developer and verifier phases ran these deterministically and produced evidence. Read and verify the artifacts instead.
+Carl does not run tests or lint. Trust that the user has run their own format/lint/test checks before invoking `carl review`. Your job is to review the changed files (listed in your prompt) and inspect the actual code changes using your tools (git diff, file viewers, etc.) to call out anything that looks wrong. Do NOT run `just test` or `just lint` yourself — the human owns that.
 
 ```
 ## Verification
-- Tests: PASS (from .agent/tests-summary.json)
-- Lint: PASS (from .agent/lint.log)
-- Test artifacts: .agent/tests-summary.json (always present), .agent/lint.log (always present), .agent/tests.log (only on failure)
+- Files reviewed: <list of files inspected>
+- Concerns surfaced for the human to confirm
 ```
 
-### 3. Critical Issue Review
+### 3. Subtract-First Cleanup
 
-Verifier has already performed subtract-first cleanup (low-value test removal, comment simplification, dead code deletion). Your role is to identify any remaining critical issues that should be escalated to architect:
+Identify low-risk deletions and simplifications in changed code. Apply in order:
+
+**Low-value tests:**
+- Tests asserting implementation details rather than external behavior
+- Trivial tests unlikely to catch regressions
+- Duplicate or redundant test cases
+- Tests that wouldn't fail under refactoring (likely low-value)
+
+Keep tests that protect API contracts, AC coverage, error paths, and regression prevention. For each suggested deletion, explain why protection is covered elsewhere.
+
+**Low-value comments:**
+- Narration comments (repeating code): `// increment counter` above `counter++`
+- History comments: `// changed from X to Y in v2.1`
+- Repeated function names in comments
+- Comments should say *why* not *what*
+
+**Dead code:**
+- Unreachable branches
+- Unused functions/variables (verify with grep before flagging)
+- Commented-out code blocks
+
+When in doubt, recommend rather than delete.
+
+### 4. Critical Issue Review
+
+Identify remaining critical issues that should be escalated to architect:
 
 **Security and robustness:**
 - Auth logic, input validation, and error handling in changed code
 - Denial-of-service risks (unbounded loops, large allocations, missing timeouts)
 - Missing bounds checks or type safety violations
-- If found: Flag for architect to decide on scope/approach
 
 **Correctness and behavior:**
 - Does the code implement the tickets and AC correctly?
 - Are error paths handled appropriately?
 - Is the behavior consistent with what was described?
-- If found: Flag discrepancy from AC or tickets
 
 **Egregious duplication or over-abstraction:**
-- Only flag if subtraction/simplification was somehow missed or if new duplication was introduced
-- Otherwise, trust that verifier has already handled this
+- Flag new duplication introduced by the change
+- Flag missed simplification opportunities
 
 **Regression-test gaps:**
-- If you identify missing or weak behavior-focused regression tests, route them to **TestWriter tickets** (not Developer tickets)
-- Unless clearly implementation-related, test gaps should be TestWriter work
+- Missing or weak behavior-focused regression tests → route to **TestWriter tickets** (not Developer tickets)
+- Unless clearly implementation-related, test gaps are TestWriter work
 
 Format findings as: `**[Type]: Description** — Recommended action.`
 
-### 4. Human Validation Checklist
+### 5. Human Validation Checklist
 
 ```
 ## Your validation steps
@@ -91,8 +107,6 @@ Write `reject: <what failed>` if anything fails.
 
 ### Code review
 - **Review the code or diff in your own tools** (git UI, terminal `git diff`, IDE, etc.) outside of Carl. Verify the logic, style, and approach match expectations.
-- **If you want code changes**, close this editor with a line like `reject: <reason>` (e.g., `reject: missing error handling for network timeout`) to send the work back to the developer.
-- **If you're satisfied**, proceed to approve.
 
 ### t-1: <title>
 - Run `<exact command>` → expect: <outcome>
@@ -100,7 +114,7 @@ Write `reject: <what failed>` if anything fails.
 
 Each step: runnable, observable, unambiguous expected outcome.
 
-### 5. Output Structure
+### 6. Output Structure
 
 Present your findings in three required sections:
 
@@ -123,7 +137,7 @@ Ordered by impact (security fixes first, then dead code, then refactoring).
 
 Formatted as ticket title + one short sentence on why it matters.
 
-### 6. Proposed Commit Message
+### 7. Proposed Commit Message
 
 ```
 ## Proposed commit message
@@ -139,14 +153,3 @@ Increase default timeout from 30s to 60s in HTTP client.
 - Non-ticket branch: conventional-commit prefix (`fix:`, `feat:`, etc.) + summary
 - Never mention gates, phases, or process
 
-### 7. Approval Routes
-
-**Approve (acceptance):**
-- No `reject:` line → approve and declare sprint complete
-
-**Reject (escalate to architect for re-planning):**
-- `reject: reason` → work returns to architect phase for re-scoping and re-planning
-  - Example: `reject: implementation doesn't match AC for error handling`
-  - The architect will review the failure and propose revised approach
-
-**Why architect?** When reviewer rejects, the problem is typically in scope or design (architect's domain), not just code changes (developer's domain). Architect needs to re-evaluate the approach and slice plan.

@@ -1,6 +1,6 @@
 # Carl
 
-Opinionated AI development workflow. A four-phase loop with human approval gates, driven by skill files and run by the `carl` CLI.
+Opinionated AI development workflow. Manual phase commands driven by skill files and run by the `carl` CLI.
 
 ## Install
 
@@ -17,49 +17,32 @@ just install
 ## Usage
 
 ```bash
-carl start              # Begin a new run (prompt collected via editor)
-carl run                # Resume; opens an editor at any approval gate
-carl status             # Show current phase and status
-carl reset              # Abandon the current run
+carl plan          # Open editor; run architect (writes decisions.md and tickets)
+carl write-tests   # Run test-writer against open test-tickets
+carl code          # Run developer against open dev-tickets
+carl review        # Run reviewer (cleanup + verification)
+carl reset         # Clear .agent/
 ```
 
-State lives in `.agent/` (gitignored).
+Phase artifacts live in `.agent/` (gitignored). Diagnostics in `.carl/events.jsonl`. Use `ls .agent/` to see what's in flight.
 
 ## Workflow
 
 ```
-architect → developer → verifier → reviewer
+plan → write-tests → code → review
 ```
 
-- **architect** — Challenges scope, asks clarifying questions, produces the ticket list.
-- **developer** — Implements tickets one at a time using TDD.
-- **verifier** — Interprets deterministic lint/test results, performs subtract-first cleanup, surfaces recommendations.
-- **reviewer** — Sprint-end gate; validates the right thing was built and pauses for sign-off.
+Each command runs once and exits. There is no automatic kick-back between phases — the human invokes the next command.
 
-`architect` and `reviewer` are human-approval gates. On a gate, `carl` opens an editor with the agent's output. How you close the editor is how you respond:
+- **plan** — Architect challenges scope, asks clarifying questions, writes `.agent/decisions.md` and the ticket lists. Always opens an empty editor buffer; user types either a fresh goal or notes refining the existing plan.
+- **write-tests** — TestWriter writes durable regression tests against open `.agent/test-tickets.md`.
+- **code** — Developer implements `.agent/dev-tickets.md` via TDD. Run your own `just format` / `just lint` / `just test` afterward.
+- **review** — Reviewer performs subtract-first cleanup and verification on the live git diff; refuses to run while tickets are still open.
 
-- Save unchanged, save an empty buffer, or save a single line containing `approve` or `approved` (case-insensitive, with optional surrounding whitespace) → **approve**
-- Save any other content → **reply** (the agent reads your feedback and re-runs the phase)
-- Save `reject: <reason>` → **reject** (fall back to the previous phase)
-
-At the architect gate, approval only hands off to developer after the latest architect output looks like a real slice plan. If architect is still asking questions or running scope challenge, the current buffer is fed back to architect and the workflow stays in architect.
-
-Cross-phase coordination is managed via:
-- **`.agent/dev-tickets.md` and `.agent/test-tickets.md`** — Ticket lists created by architect, read by developer and TestWriter
-- **`.agent/notes/*.md`** — Phase outputs (architect.md, reviewer.md, etc.)
-- **`state.history`** — Deterministic run history with all phase outputs and status
-- **Lint/test logs** — `.agent/lint.log`, `.agent/tests-summary.json`, `.agent/tests.log`
-
-Developer reads architect tickets from disk; reviewer reads prior architecture from state history.
-
-## Layout
-
-```
-src/       TypeScript source for the carl CLI and loop
-skills/    Skill files loaded into each phase's agent session
-rules/     Rules intended for ~/.augment/rules/ (copy manually)
-experiments/  Empirical validation of design principles
-```
+Cross-phase coordination via files:
+- **`.agent/decisions.md`** — Architect's plan and decisions (read by all downstream phases)
+- **`.agent/dev-tickets.md` / `.agent/test-tickets.md`** — Ticket lists
+- **`.carl/events.jsonl`** — Per-prompt timing, char counts, and `estimated_credits`
 
 ## License
 

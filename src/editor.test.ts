@@ -1,188 +1,161 @@
-import { parseEditorGateApproval, EditorAction } from "./editor";
+import { openFileInEditor, getPhaseOutputPath } from "./editor";
+import { spawnSync } from "child_process";
+import * as fs from "fs";
+import * as path from "path";
+import * as os from "os";
 
-describe("parseEditorGateApproval", () => {
-  const baseTemplate = `# [architect] is waiting for your input
-# Some agent output here`;
+jest.mock("child_process");
 
-  describe("approve/approved with optional whitespace", () => {
-    test("recognize 'approve' as approval", () => {
-      const result = parseEditorGateApproval(
-        "# comment\napprove",
-        baseTemplate,
-      );
-      expect(result).toEqual({ action: "approve", fullBuffer: "approve" });
+const mockSpawnSync = spawnSync as jest.MockedFunction<typeof spawnSync>;
+
+describe("Editor helper and phase output path mapping", () => {
+  describe("openFileInEditor", () => {
+    let tmpFile: string;
+
+    beforeEach(() => {
+      tmpFile = path.join(os.tmpdir(), "test-editor-file.md");
+      fs.writeFileSync(tmpFile, "test content", "utf-8");
+      jest.clearAllMocks();
+      delete process.env.EDITOR;
+      delete process.env.VISUAL;
     });
 
-    test("recognize 'APPROVE' (uppercase) as approval", () => {
-      const result = parseEditorGateApproval(
-        "# comment\nAPPROVE",
-        baseTemplate,
-      );
-      expect(result).toEqual({ action: "approve", fullBuffer: "APPROVE" });
-    });
-
-    test("recognize 'Approved' (mixed case) as approval", () => {
-      const result = parseEditorGateApproval(
-        "# comment\nApproved",
-        baseTemplate,
-      );
-      expect(result).toEqual({ action: "approve", fullBuffer: "Approved" });
-    });
-
-    test("recognize '  approve  ' (surrounded by whitespace) as approval", () => {
-      const result = parseEditorGateApproval(
-        "# comment\n  approve  ",
-        baseTemplate,
-      );
-      expect(result).toEqual({ action: "approve", fullBuffer: "approve" });
-    });
-
-    test("recognize '  APPROVED  ' (uppercase with whitespace) as approval", () => {
-      const result = parseEditorGateApproval(
-        "# comment\n  APPROVED  ",
-        baseTemplate,
-      );
-      expect(result).toEqual({ action: "approve", fullBuffer: "APPROVED" });
-    });
-
-    test("recognize 'approve: some notes' as approval (backward compat)", () => {
-      const result = parseEditorGateApproval(
-        "# comment\napprove: looks good",
-        baseTemplate,
-      );
-      expect(result).toEqual({
-        action: "approve",
-        fullBuffer: "approve: looks good",
-      });
-    });
-
-    test("recognize '  approved: notes  ' with whitespace as approval", () => {
-      const result = parseEditorGateApproval(
-        "# comment\n  approved: looks good  ",
-        baseTemplate,
-      );
-      expect(result).toEqual({
-        action: "approve",
-        fullBuffer: "approved: looks good",
-      });
-    });
-  });
-
-  describe("existing approval behavior", () => {
-    test("empty body (all deleted) still approves", () => {
-      const result = parseEditorGateApproval("", baseTemplate);
-      expect(result).toEqual({ action: "approve", fullBuffer: "" });
-    });
-
-    test("unchanged template content still approves", () => {
-      const result = parseEditorGateApproval(baseTemplate, baseTemplate);
-      expect(result).toEqual({ action: "approve", fullBuffer: "" });
-    });
-
-    test("unchanged non-comment agent output is preserved in approval buffer", () => {
-      const template = `# [architect] is waiting for your input\n\n## Question\n\nUse repo root?`;
-      const result = parseEditorGateApproval(template, template);
-      expect(result).toEqual({
-        action: "approve",
-        fullBuffer: "## Question\n\nUse repo root?",
-      });
-    });
-
-    test("unchanged template with extra comments still approves", () => {
-      const withComments =
-        "# [architect] is waiting for your input\n# Some agent output here\n# extra comment";
-      const result = parseEditorGateApproval(withComments, baseTemplate);
-      expect(result).toEqual({ action: "approve", fullBuffer: "" });
-    });
-  });
-
-  describe("reject behavior", () => {
-    test("t-8: preserve full editor buffer on rejection", () => {
-      const reviewerOutput = `## Validation
-
-You asked for: Login flow
-
-## Subtraction and cleanup
-
-- **[Security]: Missing password hash verification** — Add bcrypt validation
-
-reject: missing security checks`;
-
-      const editorContent = `# [reviewer] is waiting
-# Some header
-${reviewerOutput}`;
-
-      const result = parseEditorGateApproval(editorContent, baseTemplate);
-      expect(result.action).toBe("reject");
-      if (result.action === "reject") {
-        expect(result.reason).toBe("missing security checks");
-        expect(result.fullBuffer).toBeDefined();
-        // fullBuffer should have all non-comment lines, including the sections
-        expect(result.fullBuffer).toContain("Login flow");
-        expect(result.fullBuffer).toContain("Missing password hash");
-        expect(result.fullBuffer).toContain("reject: missing security checks");
+    afterEach(() => {
+      if (fs.existsSync(tmpFile)) {
+        fs.unlinkSync(tmpFile);
       }
     });
 
-    test("recognize 'reject: reason' as rejection", () => {
-      const result = parseEditorGateApproval(
-        "# comment\nreject: needs more work",
-        baseTemplate,
-      );
-      expect(result).toEqual({
-        action: "reject",
-        reason: "needs more work",
-        fullBuffer: "reject: needs more work",
+    test("prefers $EDITOR over $VISUAL", () => {
+      process.env.EDITOR = "emacs";
+      process.env.VISUAL = "vi";
+      mockSpawnSync.mockReturnValue({ status: 0 } as any);
+
+      openFileInEditor(tmpFile);
+
+      expect(mockSpawnSync).toHaveBeenCalledWith("emacs", [tmpFile], {
+        stdio: "inherit",
+        shell: true,
       });
     });
 
-    test("recognize 'REJECT: REASON' (uppercase) as rejection", () => {
-      const result = parseEditorGateApproval(
-        "# comment\nREJECT: invalid approach",
-        baseTemplate,
-      );
-      expect(result).toEqual({
-        action: "reject",
-        reason: "invalid approach",
-        fullBuffer: "REJECT: invalid approach",
+    test("falls back to $VISUAL when $EDITOR is not set", () => {
+      delete process.env.EDITOR;
+      process.env.VISUAL = "nano";
+      mockSpawnSync.mockReturnValue({ status: 0 } as any);
+
+      openFileInEditor(tmpFile);
+
+      expect(mockSpawnSync).toHaveBeenCalledWith("nano", [tmpFile], {
+        stdio: "inherit",
+        shell: true,
       });
     });
 
-    test("recognize 'reject-architect: reason' with target phase", () => {
-      const result = parseEditorGateApproval(
-        "# comment\nreject-architect: rethink scope",
-        baseTemplate,
-      );
-      expect(result).toEqual({
-        action: "reject",
-        reason: "rethink scope",
-        target: "architect",
-        fullBuffer: "reject-architect: rethink scope",
+    test("falls back to 'vi' when neither $EDITOR nor $VISUAL is set", () => {
+      delete process.env.EDITOR;
+      delete process.env.VISUAL;
+      mockSpawnSync.mockReturnValue({ status: 0 } as any);
+
+      openFileInEditor(tmpFile);
+
+      expect(mockSpawnSync).toHaveBeenCalledWith("vi", [tmpFile], {
+        stdio: "inherit",
+        shell: true,
       });
+    });
+
+    test("uses spawnSync with stdio: inherit and shell: true", () => {
+      process.env.EDITOR = "vim";
+      mockSpawnSync.mockReturnValue({ status: 0 } as any);
+
+      openFileInEditor(tmpFile);
+
+      expect(mockSpawnSync).toHaveBeenCalledWith(
+        expect.any(String),
+        [tmpFile],
+        {
+          stdio: "inherit",
+          shell: true,
+        },
+      );
+    });
+
+    test("logs warning on spawn error and does not throw", () => {
+      process.env.EDITOR = "nonexistent";
+      const error = new Error("ENOENT: no such file");
+      mockSpawnSync.mockReturnValue({
+        error,
+        status: null,
+      } as any);
+      const warnSpy = jest.spyOn(console, "warn").mockImplementation();
+
+      expect(() => {
+        openFileInEditor(tmpFile);
+      }).not.toThrow();
+
+      expect(warnSpy).toHaveBeenCalled();
+      expect(warnSpy.mock.calls[0][0]).toMatch(
+        /failed to open.*editor|warning/i,
+      );
+
+      warnSpy.mockRestore();
+    });
+
+    test("logs warning on non-zero exit code and does not throw", () => {
+      process.env.EDITOR = "vim";
+      mockSpawnSync.mockReturnValue({ status: 1 } as any);
+      const warnSpy = jest.spyOn(console, "warn").mockImplementation();
+
+      expect(() => {
+        openFileInEditor(tmpFile);
+      }).not.toThrow();
+
+      expect(warnSpy).toHaveBeenCalled();
+
+      warnSpy.mockRestore();
+    });
+
+    test("passes exact file path to editor", () => {
+      process.env.EDITOR = "vim";
+      mockSpawnSync.mockReturnValue({ status: 0 } as any);
+
+      openFileInEditor(tmpFile);
+
+      const callArgs = mockSpawnSync.mock.calls[0];
+      expect(callArgs[1]).toEqual([tmpFile]);
     });
   });
 
-  describe("reply behavior", () => {
-    test("non-empty content that is not approve/reject returns reply", () => {
-      const result = parseEditorGateApproval(
-        "# comment\nSome feedback text here",
-        baseTemplate,
-      );
-      expect(result).toEqual({
-        action: "reply",
-        message: expect.stringContaining("Some feedback text here"),
-      });
+  describe("getPhaseOutputPath", () => {
+    const workspaceRoot = "/workspace";
+
+    test("maps architect phase to .agent/decisions.md", () => {
+      const result = getPhaseOutputPath(workspaceRoot, "architect");
+      expect(result).toBe(path.join(workspaceRoot, ".agent", "decisions.md"));
     });
 
-    test("added notes alongside template returns reply", () => {
-      const result = parseEditorGateApproval(
-        baseTemplate + "\nI have a question about X",
-        baseTemplate,
+    test("maps developer phase to .agent/notes/developer.md", () => {
+      const result = getPhaseOutputPath(workspaceRoot, "developer");
+      expect(result).toBe(
+        path.join(workspaceRoot, ".agent", "notes", "developer.md"),
       );
-      expect(result).toEqual({
-        action: "reply",
-        message: expect.stringContaining("question about X"),
-      });
     });
+
+    test("maps test-writer phase to .agent/notes/test-writer.md", () => {
+      const result = getPhaseOutputPath(workspaceRoot, "test-writer");
+      expect(result).toBe(
+        path.join(workspaceRoot, ".agent", "notes", "test-writer.md"),
+      );
+    });
+
+    test("maps reviewer phase to .agent/notes/reviewer.md", () => {
+      const result = getPhaseOutputPath(workspaceRoot, "reviewer");
+      expect(result).toBe(
+        path.join(workspaceRoot, ".agent", "notes", "reviewer.md"),
+      );
+    });
+
+
   });
 });

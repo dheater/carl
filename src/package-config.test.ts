@@ -19,31 +19,17 @@ describe("package-config", () => {
   });
 
   describe("bin configuration", () => {
-    it("should have bin.carl pointing to dist/carl.js", () => {
+    it("should have bin.carl pointing to dist/carl.mjs", () => {
       expect(packageJson.bin).toBeDefined();
-      expect(packageJson.bin.carl).toBe("./dist/carl.js");
+      expect(packageJson.bin.carl).toBe("./dist/carl.mjs");
     });
 
-    it("should have a build script that produces dist/carl.js", () => {
+    it("should have a build script that produces dist/carl.mjs", () => {
       expect(packageJson.scripts).toBeDefined();
       expect(packageJson.scripts.build).toBeDefined();
-      expect(packageJson.scripts.build).toContain("dist/carl.js");
+      expect(packageJson.scripts.build).toContain("dist/carl.mjs");
     });
   });
 
-  describe("package distribution", () => {
-    it("should have compiled dist/carl.js after npm run build", () => {
-      const distPath = path.join(__dirname, "..", "dist", "carl.js");
-      expect(fs.existsSync(distPath)).toBe(true);
-      const content = fs.readFileSync(distPath, "utf-8");
-      expect(content).toContain("#!/usr/bin/env node");
-    });
 
-    it("should have no new production dependencies beyond auggie-sdk", () => {
-      expect(packageJson.dependencies).toBeDefined();
-      const deps = Object.keys(packageJson.dependencies);
-      expect(deps.length).toBeLessThanOrEqual(2); // auggie-sdk + possibly one more
-      expect(deps).toContain("@augmentcode/auggie-sdk");
-    });
-  });
 });

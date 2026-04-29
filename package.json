@@ -1,14 +1,14 @@
 {
   "name": "carl",
-  "version": "5.2.14",
+  "version": "6.0.0",
   "bin": {
-    "carl": "./dist/carl.js"
+    "carl": "./dist/carl.mjs"
   },
   "scripts": {
     "prepare": "npm run build",
-    "build": "esbuild src/carl.ts --bundle --platform=node --outfile=dist/carl.js",
+    "build": "esbuild src/carl.ts --bundle --platform=node --format=esm --banner:js='import {fileURLToPath as _fup} from \"url\"; import {dirname as _dn} from \"path\"; import {createRequire as _cr} from \"module\"; const __dirname=_dn(_fup(import.meta.url)); const require=_cr(import.meta.url);' --outfile=dist/carl.mjs",
     "test": "jest",
-    "start": "node dist/carl.js"
+    "start": "node dist/carl.mjs"
   },
   "devDependencies": {
     "@types/jest": "^30.0.0",

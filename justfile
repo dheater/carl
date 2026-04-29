@@ -26,5 +26,5 @@ run *args:
 # Build and install carl CLI to ~/.local/bin
 install: build
     @echo '#!/usr/bin/env bash' > {{home_dir}}/.local/bin/carl
-    @echo 'exec node "'`pwd`'/dist/carl.js" "$@"' >> {{home_dir}}/.local/bin/carl
+    @echo 'exec node "'`pwd`'/dist/carl.mjs" "$@"' >> {{home_dir}}/.local/bin/carl
     @chmod +x {{home_dir}}/.local/bin/carl

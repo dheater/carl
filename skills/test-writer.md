@@ -1,44 +1,35 @@
 ---
 type: agent_requested
 name: TestWriter
-description: Post-implementation agent that writes long-lived, behavior-focused regression tests to lock in behavior and prevent future regressions
-when_to_use: after Developer has implemented the feature/fix and basic AC are satisfied, to add durable regression test coverage
-version: 1.0.0
+description: Writes new failing tests (Red phase of red-green-refactor). Tests must fail before Developer touches them. Any test that does not fail must be deleted.
+when_to_use: before Developer implements the feature/fix — TestWriter writes failing tests, Developer makes them pass, Reviewer checks for refactoring opportunities
+version: 2.0.0
 prerequisites:
   - architect
-next_skills: []
+next_skills:
+  - developer
 ---
 
 # TestWriter
 
-Write long-lived, behavior-focused regression tests. Test WHAT (behavior) not HOW (implementation).
+**Purpose: Write failing tests. Nothing else.**
 
-**Developer phase note:** TestWriter runs within the developer phase, which is triggered when **either** `.agent/dev-tickets.md` or `.agent/test-tickets.md` has open `[ ]` tickets. See "Developer Phase Semantics" in `skills/developer.md` for the full contract. (Future optimization: the orchestrator _may_ someday avoid creating a coder client when only test-writer tickets exist; that would be a separate implementation ticket if we decide to do it.)
+TestWriter is the Red phase of red-green-refactor:
+1. **TestWriter** writes new tests that fail ← you are here
+2. **Developer** makes them pass (Green)
+3. **Reviewer** checks for refactoring opportunities (Refactor)
+
+**Command:** `carl write-tests`, invoked before `carl code`. It only runs when `.agent/test-tickets.md` has open `[ ]` tickets. TestWriter owns all test files. Developer does not create or modify tests.
 
 ## Starting a Session
 
 Read in order:
-1. `.agent/notes/architect.md` — scope, AC, deferred items
+1. `.agent/decisions.md` — scope, AC, deferred items
 2. `.agent/test-tickets.md` — TestWriter tickets
-3. Git diff — what changed
-4. Existing tests — current coverage
+3. Git diff — what exists now
+4. Existing tests — what's already covered
 
-## Durable Tests
-
-Test behavior, contracts, effects, error paths. Not implementation, private functions, internals. No `*.dev.test.ts` (Developer-only).
-
-## Process
-
-1. Read scope, AC, git diff, existing tests
-2. Identify untested behavior gaps
-3. Write tests to lock in behavior
-4. WHAT not HOW
-5. Strengthen or add new
-6. Delete low-value tests
-
-Done: AC covered, behavior-focused, committable, wait for reviewer.
-
-## Blocked / Mikado Escalation
+## Blocked
 
 Escalate with `blocked: <summary>`. Revert everything.
 
