@@ -33,16 +33,29 @@ async function cmdPlan(workspaceRoot: string, promptFile?: string): Promise<void
   if (!fs.existsSync(agentDir)) fs.mkdirSync(agentDir, { recursive: true });
   fs.writeFileSync(pendingPromptPath, userInput, "utf-8");
 
-  const result = await runPhase(workspaceRoot, "architect", "plan", userInput);
+  let result = await runPhase(workspaceRoot, "architect", "plan", userInput);
 
   try { fs.unlinkSync(pendingPromptPath); } catch { /* best-effort */ }
 
   if (result.status !== "success" && result.status !== "blocked") return;
 
-  await runPhase(workspaceRoot, "planner", "plan");
-
+  // Interview loop: show decisions.md to the user, let them answer inline,
+  // re-run architect so it can process each round of feedback.
+  // Breaking when the user makes no changes means they accepted the plan.
   const outputPath = getPhaseOutputPath(workspaceRoot, "architect");
-  if (fs.existsSync(outputPath)) openFileInEditor(outputPath);
+  while (fs.existsSync(outputPath)) {
+    const before = fs.readFileSync(outputPath, "utf-8");
+    openFileInEditor(outputPath);
+    const after = fs.existsSync(outputPath) ? fs.readFileSync(outputPath, "utf-8") : "";
+
+    if (after === before) break; // No edits — user accepted the plan as-is.
+
+    // User provided feedback; re-run architect so it reads the updated decisions.md.
+    result = await runPhase(workspaceRoot, "architect", "plan");
+    if (result.status !== "success" && result.status !== "blocked") return;
+  }
+
+  await runPhase(workspaceRoot, "planner", "plan");
 }
 
 async function cmdWriteTests(workspaceRoot: string): Promise<void> {
