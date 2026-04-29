@@ -316,21 +316,6 @@ export async function runPhase(
   const model = getPhaseModel(phaseName);
   const phaseStartTime = Date.now();
 
-  // Reviewer invariant: tickets must be closed before review.
-  if (phaseName === "reviewer") {
-    const devOpen = countOpenTickets(
-      path.join(workspaceRoot, ".agent", "dev-tickets.md"),
-    );
-    const testOpen = countOpenTickets(
-      path.join(workspaceRoot, ".agent", "test-tickets.md"),
-    );
-    if (devOpen > 0 || testOpen > 0) {
-      throw new Error(
-        `Cannot review with open tickets (dev: ${devOpen}, test: ${testOpen}). Close them first.`,
-      );
-    }
-  }
-
   // Developer/test-writer skip if no relevant open tickets.
   if (phaseName === "developer") {
     if (!hasOpenTickets(path.join(workspaceRoot, ".agent", "dev-tickets.md"))) {
