@@ -273,8 +273,8 @@ export interface RunPhaseResult {
 
 // Wall-clock timeout per phase. Phases not listed have no timeout.
 const PHASE_TIMEOUT_MS: Record<string, number> = {
-  developer: 20 * 60 * 1000,
-  "test-writer": 20 * 60 * 1000,
+  developer: 14 * 60 * 1000,
+  "test-writer": 9 * 60 * 1000,
 };
 
 function writeTimeoutDiagnostic(

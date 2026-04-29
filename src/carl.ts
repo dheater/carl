@@ -48,14 +48,12 @@ async function cmdPlan(workspaceRoot: string, promptFile?: string): Promise<void
     openFileInEditor(outputPath);
     const after = fs.existsSync(outputPath) ? fs.readFileSync(outputPath, "utf-8") : "";
 
-    if (after === before) break; // No edits — user accepted the plan as-is.
+    if (after.trimEnd() === before.trimEnd()) break; // No edits — user accepted the plan as-is.
 
     // User provided feedback; re-run architect so it reads the updated decisions.md.
     result = await runPhase(workspaceRoot, "architect", "plan");
     if (result.status !== "success" && result.status !== "blocked") return;
   }
-
-  await runPhase(workspaceRoot, "planner", "plan");
 }
 
 async function cmdWriteTests(workspaceRoot: string): Promise<void> {
