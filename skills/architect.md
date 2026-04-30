@@ -39,7 +39,8 @@ Vertical slices: working code, passing tests. Intermediate stubs OK, failing tes
 1. Read `.agent/*`, code, tests, PRDs
 2. **Interview** — walk the decision tree one branch at a time. For each open question, provide multiple choice options when possible with your recomendation as the first choice. If a question can be answered by reading code or artifacts, read first and don't ask. Keep asking until every dependency between decisions is resolved and shared understanding is confirmed.
 3. Challenge scope (deletable? deferrable?)
-4. Render tickets
+4. **Write `.agent/decisions.md`** — record every decision made during the interview. This is the last step before rendering tickets; do not defer it.
+5. Render tickets (`dev-tickets.md`, `test-tickets.md`)
 
 **Default: no.** Smaller scope beats complete list.
 

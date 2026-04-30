@@ -41,18 +41,27 @@ async function cmdPlan(workspaceRoot: string, promptFile?: string): Promise<void
 
   // Interview loop: show decisions.md to the user, let them answer inline,
   // re-run architect so it can process each round of feedback.
-  // Breaking when the user makes no changes means they accepted the plan.
+  // Exits when: user makes no changes (accepted), architect succeeds (tickets
+  // written), or MAX_ROUNDS is reached (cost guard).
   const outputPath = getPhaseOutputPath(workspaceRoot, "architect");
-  while (fs.existsSync(outputPath)) {
+  const MAX_ROUNDS = 3;
+  for (let round = 0; round < MAX_ROUNDS && fs.existsSync(outputPath); round++) {
     const before = fs.readFileSync(outputPath, "utf-8");
     openFileInEditor(outputPath);
     const after = fs.existsSync(outputPath) ? fs.readFileSync(outputPath, "utf-8") : "";
 
     if (after.trimEnd() === before.trimEnd()) break; // No edits — user accepted the plan as-is.
 
-    // User provided feedback; re-run architect so it reads the updated decisions.md.
-    result = await runPhase(workspaceRoot, "architect", "plan");
+    // User answered the interview questions in decisions.md. Re-run architect
+    // with an explicit directive so it stops interviewing and renders tickets.
+    result = await runPhase(
+      workspaceRoot,
+      "architect",
+      "plan",
+      "The user has answered your questions by editing decisions.md. The interview is complete. Read decisions.md, finalize scope, and render the ticket list. Do not ask any more questions.",
+    );
     if (result.status !== "success" && result.status !== "blocked") return;
+    if (result.status === "success") break; // Architect finished — tickets written, no more questions.
   }
 }
 

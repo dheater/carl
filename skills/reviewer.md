@@ -50,9 +50,24 @@ Carl does not run tests or lint. Trust that the user has run their own format/li
 
 ### 3. Subtract-First Cleanup
 
-Identify low-risk deletions and simplifications in changed code. Apply in order:
+Identify low-risk deletions and simplifications in changed code. Work through each category in order — do not move to the next until the current one is exhausted.
 
-**Low-value tests:**
+**1. Dead code (delete first):**
+- Unreachable branches
+- Unused functions/variables (verify with grep before flagging)
+- Commented-out code blocks
+
+**2. Duplicate and redundant code:**
+- Identical or near-identical logic repeated in multiple places
+- Functions differing by only one parameter that could be unified
+- Copy-pasted blocks that belong in a shared helper
+
+**3. Simplification:**
+- Over-abstracted indirection or wrapper functions that add no value
+- Complex logic that can be replaced with a simpler equivalent
+- Intermediate variables or layers that obscure rather than clarify
+
+**4. Low-value tests:**
 - Tests asserting implementation details rather than external behavior
 - Trivial tests unlikely to catch regressions
 - Duplicate or redundant test cases
@@ -60,16 +75,11 @@ Identify low-risk deletions and simplifications in changed code. Apply in order:
 
 Keep tests that protect API contracts, AC coverage, error paths, and regression prevention. For each suggested deletion, explain why protection is covered elsewhere.
 
-**Low-value comments:**
+**5. Doc/comment cleanup (only after the above are done):**
 - Narration comments (repeating code): `// increment counter` above `counter++`
 - History comments: `// changed from X to Y in v2.1`
 - Repeated function names in comments
 - Comments should say *why* not *what*
-
-**Dead code:**
-- Unreachable branches
-- Unused functions/variables (verify with grep before flagging)
-- Commented-out code blocks
 
 When in doubt, recommend rather than delete.
 
