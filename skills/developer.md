@@ -1,9 +1,9 @@
 ---
 type: agent_requested
 name: Developer
-description: TDD execution: failing test, min code, pass. No code without test.
-when_to_use: when executing a ticket from the architect
-version: 1.0.0
+description: TDD GREEN phase — minimum production code to pass Architect's failing tests.
+when_to_use: when executing a ticket from the architect after failing tests are in place
+version: 2.0.0
 prerequisites:
   - architect
 next_skills:
@@ -13,51 +13,30 @@ next_skills:
 
 # Developer
 
-Execute tickets against written tests. Implement feature code, rely on tests written by TestWriter.
-
-Read `.agent/decisions.md` and `.agent/dev-tickets.md`. Find first `[ ]` ticket, begin.
-
-## Phase Semantics
-
-The Developer phase runs only when `.agent/dev-tickets.md` has open `[ ]` items; otherwise it is skipped. TestWriter is responsible for writing all tests (ephemeral and durable). Developer does not create, write, or modify test files.
+Read `.agent/decisions.md` and `.agent/dev-tickets.md`. Find first `[ ]` ticket, begin. Skipped if no `[ ]` tickets exist.
 
 ## Process
 
-1. Read ticket fully
-2. Run existing tests (baseline)
-3. Implement code against the test suite
-4. Verify changes pass all tests
-5. Stay green throughout
-6. Refactor if needed, stay green
-7. Repeat for remaining AC items
-8. Full suite passes, nothing regressed
-9. Ensure no scratch/temporary files are committed (they should live under an ignored scratch directory)
-10. Mark the ticket `[x]` in `.agent/dev-tickets.md`
+**Per ticket:**
+1. Read ticket, AC, and Architect's failing tests
+2. Confirm baseline: new tests fail, everything else passes
+3. Write minimum production code to make failing tests pass — no more
+4. All tests pass; do not modify Architect's tests to force green
+5. No scratch files committed (use gitignored `.tmp/`)
+6. Mark ticket `[x]`
 
-## Test Ownership
+**After all tickets:**
+- Delete unused functions, variables, imports, commented-out code, unreachable branches
+- Delete narration and history comments; keep *why* comments
 
-**All tests** (`.dev.test.ts`, `.test.ts`, and all other test files) are owned by TestWriter. Developer runs tests to verify implementation but does not create or modify them.
+**Report:** tickets completed, dead code removed. Note blocked items or follow-up for Architect.
 
-**If Developer needs test changes:** Describe the required changes in the output summary section. TestWriter will address them in the next phase.
+## Done means
 
-## File Placement and Tracking
+All `[x]`, tests pass, no regressions, dead code removed.
 
-Source or test files tracked in version control: `src/`, `test/`. All test files are read-only to Developer. Scratch and temporary files (`.tmp/`) are gitignored and excluded from the test runner.
+## Blocked
 
-## Done Means
-
-- All AC passing, tests pass, no regressions
-- Ticket marked `[x]` in `.agent/dev-tickets.md`
-- If test changes are needed, documented in the output summary for TestWriter
-
-## Mikado Escalation
-
-When blocked: `blocked: <summary>`. Revert everything, update `.agent/dev-tickets.md`. Include any required test changes in the blocked ticket summary.
-
-## Blocked ticket section
-
-Identify ticket, describe what was attempted, note any required test changes for TestWriter.
-
-## What is missing
-
-List prerequisites from Architect (missing API, unclear AC, refactor needed, test coverage gaps).
+When you cannot make a ticket's tests pass: **stop immediately**. Do not attempt other tickets.
+1. In `.agent/dev-tickets.md`: ticket id, what was attempted, why blocked, prerequisites needed from Architect
+2. Halt — do not continue

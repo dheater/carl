@@ -27,14 +27,49 @@ type TimingEvent = {
 // numbers diverge.
 const COST_PER_CHAR_BY_MODEL: Record<string, number> = {
   "haiku4.5": 0.0002,
-  "gpt5.1": 0.000055,
-  "code-review": 0.000045,
+  "sonnet4.6": 0.0006,
 };
 
 function estimateCredits(model: string, chars: number): number {
   const rate = COST_PER_CHAR_BY_MODEL[model];
   if (rate === undefined) return 0;
   return Number((chars * rate).toFixed(2));
+}
+
+type CarlConfig = {
+  models?: {
+    architect?: string;
+    developer?: string;
+    reviewer?: string;
+  };
+};
+
+const DEFAULT_MODELS: Record<string, string> = {
+  architect: "gemini-3.1-pro-preview",
+  developer: "haiku4.5",
+  reviewer: "sonnet4.6",
+};
+
+function loadCarlConfig(workspaceRoot: string): CarlConfig {
+  const carlDir = path.join(workspaceRoot, EVENTS_LOG_DIR);
+  const configPath = path.join(carlDir, "config.json");
+  if (!fs.existsSync(configPath)) {
+    const defaults: CarlConfig = {
+      models: {
+        architect: DEFAULT_MODELS.architect,
+        developer: DEFAULT_MODELS.developer,
+        reviewer: DEFAULT_MODELS.reviewer,
+      },
+    };
+    fs.mkdirSync(carlDir, { recursive: true });
+    fs.writeFileSync(configPath, JSON.stringify(defaults, null, 2) + "\n", "utf-8");
+    return defaults;
+  }
+  try {
+    return JSON.parse(fs.readFileSync(configPath, "utf-8")) as CarlConfig;
+  } catch {
+    return {};
+  }
 }
 
 type PromptResponse = string | { text: string; usage?: Record<string, any> };
@@ -47,10 +82,13 @@ function loadSkillFile(name: string): string {
   return "";
 }
 
-function getPhaseModel(phase: string): string {
-  if (phase === "architect") return "gpt5.1";
-  if (phase === "reviewer") return "code-review";
-  return "haiku4.5";
+function getPhaseModel(phase: string, workspaceRoot?: string): string {
+  if (workspaceRoot) {
+    const config = loadCarlConfig(workspaceRoot);
+    const override = config.models?.[phase as keyof NonNullable<CarlConfig["models"]>];
+    if (override) return override;
+  }
+  return DEFAULT_MODELS[phase] ?? "haiku4.5";
 }
 
 /**
@@ -274,7 +312,6 @@ export interface RunPhaseResult {
 // Wall-clock timeout per phase. Phases not listed have no timeout.
 const PHASE_TIMEOUT_MS: Record<string, number> = {
   developer: 14 * 60 * 1000,
-  "test-writer": 9 * 60 * 1000,
 };
 
 function writeTimeoutDiagnostic(
@@ -313,23 +350,13 @@ export async function runPhase(
   initialPrompt?: string,
 ): Promise<RunPhaseResult> {
   const runId = randomUUID();
-  const model = getPhaseModel(phaseName);
+  const model = getPhaseModel(phaseName, workspaceRoot);
   const phaseStartTime = Date.now();
 
-  // Developer/test-writer skip if no relevant open tickets.
+  // Developer skips if no open tickets.
   if (phaseName === "developer") {
     if (!hasOpenTickets(path.join(workspaceRoot, ".agent", "dev-tickets.md"))) {
       console.log(`[System] No open dev tickets. Nothing for developer to do.`);
-      return { status: "skipped", response: "" };
-    }
-  }
-  if (phaseName === "test-writer") {
-    if (
-      !hasOpenTickets(path.join(workspaceRoot, ".agent", "test-tickets.md"))
-    ) {
-      console.log(
-        `[System] No open test tickets. Nothing for test-writer to do.`,
-      );
       return { status: "skipped", response: "" };
     }
   }

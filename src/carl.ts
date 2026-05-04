@@ -65,13 +65,6 @@ async function cmdPlan(workspaceRoot: string, promptFile?: string): Promise<void
   }
 }
 
-async function cmdWriteTests(workspaceRoot: string): Promise<void> {
-  const result = await runPhase(workspaceRoot, "test-writer", "write-tests");
-  if (result.status === "skipped") return;
-  const outputPath = getPhaseOutputPath(workspaceRoot, "test-writer");
-  if (fs.existsSync(outputPath)) openFileInEditor(outputPath);
-}
-
 async function cmdCode(workspaceRoot: string): Promise<void> {
   const result = await runPhase(workspaceRoot, "developer", "code");
   if (result.status === "skipped") return;
@@ -101,10 +94,12 @@ function usage(): void {
   console.error("");
   console.error("Commands:");
   console.error("  plan [<file>]  Read prompt from file or open editor; run architect");
-  console.error("  write-tests   Run test-writer once against test-tickets");
   console.error("  code          Run developer once");
   console.error("  review        Run reviewer once");
   console.error("  reset         Clear .agent/");
+  console.error("");
+  console.error("Config: .carl/config.json (optional)");
+  console.error('  { "models": { "architect": "gemini-3.1-pro-preview", "developer": "haiku4.5", "reviewer": "sonnet4.6" } }');
 }
 
 async function main(): Promise<void> {
@@ -120,9 +115,6 @@ async function main(): Promise<void> {
           process.exit(1);
         }
         await cmdPlan(workspaceRoot, args[1]);
-        break;
-      case "write-tests":
-        await cmdWriteTests(workspaceRoot);
         break;
       case "code":
         await cmdCode(workspaceRoot);
