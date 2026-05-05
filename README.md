@@ -42,7 +42,7 @@ Each command runs once and exits. There is no automatic kick-back between phases
 Cross-phase coordination via files:
 - **`.agent/decisions.md`** — Architect's plan and decisions (read by all downstream phases)
 - **`.agent/dev-tickets.md` / `.agent/test-tickets.md`** — Ticket lists
-- **`.carl/events.jsonl`** — Per-prompt timing, char counts, and `estimated_credits`
+- **`.carl/events.jsonl`** — Per-prompt timing and char counts
 
 ## License
 

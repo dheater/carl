@@ -99,7 +99,7 @@ function usage(): void {
   console.error("  reset         Clear .agent/");
   console.error("");
   console.error("Config: .carl/config.json (optional)");
-  console.error('  { "models": { "architect": "gemini-3.1-pro-preview", "developer": "haiku4.5", "reviewer": "sonnet4.6" } }');
+  console.error('  { "models": { "architect": "gemini-3.1-pro-preview", "developer": "kimi-k2.6", "reviewer": "sonnet4.6" } }');
 }
 
 async function main(): Promise<void> {

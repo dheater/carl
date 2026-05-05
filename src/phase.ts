@@ -21,20 +21,6 @@ type TimingEvent = {
   meta?: Record<string, any>;
 };
 
-// Char-based credit estimates calibrated from CSV reconciliation against
-// billed credits (rates per 1000 chars, expressed as cr/char). Treated as a
-// budget proxy until programmatic credit access exists; revise when real
-// numbers diverge.
-const COST_PER_CHAR_BY_MODEL: Record<string, number> = {
-  "haiku4.5": 0.0002,
-  "sonnet4.6": 0.0006,
-};
-
-function estimateCredits(model: string, chars: number): number {
-  const rate = COST_PER_CHAR_BY_MODEL[model];
-  if (rate === undefined) return 0;
-  return Number((chars * rate).toFixed(2));
-}
 
 type CarlConfig = {
   models?: {
@@ -474,7 +460,6 @@ export async function runPhase(
       }
       [response, usage] = extractPromptResponseText(raw);
       const promptDuration = Date.now() - promptStart;
-      const totalChars = instruction.length + response.length;
       logTimingDuration(
         workspaceRoot,
         runId,
@@ -487,7 +472,6 @@ export async function runPhase(
         {
           prompt_chars: instruction.length,
           response_chars: response.length,
-          estimated_credits: estimateCredits(model, totalChars),
           ...(usage && { usage }),
         },
       );
