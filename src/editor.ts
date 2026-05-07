@@ -13,7 +13,11 @@ function splitCommand(command: string): string[] {
     if (quote) {
       if (char === quote) {
         quote = null;
-      } else if (char === "\\" && i + 1 < command.length && command[i + 1] === quote) {
+      } else if (
+        char === "\\" &&
+        i + 1 < command.length &&
+        command[i + 1] === quote
+      ) {
         current += command[++i];
       } else {
         current += char;

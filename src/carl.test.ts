@@ -12,6 +12,8 @@ jest.mock("./phase", () => {
 
 describe("carl CLI", () => {
   const originalArgv = process.argv;
+  const NETWORK_FAILURE_MESSAGE =
+    "Network unavailable after 3 attempts — run `carl code` to retry.";
   let promptFile: string;
 
   beforeEach(() => {
@@ -31,16 +33,25 @@ describe("carl CLI", () => {
 
   async function runCli(
     args: string[],
-    opts: { cwd?: string; runPhaseResult?: { status: "success" | "blocked"; response: string } } = {},
+    opts: {
+      cwd?: string;
+      runPhaseResult?: { status: "success" | "blocked"; response: string };
+    } = {},
   ): Promise<jest.MockedFunction<typeof import("./phase").runPhase>> {
     const cwd = opts.cwd ?? "/tmp/carl-workspace";
     const phase = require("./phase") as typeof import("./phase");
-    const mockRunPhase = phase.runPhase as jest.MockedFunction<typeof phase.runPhase>;
-    mockRunPhase.mockResolvedValue(opts.runPhaseResult ?? { status: "success", response: "done" });
+    const mockRunPhase = phase.runPhase as jest.MockedFunction<
+      typeof phase.runPhase
+    >;
+    mockRunPhase.mockResolvedValue(
+      opts.runPhaseResult ?? { status: "success", response: "done" },
+    );
 
     process.argv = ["node", "carl", ...args];
     const cwdSpy = jest.spyOn(process, "cwd").mockReturnValue(cwd);
-    const exitSpy = jest.spyOn(process, "exit").mockImplementation((() => undefined) as never);
+    const exitSpy = jest
+      .spyOn(process, "exit")
+      .mockImplementation((() => undefined) as never);
     const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
     const logSpy = jest.spyOn(console, "log").mockImplementation(() => {});
 
@@ -99,10 +110,16 @@ describe("carl CLI", () => {
       const freshPromptFile = path.join(tmpDir, "fresh.md");
       fs.writeFileSync(freshPromptFile, "fresh prompt\n", "utf-8");
 
-      const mockRunPhase = await runCli(["code", freshPromptFile], { cwd: tmpDir });
+      const mockRunPhase = await runCli(["code", freshPromptFile], {
+        cwd: tmpDir,
+      });
 
       expect(mockRunPhase).toHaveBeenCalledWith(
-        tmpDir, "developer", "code", "fresh prompt", undefined,
+        tmpDir,
+        "developer",
+        "code",
+        "fresh prompt",
+        undefined,
       );
       expect(fs.existsSync(pendingPath)).toBe(false);
     });
@@ -114,7 +131,11 @@ describe("carl CLI", () => {
       const mockRunPhase = await runCli(["code"], { cwd: tmpDir });
 
       expect(mockRunPhase).toHaveBeenCalledWith(
-        tmpDir, "developer", "code", "network failure prompt", undefined,
+        tmpDir,
+        "developer",
+        "code",
+        "network failure prompt",
+        undefined,
       );
       expect(fs.existsSync(pendingPath)).toBe(false);
     });
@@ -125,13 +146,21 @@ describe("carl CLI", () => {
       fs.writeFileSync(freshPromptFile, "my prompt\n", "utf-8");
 
       const phase = require("./phase") as typeof import("./phase");
-      const mockRunPhase = phase.runPhase as jest.MockedFunction<typeof phase.runPhase>;
-      mockRunPhase.mockRejectedValue(new Error("Network unavailable after 3 attempts — run `carl code` to retry."));
+      const mockRunPhase = phase.runPhase as jest.MockedFunction<
+        typeof phase.runPhase
+      >;
+      mockRunPhase.mockRejectedValue(
+        new phase.NetworkUnavailableError(NETWORK_FAILURE_MESSAGE),
+      );
 
       process.argv = ["node", "carl", "code", freshPromptFile];
       const cwdSpy = jest.spyOn(process, "cwd").mockReturnValue(tmpDir);
-      const exitSpy = jest.spyOn(process, "exit").mockImplementation((() => undefined) as never);
-      const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+      const exitSpy = jest
+        .spyOn(process, "exit")
+        .mockImplementation((() => undefined) as never);
+      const errorSpy = jest
+        .spyOn(console, "error")
+        .mockImplementation(() => {});
       const logSpy = jest.spyOn(console, "log").mockImplementation(() => {});
 
       try {
@@ -165,7 +194,10 @@ describe("carl CLI", () => {
 
     test("runs first incomplete phase and marks it complete", async () => {
       const prdPath = path.join(tmpDir, ".agent", "prd.md");
-      fs.writeFileSync(prdPath, "## Phases\n\n- [ ] Phase 1: Setup\n- [ ] Phase 2: Impl\n");
+      fs.writeFileSync(
+        prdPath,
+        "## Phases\n\n- [ ] Phase 1: Setup\n- [ ] Phase 2: Impl\n",
+      );
 
       const mockRunPhase = await runCli(["code"], { cwd: tmpDir });
 
@@ -183,7 +215,10 @@ describe("carl CLI", () => {
 
     test("skips already-complete phases and runs the next one", async () => {
       const prdPath = path.join(tmpDir, ".agent", "prd.md");
-      fs.writeFileSync(prdPath, "## Phases\n\n- [x] Phase 1: Setup\n- [ ] Phase 2: Impl\n");
+      fs.writeFileSync(
+        prdPath,
+        "## Phases\n\n- [x] Phase 1: Setup\n- [ ] Phase 2: Impl\n",
+      );
 
       const mockRunPhase = await runCli(["code"], { cwd: tmpDir });
 
@@ -202,7 +237,13 @@ describe("carl CLI", () => {
       const prdPath = path.join(tmpDir, ".agent", "prd.md");
       fs.writeFileSync(prdPath, "## Phases\n\n- [ ] Phase 1: Setup\n");
 
-      await runCli(["code"], { cwd: tmpDir, runPhaseResult: { status: "blocked", response: "BLOCKED: missing info" } });
+      await runCli(["code"], {
+        cwd: tmpDir,
+        runPhaseResult: {
+          status: "blocked",
+          response: "BLOCKED: missing info",
+        },
+      });
 
       const prd = fs.readFileSync(prdPath, "utf-8");
       expect(prd).toContain("- [ ] Phase 1: Setup");
@@ -210,7 +251,10 @@ describe("carl CLI", () => {
 
     test("does nothing when all phases are complete", async () => {
       const prdPath = path.join(tmpDir, ".agent", "prd.md");
-      fs.writeFileSync(prdPath, "## Phases\n\n- [x] Phase 1: Setup\n- [x] Phase 2: Impl\n");
+      fs.writeFileSync(
+        prdPath,
+        "## Phases\n\n- [x] Phase 1: Setup\n- [x] Phase 2: Impl\n",
+      );
 
       const mockRunPhase = await runCli(["code"], { cwd: tmpDir });
 
@@ -219,18 +263,27 @@ describe("carl CLI", () => {
 
     test("logs phase-specific diagnostic and rethrows on network failure in PRD path", async () => {
       const prdPath = path.join(tmpDir, ".agent", "prd.md");
-      fs.writeFileSync(prdPath, "## Phases\n\n- [ ] Phase 1: Setup\n- [ ] Phase 2: Impl\n");
+      fs.writeFileSync(
+        prdPath,
+        "## Phases\n\n- [ ] Phase 1: Setup\n- [ ] Phase 2: Impl\n",
+      );
 
       const phase = require("./phase") as typeof import("./phase");
-      const mockRunPhase = phase.runPhase as jest.MockedFunction<typeof phase.runPhase>;
+      const mockRunPhase = phase.runPhase as jest.MockedFunction<
+        typeof phase.runPhase
+      >;
       mockRunPhase.mockRejectedValue(
-        new Error("Network unavailable after 3 attempts — run `carl code` to retry."),
+        new phase.NetworkUnavailableError(NETWORK_FAILURE_MESSAGE),
       );
 
       process.argv = ["node", "carl", "code"];
       const cwdSpy = jest.spyOn(process, "cwd").mockReturnValue(tmpDir);
-      const exitSpy = jest.spyOn(process, "exit").mockImplementation((() => undefined) as never);
-      const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+      const exitSpy = jest
+        .spyOn(process, "exit")
+        .mockImplementation((() => undefined) as never);
+      const errorSpy = jest
+        .spyOn(console, "error")
+        .mockImplementation(() => {});
       const logSpy = jest.spyOn(console, "log").mockImplementation(() => {});
 
       try {
@@ -248,11 +301,12 @@ describe("carl CLI", () => {
       expect(prd).toContain("- [ ] Phase 1: Setup");
 
       expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Phase "Phase 1: Setup" interrupted by network failure'),
+        expect.stringContaining(
+          'Phase "Phase 1: Setup" interrupted by network failure',
+        ),
       );
 
       logSpy.mockRestore();
     });
   });
-
 });

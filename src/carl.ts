@@ -1,6 +1,12 @@
 #!/usr/bin/env node
 
-import { runPhase, DEFAULT_MODELS, parsePrdPhases, markPhaseComplete } from "./phase";
+import {
+  runPhase,
+  DEFAULT_MODELS,
+  parsePrdPhases,
+  markPhaseComplete,
+  NetworkUnavailableError,
+} from "./phase";
 import { collectPrompt, openFileInEditor, getPhaseOutputPath } from "./editor";
 import { red } from "./colors";
 import * as fs from "fs";
@@ -27,8 +33,12 @@ function collectCommandPrompt(
     userInput = fs.readFileSync(promptFile, "utf-8").trim() || null;
   } else if (fs.existsSync(pendingPromptPath)) {
     userInput = fs.readFileSync(pendingPromptPath, "utf-8");
-    console.log(`[System] Resuming saved prompt from previous network failure.`);
-    console.log(`[System] Run \`carl reset\` then \`carl ${command}\` to start fresh.`);
+    console.log(
+      `[System] Resuming saved prompt from previous network failure.`,
+    );
+    console.log(
+      `[System] Run \`carl reset\` then \`carl ${command}\` to start fresh.`,
+    );
   } else {
     userInput = collectPrompt(header);
   }
@@ -36,14 +46,18 @@ function collectCommandPrompt(
   return userInput || null;
 }
 
-function savePendingPrompt(workspaceRoot: string, command: string, input: string): void {
+function savePendingPrompt(
+  workspaceRoot: string,
+  command: string,
+  input: string,
+): void {
   const agentDir = path.join(workspaceRoot, ".agent");
   if (!fs.existsSync(agentDir)) fs.mkdirSync(agentDir, { recursive: true });
-  fs.writeFileSync(getPendingPromptPath(workspaceRoot, command), input, "utf-8");
-}
-
-function isNetworkFailure(err: unknown): boolean {
-  return ((err as any)?.message ?? "").includes("Network unavailable");
+  fs.writeFileSync(
+    getPendingPromptPath(workspaceRoot, command),
+    input,
+    "utf-8",
+  );
 }
 
 function clearPendingPrompt(workspaceRoot: string, command: string): void {
@@ -68,7 +82,8 @@ async function cmdPlan(
   try {
     await runPhase(workspaceRoot, "architect", "plan", userInput, model);
   } catch (err) {
-    if (isNetworkFailure(err)) savePendingPrompt(workspaceRoot, "plan", userInput);
+    if (err instanceof NetworkUnavailableError)
+      savePendingPrompt(workspaceRoot, "plan", userInput);
     throw err;
   }
   clearPendingPrompt(workspaceRoot, "plan");
@@ -77,7 +92,9 @@ async function cmdPlan(
   while (fs.existsSync(outputPath)) {
     const before = fs.readFileSync(outputPath, "utf-8");
     openFileInEditor(outputPath);
-    const after = fs.existsSync(outputPath) ? fs.readFileSync(outputPath, "utf-8") : "";
+    const after = fs.existsSync(outputPath)
+      ? fs.readFileSync(outputPath, "utf-8")
+      : "";
 
     if (after.trimEnd() === before.trimEnd()) break;
 
@@ -103,12 +120,16 @@ async function cmdCode(
     if (phases.length > 0) {
       const nextIndex = phases.findIndex((p) => !p.completed);
       if (nextIndex === -1) {
-        console.log("[System] All phases complete. Run `carl review` to validate.");
+        console.log(
+          "[System] All phases complete. Run `carl review` to validate.",
+        );
         return;
       }
       const next = phases[nextIndex];
       const phaseNumber = nextIndex + 1;
-      console.log(`[System] Running phase ${phaseNumber} of ${phases.length}: ${next.title}`);
+      console.log(
+        `[System] Running phase ${phaseNumber} of ${phases.length}: ${next.title}`,
+      );
       let result: Awaited<ReturnType<typeof runPhase>>;
       try {
         result = await runPhase(
@@ -119,8 +140,10 @@ async function cmdCode(
           model,
         );
       } catch (err) {
-        if (isNetworkFailure(err)) {
-          console.log(`[System] Phase "${next.title}" interrupted by network failure. Run \`carl code\` to retry this phase.`);
+        if (err instanceof NetworkUnavailableError) {
+          console.log(
+            `[System] Phase "${next.title}" interrupted by network failure. Run \`carl code\` to retry this phase.`,
+          );
         }
         throw err;
       }
@@ -128,12 +151,18 @@ async function cmdCode(
         markPhaseComplete(prdPath, next.lineIndex);
         const stillRemaining = phases.length - phaseNumber;
         if (stillRemaining > 0) {
-          console.log(`[System] Phase complete. ${stillRemaining} phase(s) remaining. Run \`carl code\` to continue.`);
+          console.log(
+            `[System] Phase complete. ${stillRemaining} phase(s) remaining. Run \`carl code\` to continue.`,
+          );
         } else {
-          console.log("[System] All phases complete. Run `carl review` to validate.");
+          console.log(
+            "[System] All phases complete. Run `carl review` to validate.",
+          );
         }
       } else {
-        console.log("[System] Phase blocked — not marked complete. Fix the blocker then run `carl code` again.");
+        console.log(
+          "[System] Phase blocked — not marked complete. Fix the blocker then run `carl code` again.",
+        );
       }
       const outputPath = getPhaseOutputPath(workspaceRoot, "developer");
       if (fs.existsSync(outputPath)) openFileInEditor(outputPath);
@@ -155,7 +184,8 @@ async function cmdCode(
   try {
     await runPhase(workspaceRoot, "developer", "code", userInput, model);
   } catch (err) {
-    if (isNetworkFailure(err)) savePendingPrompt(workspaceRoot, "code", userInput);
+    if (err instanceof NetworkUnavailableError)
+      savePendingPrompt(workspaceRoot, "code", userInput);
     throw err;
   }
   clearPendingPrompt(workspaceRoot, "code");
@@ -163,17 +193,8 @@ async function cmdCode(
   if (fs.existsSync(outputPath)) openFileInEditor(outputPath);
 }
 
-async function cmdReview(
-  workspaceRoot: string,
-  model?: string,
-): Promise<void> {
-  await runPhase(
-    workspaceRoot,
-    "reviewer",
-    "review",
-    undefined,
-    model,
-  );
+async function cmdReview(workspaceRoot: string, model?: string): Promise<void> {
+  await runPhase(workspaceRoot, "reviewer", "review", undefined, model);
   const outputPath = getPhaseOutputPath(workspaceRoot, "reviewer");
   if (fs.existsSync(outputPath)) openFileInEditor(outputPath);
 }
@@ -197,7 +218,8 @@ async function cmdChat(
   try {
     result = await runPhase(workspaceRoot, "chat", "chat", userInput, model);
   } catch (err) {
-    if (isNetworkFailure(err)) savePendingPrompt(workspaceRoot, "chat", userInput);
+    if (err instanceof NetworkUnavailableError)
+      savePendingPrompt(workspaceRoot, "chat", userInput);
     throw err;
   }
   clearPendingPrompt(workspaceRoot, "chat");
@@ -206,17 +228,13 @@ async function cmdChat(
   while (fs.existsSync(outputPath)) {
     const before = fs.readFileSync(outputPath, "utf-8");
     openFileInEditor(outputPath);
-    const after = fs.existsSync(outputPath) ? fs.readFileSync(outputPath, "utf-8") : "";
+    const after = fs.existsSync(outputPath)
+      ? fs.readFileSync(outputPath, "utf-8")
+      : "";
 
     if (after.trimEnd() === before.trimEnd()) break;
 
-    result = await runPhase(
-      workspaceRoot,
-      "chat",
-      "chat",
-      after,
-      model,
-    );
+    result = await runPhase(workspaceRoot, "chat", "chat", after, model);
   }
 
   if (result.status === "blocked") {
@@ -238,13 +256,21 @@ function usage(): void {
   console.error("Usage: carl [--model <model>] <command>");
   console.error("");
   console.error("Options:");
-  console.error("  --model <model>  Override the model for this run (ignores config and defaults)");
+  console.error(
+    "  --model <model>  Override the model for this run (ignores config and defaults)",
+  );
   console.error("");
   console.error("Commands:");
-  console.error("  plan [<file>]  Read prompt from file or open editor; write .agent/prd.md for complex work");
-  console.error("  code [<file>]  Read prompt from file or open editor; run the implementation session");
+  console.error(
+    "  plan [<file>]  Read prompt from file or open editor; write .agent/prd.md for complex work",
+  );
+  console.error(
+    "  code [<file>]  Read prompt from file or open editor; run the implementation session",
+  );
   console.error("  review        Run reviewer once");
-  console.error(`  chat [<file>] Read prompt from file or open editor; run the general-purpose chat skill (default: ${DEFAULT_MODELS.chat})`);
+  console.error(
+    `  chat [<file>] Read prompt from file or open editor; run the general-purpose chat skill (default: ${DEFAULT_MODELS.chat})`,
+  );
   console.error("  reset         Clear .agent/");
   console.error("");
   console.error("Config: .carl/config.json (optional)");

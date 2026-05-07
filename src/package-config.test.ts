@@ -30,6 +30,4 @@ describe("package-config", () => {
       expect(packageJson.scripts.build).toContain("dist/carl.mjs");
     });
   });
-
-
 });

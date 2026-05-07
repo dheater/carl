@@ -1,7 +1,12 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { buildSkillInstruction, runPhase, parsePrdPhases, markPhaseComplete } from "./phase";
+import {
+  buildSkillInstruction,
+  runPhase,
+  parsePrdPhases,
+  markPhaseComplete,
+} from "./phase";
 
 jest.mock("@augmentcode/auggie-sdk");
 
@@ -47,10 +52,12 @@ describe("runPhase", () => {
       allowIndexing: false,
     });
     expect(logSpy).toHaveBeenCalledWith("  [System] Initializing agent...");
-    expect(fs.readFileSync(
-      path.join(workspaceRoot, ".agent", "notes", "chat.md"),
-      "utf-8",
-    )).toBe("chat response");
+    expect(
+      fs.readFileSync(
+        path.join(workspaceRoot, ".agent", "notes", "chat.md"),
+        "utf-8",
+      ),
+    ).toBe("chat response");
   });
 
   test("indexes developer sessions by default", async () => {
@@ -76,10 +83,12 @@ describe("runPhase", () => {
       model: "test-model",
       allowIndexing: true,
     });
-    expect(fs.readFileSync(
-      path.join(workspaceRoot, ".agent", "notes", "developer.md"),
-      "utf-8",
-    )).toBe("dev response");
+    expect(
+      fs.readFileSync(
+        path.join(workspaceRoot, ".agent", "notes", "developer.md"),
+        "utf-8",
+      ),
+    ).toBe("dev response");
   });
 
   test("writes architect output to .agent/prd.md", async () => {
@@ -99,10 +108,9 @@ describe("runPhase", () => {
       "test-model",
     );
 
-    expect(fs.readFileSync(
-      path.join(workspaceRoot, ".agent", "prd.md"),
-      "utf-8",
-    )).toBe("prd response");
+    expect(
+      fs.readFileSync(path.join(workspaceRoot, ".agent", "prd.md"), "utf-8"),
+    ).toBe("prd response");
   });
 
   test("reviewer instruction requires acceptance-criteria validation when prd exists", () => {
@@ -132,12 +140,19 @@ describe("parsePrdPhases", () => {
     const prd = "## Phases\n\n- [ ] Phase 1: Setup\n- [x] Phase 2: Impl\n";
     const phases = parsePrdPhases(prd);
     expect(phases).toHaveLength(2);
-    expect(phases[0]).toMatchObject({ title: "Phase 1: Setup", completed: false });
-    expect(phases[1]).toMatchObject({ title: "Phase 2: Impl", completed: true });
+    expect(phases[0]).toMatchObject({
+      title: "Phase 1: Setup",
+      completed: false,
+    });
+    expect(phases[1]).toMatchObject({
+      title: "Phase 2: Impl",
+      completed: true,
+    });
   });
 
   test("stops at next ## section", () => {
-    const prd = "## Phases\n\n- [ ] Phase 1: Go\n\n## Risks\n\n- [ ] not a phase\n";
+    const prd =
+      "## Phases\n\n- [ ] Phase 1: Go\n\n## Risks\n\n- [ ] not a phase\n";
     expect(parsePrdPhases(prd)).toHaveLength(1);
   });
 
@@ -159,7 +174,10 @@ describe("markPhaseComplete", () => {
 
   test("marks the specified line complete, leaves others unchanged", () => {
     const prdPath = path.join(tmpDir, "prd.md");
-    fs.writeFileSync(prdPath, "## Phases\n\n- [ ] Phase 1: Setup\n- [ ] Phase 2: Impl\n");
+    fs.writeFileSync(
+      prdPath,
+      "## Phases\n\n- [ ] Phase 1: Setup\n- [ ] Phase 2: Impl\n",
+    );
     const phases = parsePrdPhases(fs.readFileSync(prdPath, "utf-8"));
     markPhaseComplete(prdPath, phases[0].lineIndex);
     const updated = fs.readFileSync(prdPath, "utf-8");

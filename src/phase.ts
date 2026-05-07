@@ -50,7 +50,11 @@ function loadCarlConfig(workspaceRoot: string): CarlConfig {
       },
     };
     fs.mkdirSync(carlDir, { recursive: true });
-    fs.writeFileSync(configPath, JSON.stringify(defaults, null, 2) + "\n", "utf-8");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify(defaults, null, 2) + "\n",
+      "utf-8",
+    );
     return defaults;
   }
   try {
@@ -73,7 +77,8 @@ function loadSkillFile(name: string): string {
 function getPhaseModel(phase: string, workspaceRoot?: string): string {
   if (workspaceRoot) {
     const config = loadCarlConfig(workspaceRoot);
-    const override = config.models?.[phase as keyof NonNullable<CarlConfig["models"]>];
+    const override =
+      config.models?.[phase as keyof NonNullable<CarlConfig["models"]>];
     if (override) return override;
   }
   return DEFAULT_MODELS[phase] ?? "haiku4.5";
@@ -148,7 +153,8 @@ export function buildSkillInstruction(
     const prdPath = path.join(workspaceRoot, ".agent", "prd.md");
     if (fs.existsSync(prdPath)) {
       instruction += "\n\n---\n\n# PRD acceptance criteria\n\n";
-      instruction += "`.agent/prd.md` exists and is the source of truth for this review.\n\n";
+      instruction +=
+        "`.agent/prd.md` exists and is the source of truth for this review.\n\n";
       instruction +=
         "Before you change code or report results, extract the acceptance criteria from that file and check the current diff against each one.\n\n";
       instruction +=
@@ -267,7 +273,11 @@ export function parsePrdPhases(prdContent: string): PrdPhase[] {
     if (inPhasesSection) {
       const match = line.match(/^-\s+\[([ x])\]\s+(.+)$/i);
       if (match) {
-        phases.push({ lineIndex: i, title: match[2].trim(), completed: match[1] === "x" });
+        phases.push({
+          lineIndex: i,
+          title: match[2].trim(),
+          completed: match[1] === "x",
+        });
       }
     }
   }
@@ -281,6 +291,13 @@ export function markPhaseComplete(prdPath: string, lineIndex: number): void {
   fs.writeFileSync(prdPath, lines.join("\n"), "utf-8");
 }
 
+export class NetworkUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "NetworkUnavailableError";
+  }
+}
+
 export interface RunPhaseResult {
   status: "success" | "blocked";
   response: string;
@@ -289,6 +306,8 @@ export interface RunPhaseResult {
 // Wall-clock timeout per phase. Phases not listed have no timeout.
 const PHASE_TIMEOUT_MS: Record<string, number> = {
   developer: 14 * 60 * 1000,
+  reviewer: 6 * 60 * 1000,
+  architect: 12 * 60 * 1000,
 };
 
 function writeTimeoutDiagnostic(
@@ -336,7 +355,8 @@ export async function runPhase(
   if (initialPrompt) {
     instruction += `\n\n# User request\n\n${initialPrompt}`;
     if (phaseName === "architect") {
-      instruction += "\n\nThe user has already stated their request above. Skip the menu — proceed directly with this request.";
+      instruction +=
+        "\n\nThe user has already stated their request above. Skip the menu — proceed directly with this request.";
     }
   }
 
@@ -465,7 +485,7 @@ export async function runPhase(
         shouldRetry = true;
       } else if (isTransientFetchError(err)) {
         // All retries exhausted — surface a clean message instead of the raw SDK error.
-        throw new Error(
+        throw new NetworkUnavailableError(
           `Network unavailable after ${MAX_FETCH_RETRIES + 1} attempts — run \`carl ${command}\` to retry.`,
         );
       } else {
