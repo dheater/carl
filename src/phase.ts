@@ -69,7 +69,10 @@ type PromptResponse = string | { text: string; usage?: Record<string, any> };
 function loadSkillFile(name: string): string {
   for (const dir of [CARL_SKILLS_DIR, GLOBAL_SKILLS_DIR]) {
     const p = path.join(dir, `${name}.md`);
-    if (fs.existsSync(p)) return fs.readFileSync(p, "utf-8");
+    if (fs.existsSync(p)) {
+      const raw = fs.readFileSync(p, "utf-8");
+      return raw.replace(/^---\n[\s\S]*?\n---\n?/, "").trimStart();
+    }
   }
   return "";
 }
@@ -162,36 +165,14 @@ export function buildSkillInstruction(
         "Treat anything not clearly implemented and validated as `[gap]`. If `.agent/prd.md` has no acceptance criteria, say that explicitly.\n\n";
     }
 
-    instruction += "\n\n---\n\n# Proposed commit message\n\n";
-    instruction +=
-      "After you finish your validation, provide a `## Proposed commit message` section " +
-      "with a real commit subject and optional short body. This message should:\n\n";
     const isTicketBranch = branch && branch !== "main" && branch !== "master";
-    instruction += "- **Subject line** (required): ";
+    instruction += "\n\n---\n\n# Commit message\n\n";
     if (isTicketBranch) {
-      instruction +=
-        "Start with the ticket prefix extracted from the current branch name (e.g., `CLIENTS-934:`). " +
-        "Follow it with a concise summary of code/behavior changes, not workflow meta (no mentions of gates, phases, or checklists).\n\n";
+      instruction += `Add \`## Proposed commit message\`. Subject: ticket prefix from \`${branch}\` + summary. Optional body.\n`;
     } else {
       instruction +=
-        "Use a conventional-commit style prefix (`fix:`, `chore:`, `feat:`, `docs:`, `refactor:`, `style:`, etc.) " +
-        "followed by a concise summary of code/behavior changes, not workflow meta (no mentions of gates, phases, or checklists).\n\n";
+        "Add `## Proposed commit message`. Subject: `fix:`/`feat:`/`chore:` + summary. Optional body.\n";
     }
-    instruction +=
-      "- **Body** (optional): A short paragraph explaining the why and what if needed, keeping focus on code changes.\n\n";
-    instruction += "Example:\n\n";
-    instruction += "```\n";
-    instruction += "## Proposed commit message\n\n";
-    if (isTicketBranch) {
-      instruction += "CLIENTS-934: Fix download timeout handling\n\n";
-      instruction +=
-        "Increase default timeout from 30s to 60s in HTTP client.\n";
-    } else {
-      instruction += "fix: Download timeout handling\n\n";
-      instruction +=
-        "Increase default timeout from 30s to 60s in HTTP client.\n";
-    }
-    instruction += "```\n";
 
     const gitStatus = getGitStatus(workspaceRoot);
     if (gitStatus.isRepo) {

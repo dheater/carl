@@ -113,6 +113,13 @@ describe("runPhase", () => {
     ).toBe("prd response");
   });
 
+  test("skill content omits YAML frontmatter", () => {
+    const instruction = buildSkillInstruction("reviewer", workspaceRoot);
+    expect(instruction).toContain("# Your skill for this session\n\n# Reviewer");
+    expect(instruction).not.toContain("# Your skill for this session\n\n---\n");
+    expect(instruction).toContain("# Reviewer");
+  });
+
   test("reviewer instruction requires acceptance-criteria validation when prd exists", () => {
     fs.mkdirSync(path.join(workspaceRoot, ".agent"), { recursive: true });
     fs.writeFileSync(
