@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { buildSkillInstruction, runPhase } from "./phase";
+import { buildSkillInstruction, runPhase, parsePrdPhases, markPhaseComplete } from "./phase";
 
 jest.mock("@augmentcode/auggie-sdk");
 
@@ -120,5 +120,50 @@ describe("runPhase", () => {
     expect(instruction).toContain("[met]");
     expect(instruction).toContain("[gap]");
     expect(instruction).toContain("[unknown]");
+  });
+});
+
+describe("parsePrdPhases", () => {
+  test("returns empty array when no Phases section", () => {
+    expect(parsePrdPhases("## Goal\n\nship it\n")).toEqual([]);
+  });
+
+  test("parses unchecked and checked phases", () => {
+    const prd = "## Phases\n\n- [ ] Phase 1: Setup\n- [x] Phase 2: Impl\n";
+    const phases = parsePrdPhases(prd);
+    expect(phases).toHaveLength(2);
+    expect(phases[0]).toMatchObject({ title: "Phase 1: Setup", completed: false });
+    expect(phases[1]).toMatchObject({ title: "Phase 2: Impl", completed: true });
+  });
+
+  test("stops at next ## section", () => {
+    const prd = "## Phases\n\n- [ ] Phase 1: Go\n\n## Risks\n\n- [ ] not a phase\n";
+    expect(parsePrdPhases(prd)).toHaveLength(1);
+  });
+
+  test("returns empty array when Phases section has no checkboxes", () => {
+    expect(parsePrdPhases("## Phases\n\nTBD\n")).toEqual([]);
+  });
+});
+
+describe("markPhaseComplete", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-mark-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("marks the specified line complete, leaves others unchanged", () => {
+    const prdPath = path.join(tmpDir, "prd.md");
+    fs.writeFileSync(prdPath, "## Phases\n\n- [ ] Phase 1: Setup\n- [ ] Phase 2: Impl\n");
+    const phases = parsePrdPhases(fs.readFileSync(prdPath, "utf-8"));
+    markPhaseComplete(prdPath, phases[0].lineIndex);
+    const updated = fs.readFileSync(prdPath, "utf-8");
+    expect(updated).toContain("- [x] Phase 1: Setup");
+    expect(updated).toContain("- [ ] Phase 2: Impl");
   });
 });

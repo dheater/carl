@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { runPhase, DEFAULT_MODELS } from "./phase";
+import { runPhase, DEFAULT_MODELS, parsePrdPhases, markPhaseComplete } from "./phase";
 import { collectPrompt, openFileInEditor, getPhaseOutputPath } from "./editor";
 import { red } from "./colors";
 import * as fs from "fs";
@@ -61,14 +61,7 @@ async function cmdPlan(
     return;
   }
 
-  let result = await runPhase(
-    workspaceRoot,
-    "architect",
-    "plan",
-    userInput,
-    model,
-  );
-
+  await runPhase(workspaceRoot, "architect", "plan", userInput, model);
   clearPendingPrompt(workspaceRoot, "plan");
 
   // PRD loop: show prd.md to the user, let them answer inline,
@@ -84,7 +77,7 @@ async function cmdPlan(
 
     // User answered the interview questions in prd.md. Re-run architect
     // with an explicit directive so it finalizes the PRD.
-    result = await runPhase(
+    const result = await runPhase(
       workspaceRoot,
       "architect",
       "plan",
@@ -100,6 +93,42 @@ async function cmdCode(
   promptFile?: string,
   model?: string,
 ): Promise<void> {
+  const prdPath = path.join(workspaceRoot, ".agent", "prd.md");
+  if (fs.existsSync(prdPath)) {
+    const phases = parsePrdPhases(fs.readFileSync(prdPath, "utf-8"));
+    if (phases.length > 0) {
+      const next = phases.find((p) => !p.completed);
+      if (!next) {
+        console.log("[System] All phases complete. Run `carl review` to validate.");
+        return;
+      }
+      const remaining = phases.filter((p) => !p.completed).length;
+      const phaseNumber = phases.indexOf(next) + 1;
+      console.log(`[System] Running phase ${phaseNumber} of ${phases.length}: ${next.title}`);
+      const result = await runPhase(
+        workspaceRoot,
+        "developer",
+        "code",
+        `Implement this phase from .agent/prd.md: ${next.title}\n\nWork only on this phase. Stop when this phase is complete.`,
+        model,
+      );
+      if (result.status !== "blocked") {
+        markPhaseComplete(prdPath, next.lineIndex);
+        const stillRemaining = remaining - 1;
+        if (stillRemaining > 0) {
+          console.log(`[System] Phase complete. ${stillRemaining} phase(s) remaining. Run \`carl code\` to continue.`);
+        } else {
+          console.log("[System] All phases complete. Run `carl review` to validate.");
+        }
+      } else {
+        console.log("[System] Phase blocked — not marked complete. Fix the blocker then run `carl code` again.");
+      }
+      const outputPath = getPhaseOutputPath(workspaceRoot, "developer");
+      if (fs.existsSync(outputPath)) openFileInEditor(outputPath);
+      return;
+    }
+  }
+
   const userInput = collectCommandPrompt(
     workspaceRoot,
     "code",
@@ -140,9 +169,15 @@ async function cmdReview(
 
 async function cmdChat(
   workspaceRoot: string,
+  promptFile?: string,
   model?: string,
 ): Promise<void> {
-  const userInput = collectPrompt("# Message to agent");
+  const userInput = collectCommandPrompt(
+    workspaceRoot,
+    "chat",
+    promptFile,
+    "# Message to agent",
+  );
   if (!userInput) {
     console.log("No prompt provided. Cancelled.");
     return;
@@ -154,6 +189,7 @@ async function cmdChat(
     userInput,
     model,
   );
+  clearPendingPrompt(workspaceRoot, "chat");
 
   // Chat loop: show chat.md to the user, let them reply inline,
   // re-run chat so it can process each round of feedback.
@@ -200,7 +236,7 @@ function usage(): void {
   console.error("  plan [<file>]  Read prompt from file or open editor; write .agent/prd.md for complex work");
   console.error("  code [<file>]  Read prompt from file or open editor; run the implementation session");
   console.error("  review        Run reviewer once");
-  console.error(`  chat          Open editor; run the general-purpose chat skill (default: ${DEFAULT_MODELS.chat})`);
+  console.error(`  chat [<file>] Read prompt from file or open editor; run the general-purpose chat skill (default: ${DEFAULT_MODELS.chat})`);
   console.error("  reset         Clear .agent/");
   console.error("");
   console.error("Config: .carl/config.json (optional)");
@@ -247,7 +283,11 @@ async function main(): Promise<void> {
         await cmdReview(workspaceRoot, model);
         break;
       case "chat":
-        await cmdChat(workspaceRoot, model);
+        if (args.length > 2) {
+          console.error("Usage: carl [--model <model>] chat [<prompt-file>]");
+          process.exit(1);
+        }
+        await cmdChat(workspaceRoot, args[1], model);
         break;
       case "reset":
         cmdReset(workspaceRoot);

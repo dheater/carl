@@ -24,7 +24,19 @@ Read `.agent/*`, code, tests, PRDs before asking. Never ask what reading answers
    - Non-goals
    - Constraints
    - Acceptance criteria
+   - Phases (ordered implementation steps as checkboxes)
    - Risks / open questions
 5. **Stop there.** No tickets. No tests. No code.
+
+### Phases format
+
+```markdown
+## Phases
+
+- [ ] Phase 1: <concise title>
+- [ ] Phase 2: <concise title>
+```
+
+Each phase is one focused unit of work a developer can complete and review independently. Two to five phases is typical. Omit phases only when the work is truly a single atomic change.
 
 The PRD is an input to `carl code`, not a substitute for the user's live request.

@@ -31,7 +31,7 @@ type CarlConfig = {
 };
 
 export const DEFAULT_MODELS: Record<string, string> = {
-  architect: "gpt5.4",
+  architect: "gpt5.5",
   developer: "sonnet4.6",
   reviewer: "sonnet4.6",
   chat: "gpt5.4",
@@ -89,7 +89,6 @@ function extractPromptResponseText(
   if (typeof response === "string") {
     return [response, undefined];
   }
-  // response is an object with text and optional usage
   const usage = response.usage
     ? { source: "auggie", ...response.usage }
     : undefined;
@@ -246,6 +245,40 @@ function writePhaseOutput(
     phaseOutput,
     "utf-8",
   );
+}
+
+export interface PrdPhase {
+  lineIndex: number;
+  title: string;
+  completed: boolean;
+}
+
+export function parsePrdPhases(prdContent: string): PrdPhase[] {
+  const lines = prdContent.split("\n");
+  const phases: PrdPhase[] = [];
+  let inPhasesSection = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^##\s+Phases\s*$/i.test(line)) {
+      inPhasesSection = true;
+      continue;
+    }
+    if (inPhasesSection && /^##\s+/.test(line)) break;
+    if (inPhasesSection) {
+      const match = line.match(/^-\s+\[([ x])\]\s+(.+)$/i);
+      if (match) {
+        phases.push({ lineIndex: i, title: match[2].trim(), completed: match[1] === "x" });
+      }
+    }
+  }
+  return phases;
+}
+
+export function markPhaseComplete(prdPath: string, lineIndex: number): void {
+  const content = fs.readFileSync(prdPath, "utf-8");
+  const lines = content.split("\n");
+  lines[lineIndex] = lines[lineIndex].replace(/^(-\s+\[) \]/, "$1x]");
+  fs.writeFileSync(prdPath, lines.join("\n"), "utf-8");
 }
 
 export interface RunPhaseResult {

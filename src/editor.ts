@@ -3,6 +3,61 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 
+function splitCommand(command: string): string[] {
+  const parts: string[] = [];
+  let current = "";
+  let quote: '"' | "'" | null = null;
+
+  for (let i = 0; i < command.length; i++) {
+    const char = command[i];
+    if (quote) {
+      if (char === quote) {
+        quote = null;
+      } else if (char === "\\" && i + 1 < command.length && command[i + 1] === quote) {
+        current += command[++i];
+      } else {
+        current += char;
+      }
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (current) {
+        parts.push(current);
+        current = "";
+      }
+      continue;
+    }
+    if (char === "\\" && i + 1 < command.length) {
+      current += command[++i];
+      continue;
+    }
+    current += char;
+  }
+
+  if (current) parts.push(current);
+  return parts;
+}
+
+function getEditorCommand(): string {
+  return process.env.EDITOR || process.env.VISUAL || "vi";
+}
+
+function runEditor(filePath: string) {
+  const editorCommand = getEditorCommand();
+  const [editor, ...editorArgs] = splitCommand(editorCommand);
+  return {
+    editorCommand,
+    result: spawnSync(editor || "vi", [...editorArgs, filePath], {
+      stdio: "inherit",
+    }),
+  };
+}
+
 export function collectPrompt(
   header = "# What would you like to work on?",
 ): string | null {
@@ -11,15 +66,11 @@ export function collectPrompt(
   const tmpFile = path.join(os.tmpdir(), `carl-prompt-${Date.now()}.md`);
   fs.writeFileSync(tmpFile, template, "utf-8");
 
-  const editor = process.env.EDITOR || process.env.VISUAL || "vi";
-  const result = spawnSync(editor, [tmpFile], {
-    stdio: "inherit",
-    shell: true,
-  });
+  const { editorCommand, result } = runEditor(tmpFile);
   if (result.error) {
     fs.unlinkSync(tmpFile);
     throw new Error(
-      `Failed to open editor '${editor}': ${result.error.message}`,
+      `Failed to open editor '${editorCommand}': ${result.error.message}`,
     );
   }
 
@@ -35,17 +86,9 @@ export function collectPrompt(
   return response || null;
 }
 
-/**
- * Open a file in the user's editor ($EDITOR, $VISUAL, or vi).
- * Resolves env precedence and uses spawnSync with stdio: inherit.
- * Logs a warning on error but does not throw.
- */
+/** Open a file in the configured editor. Logs warnings but does not throw. */
 export function openFileInEditor(filePath: string): void {
-  const editor = process.env.EDITOR || process.env.VISUAL || "vi";
-  const result = spawnSync(editor, [filePath], {
-    stdio: "inherit",
-    shell: true,
-  });
+  const { result } = runEditor(filePath);
 
   if (result.error || result.status !== 0) {
     const msg = result.error

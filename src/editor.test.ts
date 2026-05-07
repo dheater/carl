@@ -1,4 +1,4 @@
-import { openFileInEditor, getPhaseOutputPath } from "./editor";
+import { collectPrompt, openFileInEditor, getPhaseOutputPath } from "./editor";
 import { spawnSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
@@ -9,6 +9,27 @@ jest.mock("child_process");
 const mockSpawnSync = spawnSync as jest.MockedFunction<typeof spawnSync>;
 
 describe("Editor helper and phase output path mapping", () => {
+  describe("collectPrompt", () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+      delete process.env.EDITOR;
+      delete process.env.VISUAL;
+    });
+
+    test("passes editor args without shell expansion", () => {
+      process.env.EDITOR = "code --wait";
+      mockSpawnSync.mockReturnValue({ status: 0 } as any);
+
+      collectPrompt();
+
+      expect(mockSpawnSync).toHaveBeenCalledWith(
+        "code",
+        ["--wait", expect.stringMatching(/carl-prompt-.*\.md$/)],
+        { stdio: "inherit" },
+      );
+    });
+  });
+
   describe("openFileInEditor", () => {
     let tmpFile: string;
 
@@ -35,7 +56,6 @@ describe("Editor helper and phase output path mapping", () => {
 
       expect(mockSpawnSync).toHaveBeenCalledWith("emacs", [tmpFile], {
         stdio: "inherit",
-        shell: true,
       });
     });
 
@@ -48,7 +68,17 @@ describe("Editor helper and phase output path mapping", () => {
 
       expect(mockSpawnSync).toHaveBeenCalledWith("nano", [tmpFile], {
         stdio: "inherit",
-        shell: true,
+      });
+    });
+
+    test("splits editor commands with arguments", () => {
+      process.env.EDITOR = "code --wait";
+      mockSpawnSync.mockReturnValue({ status: 0 } as any);
+
+      openFileInEditor(tmpFile);
+
+      expect(mockSpawnSync).toHaveBeenCalledWith("code", ["--wait", tmpFile], {
+        stdio: "inherit",
       });
     });
 
@@ -61,7 +91,6 @@ describe("Editor helper and phase output path mapping", () => {
 
       expect(mockSpawnSync).toHaveBeenCalledWith("vi", [tmpFile], {
         stdio: "inherit",
-        shell: true,
       });
     });
 
