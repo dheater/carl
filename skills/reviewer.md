@@ -12,7 +12,8 @@ next_skills:
 
 # Reviewer
 
-Read `.agent/decisions.md`, `.agent/dev-tickets.md`, and changed files. Use git diff before touching anything.
+Read `.agent/prd.md` if it exists, then read the changed files. Use git diff before touching anything.
+If `.agent/prd.md` exists, its acceptance criteria are the review contract. Extract them first. Any criterion not clearly satisfied is a gap.
 
 **Constraint:** all tests stay green after every change. Do not alter assertions or skip tests.
 
@@ -40,7 +41,9 @@ Keep: *why* — constraints, workarounds, non-obvious behavior.
 
 ### 4. Report
 
-**Validation** — asked vs. built; AC gaps or deviations.
+**Validation** — asked vs. built.
+List every acceptance criterion from `.agent/prd.md` with one status only: `[met]`, `[gap]`, or `[unknown]`.
+Treat missing evidence as `[gap]`. If `.agent/prd.md` has no acceptance criteria, say that explicitly.
 
 **Cleanup summary** — what was deleted or simplified.
 

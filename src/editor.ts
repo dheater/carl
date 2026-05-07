@@ -3,12 +3,10 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 
-export function collectPrompt(): string | null {
-  const template = [
-    "# What would you like to work on?",
-    "# Leave blank to cancel.",
-    "",
-  ].join("\n");
+export function collectPrompt(
+  header = "# What would you like to work on?",
+): string | null {
+  const template = [header, "# Leave blank to cancel.", ""].join("\n");
 
   const tmpFile = path.join(os.tmpdir(), `carl-prompt-${Date.now()}.md`);
   fs.writeFileSync(tmpFile, template, "utf-8");
@@ -59,8 +57,8 @@ export function openFileInEditor(filePath: string): void {
 
 /**
  * Map a phase name and workspace root to the output file path.
- * architect → .agent/decisions.md
- * developer/test-writer/reviewer → .agent/notes/<phase>.md
+ * architect → .agent/prd.md
+ * all other phases → .agent/notes/<phase>.md
  */
 export function getPhaseOutputPath(
   workspaceRoot: string,
@@ -68,7 +66,7 @@ export function getPhaseOutputPath(
 ): string {
   const agentDir = path.join(workspaceRoot, ".agent");
   if (phaseName === "architect") {
-    return path.join(agentDir, "decisions.md");
+    return path.join(agentDir, "prd.md");
   }
   return path.join(agentDir, "notes", `${phaseName}.md`);
 }

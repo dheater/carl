@@ -1,82 +1,183 @@
 #!/usr/bin/env node
 
-import { runPhase } from "./phase";
+import { runPhase, DEFAULT_MODELS } from "./phase";
 import { collectPrompt, openFileInEditor, getPhaseOutputPath } from "./editor";
 import { red } from "./colors";
 import * as fs from "fs";
 import * as path from "path";
 
-async function cmdPlan(workspaceRoot: string, promptFile?: string): Promise<void> {
-  const pendingPromptPath = path.join(workspaceRoot, ".agent", "pending-prompt.md");
+function getPendingPromptPath(workspaceRoot: string, command: string): string {
+  return path.join(workspaceRoot, ".agent", `pending-${command}-prompt.md`);
+}
+
+function collectCommandPrompt(
+  workspaceRoot: string,
+  command: string,
+  promptFile?: string,
+  header?: string,
+): string | null {
+  const pendingPromptPath = getPendingPromptPath(workspaceRoot, command);
 
   let userInput: string | null;
   if (fs.existsSync(pendingPromptPath)) {
     userInput = fs.readFileSync(pendingPromptPath, "utf-8");
     console.log(`[System] Resuming saved prompt from previous network failure.`);
-    console.log(`[System] Run \`carl reset\` then \`carl plan\` to start fresh.`);
+    console.log(`[System] Run \`carl reset\` then \`carl ${command}\` to start fresh.`);
   } else if (promptFile) {
     if (!fs.existsSync(promptFile)) {
       throw new Error(`Prompt file not found: ${promptFile}`);
     }
     userInput = fs.readFileSync(promptFile, "utf-8").trim() || null;
   } else {
-    userInput = collectPrompt();
+    userInput = collectPrompt(header);
   }
 
+  if (!userInput) {
+    return null;
+  }
+
+  const agentDir = path.join(workspaceRoot, ".agent");
+  if (!fs.existsSync(agentDir)) fs.mkdirSync(agentDir, { recursive: true });
+  fs.writeFileSync(pendingPromptPath, userInput, "utf-8");
+  return userInput;
+}
+
+function clearPendingPrompt(workspaceRoot: string, command: string): void {
+  try {
+    fs.unlinkSync(getPendingPromptPath(workspaceRoot, command));
+  } catch {
+    // Best-effort cleanup.
+  }
+}
+
+async function cmdPlan(
+  workspaceRoot: string,
+  promptFile?: string,
+  model?: string,
+): Promise<void> {
+  const userInput = collectCommandPrompt(workspaceRoot, "plan", promptFile);
   if (!userInput) {
     console.log("No prompt provided. Cancelled.");
     return;
   }
 
-  // Persist the prompt before the network call so a failure doesn't lose it.
-  const agentDir = path.join(workspaceRoot, ".agent");
-  if (!fs.existsSync(agentDir)) fs.mkdirSync(agentDir, { recursive: true });
-  fs.writeFileSync(pendingPromptPath, userInput, "utf-8");
+  let result = await runPhase(
+    workspaceRoot,
+    "architect",
+    "plan",
+    userInput,
+    model,
+  );
 
-  let result = await runPhase(workspaceRoot, "architect", "plan", userInput);
+  clearPendingPrompt(workspaceRoot, "plan");
 
-  try { fs.unlinkSync(pendingPromptPath); } catch { /* best-effort */ }
-
-  if (result.status !== "success" && result.status !== "blocked") return;
-
-  // Interview loop: show decisions.md to the user, let them answer inline,
+  // PRD loop: show prd.md to the user, let them answer inline,
   // re-run architect so it can process each round of feedback.
-  // Exits when: user makes no changes (accepted), architect succeeds (tickets
-  // written), or MAX_ROUNDS is reached (cost guard).
+  // Exits when: user makes no changes (accepted) or architect succeeds.
   const outputPath = getPhaseOutputPath(workspaceRoot, "architect");
-  const MAX_ROUNDS = 3;
-  for (let round = 0; round < MAX_ROUNDS && fs.existsSync(outputPath); round++) {
+  while (fs.existsSync(outputPath)) {
     const before = fs.readFileSync(outputPath, "utf-8");
     openFileInEditor(outputPath);
     const after = fs.existsSync(outputPath) ? fs.readFileSync(outputPath, "utf-8") : "";
 
     if (after.trimEnd() === before.trimEnd()) break; // No edits — user accepted the plan as-is.
 
-    // User answered the interview questions in decisions.md. Re-run architect
-    // with an explicit directive so it stops interviewing and renders tickets.
+    // User answered the interview questions in prd.md. Re-run architect
+    // with an explicit directive so it finalizes the PRD.
     result = await runPhase(
       workspaceRoot,
       "architect",
       "plan",
-      "The user has answered your questions by editing decisions.md. The interview is complete. Read decisions.md, finalize scope, and render the ticket list. Do not ask any more questions.",
+      "The user has answered your questions by editing prd.md. The interview is complete. Read prd.md and finalize the PRD with acceptance criteria. Do not ask any more questions.",
+      model,
     );
-    if (result.status !== "success" && result.status !== "blocked") return;
-    if (result.status === "success") break; // Architect finished — tickets written, no more questions.
+    if (result.status === "success") break;
   }
 }
 
-async function cmdCode(workspaceRoot: string): Promise<void> {
-  const result = await runPhase(workspaceRoot, "developer", "code");
-  if (result.status === "skipped") return;
+async function cmdCode(
+  workspaceRoot: string,
+  promptFile?: string,
+  model?: string,
+): Promise<void> {
+  const userInput = collectCommandPrompt(
+    workspaceRoot,
+    "code",
+    promptFile,
+    "# What should Carl implement?",
+  );
+  if (!userInput) {
+    console.log("No prompt provided. Cancelled.");
+    return;
+  }
+
+  await runPhase(
+    workspaceRoot,
+    "developer",
+    "code",
+    userInput,
+    model,
+  );
+  clearPendingPrompt(workspaceRoot, "code");
   const outputPath = getPhaseOutputPath(workspaceRoot, "developer");
   if (fs.existsSync(outputPath)) openFileInEditor(outputPath);
 }
 
-async function cmdReview(workspaceRoot: string): Promise<void> {
-  const result = await runPhase(workspaceRoot, "reviewer", "review");
-  if (result.status === "skipped") return;
+async function cmdReview(
+  workspaceRoot: string,
+  model?: string,
+): Promise<void> {
+  await runPhase(
+    workspaceRoot,
+    "reviewer",
+    "review",
+    undefined,
+    model,
+  );
   const outputPath = getPhaseOutputPath(workspaceRoot, "reviewer");
   if (fs.existsSync(outputPath)) openFileInEditor(outputPath);
+}
+
+async function cmdChat(
+  workspaceRoot: string,
+  model?: string,
+): Promise<void> {
+  const userInput = collectPrompt("# Message to agent");
+  if (!userInput) {
+    console.log("No prompt provided. Cancelled.");
+    return;
+  }
+  let result = await runPhase(
+    workspaceRoot,
+    "chat",
+    "chat",
+    userInput,
+    model,
+  );
+
+  // Chat loop: show chat.md to the user, let them reply inline,
+  // re-run chat so it can process each round of feedback.
+  // Exits when: user makes no changes (accepted).
+  const outputPath = getPhaseOutputPath(workspaceRoot, "chat");
+  while (fs.existsSync(outputPath)) {
+    const before = fs.readFileSync(outputPath, "utf-8");
+    openFileInEditor(outputPath);
+    const after = fs.existsSync(outputPath) ? fs.readFileSync(outputPath, "utf-8") : "";
+
+    if (after.trimEnd() === before.trimEnd()) break; // No edits — user accepted the response as-is.
+
+    result = await runPhase(
+      workspaceRoot,
+      "chat",
+      "chat",
+      after,
+      model,
+    );
+  }
+
+  if (result.status === "blocked") {
+    console.log("[System] Chat response indicated a blocker.");
+  }
 }
 
 function cmdReset(workspaceRoot: string): void {
@@ -90,20 +191,39 @@ function cmdReset(workspaceRoot: string): void {
 }
 
 function usage(): void {
-  console.error("Usage: carl <command>");
+  console.error("Usage: carl [--model <model>] <command>");
+  console.error("");
+  console.error("Options:");
+  console.error("  --model <model>  Override the model for this run (ignores config and defaults)");
   console.error("");
   console.error("Commands:");
-  console.error("  plan [<file>]  Read prompt from file or open editor; run architect");
-  console.error("  code          Run developer once");
+  console.error("  plan [<file>]  Read prompt from file or open editor; write .agent/prd.md for complex work");
+  console.error("  code [<file>]  Read prompt from file or open editor; run the implementation session");
   console.error("  review        Run reviewer once");
+  console.error(`  chat          Open editor; run the general-purpose chat skill (default: ${DEFAULT_MODELS.chat})`);
   console.error("  reset         Clear .agent/");
   console.error("");
   console.error("Config: .carl/config.json (optional)");
-  console.error('  { "models": { "architect": "gemini-3.1-pro-preview", "developer": "kimi-k2.6", "reviewer": "sonnet4.6" } }');
+  console.error(`  { "models": ${JSON.stringify(DEFAULT_MODELS, null, 2)} }`);
 }
 
 async function main(): Promise<void> {
-  const args = process.argv.slice(2);
+  const rawArgs = process.argv.slice(2);
+
+  let model: string | undefined;
+  const args: string[] = [];
+  for (let i = 0; i < rawArgs.length; i++) {
+    if (rawArgs[i] === "--model") {
+      model = rawArgs[++i];
+      if (!model) {
+        console.error("error: --model requires a value");
+        process.exit(1);
+      }
+    } else {
+      args.push(rawArgs[i]);
+    }
+  }
+
   const command = args[0];
   const workspaceRoot = process.cwd();
 
@@ -111,16 +231,23 @@ async function main(): Promise<void> {
     switch (command) {
       case "plan":
         if (args.length > 2) {
-          console.error("Usage: carl plan [<prompt-file>]");
+          console.error("Usage: carl [--model <model>] plan [<prompt-file>]");
           process.exit(1);
         }
-        await cmdPlan(workspaceRoot, args[1]);
+        await cmdPlan(workspaceRoot, args[1], model);
         break;
       case "code":
-        await cmdCode(workspaceRoot);
+        if (args.length > 2) {
+          console.error("Usage: carl [--model <model>] code [<prompt-file>]");
+          process.exit(1);
+        }
+        await cmdCode(workspaceRoot, args[1], model);
         break;
       case "review":
-        await cmdReview(workspaceRoot);
+        await cmdReview(workspaceRoot, model);
+        break;
+      case "chat":
+        await cmdChat(workspaceRoot, model);
         break;
       case "reset":
         cmdReset(workspaceRoot);

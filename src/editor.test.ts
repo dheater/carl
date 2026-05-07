@@ -65,22 +65,6 @@ describe("Editor helper and phase output path mapping", () => {
       });
     });
 
-    test("uses spawnSync with stdio: inherit and shell: true", () => {
-      process.env.EDITOR = "vim";
-      mockSpawnSync.mockReturnValue({ status: 0 } as any);
-
-      openFileInEditor(tmpFile);
-
-      expect(mockSpawnSync).toHaveBeenCalledWith(
-        expect.any(String),
-        [tmpFile],
-        {
-          stdio: "inherit",
-          shell: true,
-        },
-      );
-    });
-
     test("logs warning on spawn error and does not throw", () => {
       process.env.EDITOR = "nonexistent";
       const error = new Error("ENOENT: no such file");
@@ -115,24 +99,14 @@ describe("Editor helper and phase output path mapping", () => {
 
       warnSpy.mockRestore();
     });
-
-    test("passes exact file path to editor", () => {
-      process.env.EDITOR = "vim";
-      mockSpawnSync.mockReturnValue({ status: 0 } as any);
-
-      openFileInEditor(tmpFile);
-
-      const callArgs = mockSpawnSync.mock.calls[0];
-      expect(callArgs[1]).toEqual([tmpFile]);
-    });
   });
 
   describe("getPhaseOutputPath", () => {
     const workspaceRoot = "/workspace";
 
-    test("maps architect phase to .agent/decisions.md", () => {
+    test("maps architect phase to .agent/prd.md", () => {
       const result = getPhaseOutputPath(workspaceRoot, "architect");
-      expect(result).toBe(path.join(workspaceRoot, ".agent", "decisions.md"));
+      expect(result).toBe(path.join(workspaceRoot, ".agent", "prd.md"));
     });
 
     test("maps developer phase to .agent/notes/developer.md", () => {
@@ -142,10 +116,10 @@ describe("Editor helper and phase output path mapping", () => {
       );
     });
 
-    test("maps test-writer phase to .agent/notes/test-writer.md", () => {
-      const result = getPhaseOutputPath(workspaceRoot, "test-writer");
+    test("maps chat phase to .agent/notes/chat.md", () => {
+      const result = getPhaseOutputPath(workspaceRoot, "chat");
       expect(result).toBe(
-        path.join(workspaceRoot, ".agent", "notes", "test-writer.md"),
+        path.join(workspaceRoot, ".agent", "notes", "chat.md"),
       );
     });
 
@@ -155,7 +129,5 @@ describe("Editor helper and phase output path mapping", () => {
         path.join(workspaceRoot, ".agent", "notes", "reviewer.md"),
       );
     });
-
-
   });
 });

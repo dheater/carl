@@ -21,19 +21,20 @@ type TimingEvent = {
   meta?: Record<string, any>;
 };
 
-
 type CarlConfig = {
   models?: {
     architect?: string;
     developer?: string;
     reviewer?: string;
+    chat?: string;
   };
 };
 
-const DEFAULT_MODELS: Record<string, string> = {
-  architect: "gemini-3.1-pro-preview",
-  developer: "haiku4.5",
+export const DEFAULT_MODELS: Record<string, string> = {
+  architect: "gpt5.4",
+  developer: "sonnet4.6",
   reviewer: "sonnet4.6",
+  chat: "gpt5.4",
 };
 
 function loadCarlConfig(workspaceRoot: string): CarlConfig {
@@ -45,6 +46,7 @@ function loadCarlConfig(workspaceRoot: string): CarlConfig {
         architect: DEFAULT_MODELS.architect,
         developer: DEFAULT_MODELS.developer,
         reviewer: DEFAULT_MODELS.reviewer,
+        chat: DEFAULT_MODELS.chat,
       },
     };
     fs.mkdirSync(carlDir, { recursive: true });
@@ -77,58 +79,8 @@ function getPhaseModel(phase: string, workspaceRoot?: string): string {
   return DEFAULT_MODELS[phase] ?? "haiku4.5";
 }
 
-/**
- * Check if a ticket file has open tickets.
- * Returns true if:
- * - File doesn't exist (assume work exists, no skip)
- * - File exists and contains at least one open [ ] ticket heading (e.g., `## [ ] t-1: ...`)
- * Returns false if:
- * - File exists but contains no open [ ] ticket headings
- *
- * Only considers ticket heading lines (starting with `##`) as tickets.
- * Ignores `[ ]` or `[x]` appearing in AC prose or inline examples.
- */
-export function hasOpenTickets(ticketFilePath: string): boolean {
-  if (!fs.existsSync(ticketFilePath)) {
-    // File doesn't exist - assume work exists, don't skip
-    return true;
-  }
-
-  try {
-    const content = fs.readFileSync(ticketFilePath, "utf-8");
-    // Check for open ticket headings: lines starting with ## followed by [ ] (with optional whitespace)
-    // Example matches: "## [ ] t-1: ...", "## [ ]t-1: ..."
-    return /^##\s*\[\s*\]/m.test(content);
-  } catch {
-    // On read error, assume work exists, don't skip
-    return true;
-  }
-}
-
-/**
- * Count the number of open tickets in a ticket file.
- * Returns 0 if:
- * - File doesn't exist
- * - File exists but contains no open [ ] ticket headings
- * Returns the count of open [ ] ticket headings otherwise
- *
- * Only considers ticket heading lines (starting with `##`) as tickets.
- * Ignores `[ ]` or `[x]` appearing in AC prose or inline examples.
- */
-export function countOpenTickets(ticketFilePath: string): number {
-  if (!fs.existsSync(ticketFilePath)) {
-    return 0;
-  }
-
-  try {
-    const content = fs.readFileSync(ticketFilePath, "utf-8");
-    // Count open ticket headings: lines starting with ## followed by [ ] (with optional whitespace)
-    // Example matches: "## [ ] t-1: ...", "## [ ]t-1: ..."
-    const matches = content.match(/^##\s*\[\s*\]/gm);
-    return matches ? matches.length : 0;
-  } catch {
-    return 0;
-  }
+function shouldAllowIndexing(phaseName: string): boolean {
+  return phaseName !== "chat";
 }
 
 function extractPromptResponseText(
@@ -188,27 +140,34 @@ export function buildSkillInstruction(
     ? `# Your skill for this session\n\n${skillContent}`
     : `Follow the ${phaseName} skill.`;
 
-  // For reviewer phase, include git context: branch, files changed, proposed commit message guidance
   if (phaseName === "reviewer" && workspaceRoot) {
-    // Add branch context section
     const branch = getCurrentBranch(workspaceRoot);
     if (branch) {
       instruction += `\n\n---\n\n# Current branch\n\n\`${branch}\`\n\n`;
     }
 
-    // Add proposed commit message guidance section
+    const prdPath = path.join(workspaceRoot, ".agent", "prd.md");
+    if (fs.existsSync(prdPath)) {
+      instruction += "\n\n---\n\n# PRD acceptance criteria\n\n";
+      instruction += "`.agent/prd.md` exists and is the source of truth for this review.\n\n";
+      instruction +=
+        "Before you change code or report results, extract the acceptance criteria from that file and check the current diff against each one.\n\n";
+      instruction +=
+        "In `## Validation`, list every acceptance criterion with exactly one status: `[met]`, `[gap]`, or `[unknown]`. " +
+        "Treat anything not clearly implemented and validated as `[gap]`. If `.agent/prd.md` has no acceptance criteria, say that explicitly.\n\n";
+    }
+
     instruction += "\n\n---\n\n# Proposed commit message\n\n";
     instruction +=
       "After you finish your validation, provide a `## Proposed commit message` section " +
       "with a real commit subject and optional short body. This message should:\n\n";
+    const isTicketBranch = branch && branch !== "main" && branch !== "master";
     instruction += "- **Subject line** (required): ";
-    if (branch && branch !== "main" && branch !== "master") {
-      // Ticket branch: use ticket-prefix format
+    if (isTicketBranch) {
       instruction +=
         "Start with the ticket prefix extracted from the current branch name (e.g., `CLIENTS-934:`). " +
         "Follow it with a concise summary of code/behavior changes, not workflow meta (no mentions of gates, phases, or checklists).\n\n";
     } else {
-      // Non-ticket branch: use conventional commit
       instruction +=
         "Use a conventional-commit style prefix (`fix:`, `chore:`, `feat:`, `docs:`, `refactor:`, `style:`, etc.) " +
         "followed by a concise summary of code/behavior changes, not workflow meta (no mentions of gates, phases, or checklists).\n\n";
@@ -218,7 +177,7 @@ export function buildSkillInstruction(
     instruction += "Example:\n\n";
     instruction += "```\n";
     instruction += "## Proposed commit message\n\n";
-    if (branch && branch !== "main" && branch !== "master") {
+    if (isTicketBranch) {
       instruction += "CLIENTS-934: Fix download timeout handling\n\n";
       instruction +=
         "Increase default timeout from 30s to 60s in HTTP client.\n";
@@ -229,7 +188,6 @@ export function buildSkillInstruction(
     }
     instruction += "```\n";
 
-    // Add files changed section
     const gitStatus = getGitStatus(workspaceRoot);
     if (gitStatus.isRepo) {
       let filesSection = "\n\n---\n\n# Files changed\n\n";
@@ -262,8 +220,8 @@ export function buildSkillInstruction(
   return instruction;
 }
 
-// Architect output goes to .agent/decisions.md (top-level, durable artifact).
-// Reviewer output goes to .agent/notes/reviewer.md (ephemeral phase note).
+// Architect output goes to .agent/prd.md (top-level, durable artifact).
+// All other phase output goes to .agent/notes/<phase>.md.
 function writePhaseOutput(
   phaseName: string,
   phaseOutput: string,
@@ -275,7 +233,7 @@ function writePhaseOutput(
   }
 
   if (phaseName === "architect") {
-    fs.writeFileSync(path.join(agentDir, "decisions.md"), phaseOutput, "utf-8");
+    fs.writeFileSync(path.join(agentDir, "prd.md"), phaseOutput, "utf-8");
     return;
   }
 
@@ -291,7 +249,7 @@ function writePhaseOutput(
 }
 
 export interface RunPhaseResult {
-  status: "success" | "blocked" | "skipped";
+  status: "success" | "blocked";
   response: string;
 }
 
@@ -334,23 +292,19 @@ export async function runPhase(
   phaseName: string,
   command: string,
   initialPrompt?: string,
+  modelOverride?: string,
 ): Promise<RunPhaseResult> {
   const runId = randomUUID();
-  const model = getPhaseModel(phaseName, workspaceRoot);
+  const model = modelOverride ?? getPhaseModel(phaseName, workspaceRoot);
   const phaseStartTime = Date.now();
+  const allowIndexing = shouldAllowIndexing(phaseName);
 
-  // Developer skips if no open tickets.
-  if (phaseName === "developer") {
-    if (!hasOpenTickets(path.join(workspaceRoot, ".agent", "dev-tickets.md"))) {
-      console.log(`[System] No open dev tickets. Nothing for developer to do.`);
-      return { status: "skipped", response: "" };
-    }
-  }
-
-  // Architect skill detects continuation via decisions.md / dev-tickets.md / test-tickets.md on disk.
   let instruction = buildSkillInstruction(phaseName, workspaceRoot);
-  if (phaseName === "architect" && initialPrompt) {
-    instruction += `\n\n# User request\n\n${initialPrompt}\n\nThe user has already stated their request above. Skip the menu — proceed directly with this request.`;
+  if (initialPrompt) {
+    instruction += `\n\n# User request\n\n${initialPrompt}`;
+    if (phaseName === "architect") {
+      instruction += "\n\nThe user has already stated their request above. Skip the menu — proceed directly with this request.";
+    }
   }
 
   const { Auggie } = await import("@augmentcode/auggie-sdk");
@@ -376,15 +330,13 @@ export async function runPhase(
       await new Promise((r) => setTimeout(r, 5000));
     }
 
-    console.log(
-      `  [System] Initializing agent and indexing workspace (this may take a few minutes)...`,
-    );
+    console.log(`  [System] Initializing agent...`);
     console.log(`[Timing] Auggie.create entry ${phaseName}/${model}`);
     const auggleCreateStart = Date.now();
     const client = await Auggie.create({
       workspaceRoot,
       model: model as any,
-      allowIndexing: true,
+      allowIndexing,
     });
     logTimingDuration(
       workspaceRoot,
@@ -503,14 +455,6 @@ export async function runPhase(
   writePhaseOutput(phaseName, response, workspaceRoot);
 
   const phaseMeta: Record<string, any> = { status };
-  if (phaseName === "architect") {
-    phaseMeta.dev_open_tickets = countOpenTickets(
-      path.join(workspaceRoot, ".agent", "dev-tickets.md"),
-    );
-    phaseMeta.test_open_tickets = countOpenTickets(
-      path.join(workspaceRoot, ".agent", "test-tickets.md"),
-    );
-  }
   logTimingDuration(
     workspaceRoot,
     runId,

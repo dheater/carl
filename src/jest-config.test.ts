@@ -42,6 +42,4 @@ describe("Jest configuration", () => {
     expect(hasAgentPattern).toBe(true);
     expect(hasTmpPattern).toBe(true);
   });
-
-
 });

@@ -10,6 +10,7 @@ coverage/
 # Agent
 .agent/
 .carl/
+.tmp/
 
 # Editor
 .vscode/
