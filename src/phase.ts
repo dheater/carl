@@ -33,7 +33,7 @@ type CarlConfig = {
 export const DEFAULT_MODELS: Record<string, string> = {
   architect: "gpt5.5",
   developer: "sonnet4.6",
-  reviewer: "sonnet4.6",
+  reviewer: "gpt5.4",
   chat: "gpt5.4",
 };
 

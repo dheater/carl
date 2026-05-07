@@ -19,27 +19,31 @@ function collectCommandPrompt(
   const pendingPromptPath = getPendingPromptPath(workspaceRoot, command);
 
   let userInput: string | null;
-  if (fs.existsSync(pendingPromptPath)) {
-    userInput = fs.readFileSync(pendingPromptPath, "utf-8");
-    console.log(`[System] Resuming saved prompt from previous network failure.`);
-    console.log(`[System] Run \`carl reset\` then \`carl ${command}\` to start fresh.`);
-  } else if (promptFile) {
+  if (promptFile) {
+    // Explicit file always wins — don't auto-resume a pending prompt.
     if (!fs.existsSync(promptFile)) {
       throw new Error(`Prompt file not found: ${promptFile}`);
     }
     userInput = fs.readFileSync(promptFile, "utf-8").trim() || null;
+  } else if (fs.existsSync(pendingPromptPath)) {
+    userInput = fs.readFileSync(pendingPromptPath, "utf-8");
+    console.log(`[System] Resuming saved prompt from previous network failure.`);
+    console.log(`[System] Run \`carl reset\` then \`carl ${command}\` to start fresh.`);
   } else {
     userInput = collectPrompt(header);
   }
 
-  if (!userInput) {
-    return null;
-  }
+  return userInput || null;
+}
 
+function savePendingPrompt(workspaceRoot: string, command: string, input: string): void {
   const agentDir = path.join(workspaceRoot, ".agent");
   if (!fs.existsSync(agentDir)) fs.mkdirSync(agentDir, { recursive: true });
-  fs.writeFileSync(pendingPromptPath, userInput, "utf-8");
-  return userInput;
+  fs.writeFileSync(getPendingPromptPath(workspaceRoot, command), input, "utf-8");
+}
+
+function isNetworkFailure(err: unknown): boolean {
+  return ((err as any)?.message ?? "").includes("Network unavailable");
 }
 
 function clearPendingPrompt(workspaceRoot: string, command: string): void {
@@ -61,22 +65,22 @@ async function cmdPlan(
     return;
   }
 
-  await runPhase(workspaceRoot, "architect", "plan", userInput, model);
+  try {
+    await runPhase(workspaceRoot, "architect", "plan", userInput, model);
+  } catch (err) {
+    if (isNetworkFailure(err)) savePendingPrompt(workspaceRoot, "plan", userInput);
+    throw err;
+  }
   clearPendingPrompt(workspaceRoot, "plan");
 
-  // PRD loop: show prd.md to the user, let them answer inline,
-  // re-run architect so it can process each round of feedback.
-  // Exits when: user makes no changes (accepted) or architect succeeds.
   const outputPath = getPhaseOutputPath(workspaceRoot, "architect");
   while (fs.existsSync(outputPath)) {
     const before = fs.readFileSync(outputPath, "utf-8");
     openFileInEditor(outputPath);
     const after = fs.existsSync(outputPath) ? fs.readFileSync(outputPath, "utf-8") : "";
 
-    if (after.trimEnd() === before.trimEnd()) break; // No edits — user accepted the plan as-is.
+    if (after.trimEnd() === before.trimEnd()) break;
 
-    // User answered the interview questions in prd.md. Re-run architect
-    // with an explicit directive so it finalizes the PRD.
     const result = await runPhase(
       workspaceRoot,
       "architect",
@@ -97,24 +101,32 @@ async function cmdCode(
   if (fs.existsSync(prdPath)) {
     const phases = parsePrdPhases(fs.readFileSync(prdPath, "utf-8"));
     if (phases.length > 0) {
-      const next = phases.find((p) => !p.completed);
-      if (!next) {
+      const nextIndex = phases.findIndex((p) => !p.completed);
+      if (nextIndex === -1) {
         console.log("[System] All phases complete. Run `carl review` to validate.");
         return;
       }
-      const remaining = phases.filter((p) => !p.completed).length;
-      const phaseNumber = phases.indexOf(next) + 1;
+      const next = phases[nextIndex];
+      const phaseNumber = nextIndex + 1;
       console.log(`[System] Running phase ${phaseNumber} of ${phases.length}: ${next.title}`);
-      const result = await runPhase(
-        workspaceRoot,
-        "developer",
-        "code",
-        `Implement this phase from .agent/prd.md: ${next.title}\n\nWork only on this phase. Stop when this phase is complete.`,
-        model,
-      );
+      let result: Awaited<ReturnType<typeof runPhase>>;
+      try {
+        result = await runPhase(
+          workspaceRoot,
+          "developer",
+          "code",
+          `Implement this phase from .agent/prd.md: ${next.title}\n\nWork only on this phase. Stop when this phase is complete.`,
+          model,
+        );
+      } catch (err) {
+        if (isNetworkFailure(err)) {
+          console.log(`[System] Phase "${next.title}" interrupted by network failure. Run \`carl code\` to retry this phase.`);
+        }
+        throw err;
+      }
       if (result.status !== "blocked") {
         markPhaseComplete(prdPath, next.lineIndex);
-        const stillRemaining = remaining - 1;
+        const stillRemaining = phases.length - phaseNumber;
         if (stillRemaining > 0) {
           console.log(`[System] Phase complete. ${stillRemaining} phase(s) remaining. Run \`carl code\` to continue.`);
         } else {
@@ -140,13 +152,12 @@ async function cmdCode(
     return;
   }
 
-  await runPhase(
-    workspaceRoot,
-    "developer",
-    "code",
-    userInput,
-    model,
-  );
+  try {
+    await runPhase(workspaceRoot, "developer", "code", userInput, model);
+  } catch (err) {
+    if (isNetworkFailure(err)) savePendingPrompt(workspaceRoot, "code", userInput);
+    throw err;
+  }
   clearPendingPrompt(workspaceRoot, "code");
   const outputPath = getPhaseOutputPath(workspaceRoot, "developer");
   if (fs.existsSync(outputPath)) openFileInEditor(outputPath);
@@ -182,25 +193,22 @@ async function cmdChat(
     console.log("No prompt provided. Cancelled.");
     return;
   }
-  let result = await runPhase(
-    workspaceRoot,
-    "chat",
-    "chat",
-    userInput,
-    model,
-  );
+  let result: Awaited<ReturnType<typeof runPhase>>;
+  try {
+    result = await runPhase(workspaceRoot, "chat", "chat", userInput, model);
+  } catch (err) {
+    if (isNetworkFailure(err)) savePendingPrompt(workspaceRoot, "chat", userInput);
+    throw err;
+  }
   clearPendingPrompt(workspaceRoot, "chat");
 
-  // Chat loop: show chat.md to the user, let them reply inline,
-  // re-run chat so it can process each round of feedback.
-  // Exits when: user makes no changes (accepted).
   const outputPath = getPhaseOutputPath(workspaceRoot, "chat");
   while (fs.existsSync(outputPath)) {
     const before = fs.readFileSync(outputPath, "utf-8");
     openFileInEditor(outputPath);
     const after = fs.existsSync(outputPath) ? fs.readFileSync(outputPath, "utf-8") : "";
 
-    if (after.trimEnd() === before.trimEnd()) break; // No edits — user accepted the response as-is.
+    if (after.trimEnd() === before.trimEnd()) break;
 
     result = await runPhase(
       workspaceRoot,
