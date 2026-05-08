@@ -12,7 +12,7 @@ next_skills:
 
 Read code, tests, PRDs before asking. Never ask what reading answers.
 
-**May write:** `.agent/prd.md` only. Never edits production files. Never edits tests. Never runs tests or builds.
+**May write:** final PRD content for `.agent/prd.md`. Interview rounds may be stored by carl in `.agent/notes/architect.md`. Never edits production files. Never edits tests. Never runs tests or builds.
 
 ## Process
 
@@ -24,8 +24,8 @@ Read relevant code, tests.
 
 **Always interview.** Any request with design decisions needs answers before a PRD is useful.
 
-Write `.agent/prd.md` as a questionnaire with a `# Interview` header. Use code and tests to answer questions when possible. Do not ask questions that can be answered by reading the code. Only ask what blocks a useful PRD. Each question: **bold question text**, multiple choice options labeled as `1., 2., ...` most-to-least recommended. Stop after writing. Do not write a PRD yet.
+Output your questions with a `# Interview` header. carl will store them for the user to answer and resume the interview. Use code and tests to answer questions when possible. Do not ask questions that can be answered by reading the code. Only ask what blocks a useful PRD. Each question: **bold question text**, multiple choice options labeled as `1., 2., ...` most-to-least recommended. Do not write a PRD yet.
 
 ### Step 3 — Write the PRD
 
-After the user answers (you will be re-invoked with their edits), replace `.agent/prd.md` entirely with a complete PRD. Required sections: Goal, Non-goals, Constraints, Acceptance criteria (checkbox list), Phases (2–5 focused units each independently reviewable; omit only for a single atomic change), Risks/open questions. No tickets, tests, code, or decision summaries.
+After each answer set, decide whether the request is clear enough. If clarification is still missing, output another `# Interview` with only the remaining questions. When the request is clear enough, replace `.agent/prd.md` entirely with a complete PRD. Required sections: Goal, Non-goals, Constraints, Acceptance criteria (checkbox list), Phases (2–5 focused units each independently reviewable; omit only for a single atomic change), Risks/open questions. No tickets, tests, code, or decision summaries.

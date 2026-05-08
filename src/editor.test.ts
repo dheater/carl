@@ -24,7 +24,10 @@ describe("Editor helper and phase output path mapping", () => {
 
       expect(mockSpawnSync).toHaveBeenCalledWith(
         "code",
-        ["--wait", expect.stringMatching(/carl-prompt-.*\.md$/)],
+        [
+          "--wait",
+          expect.stringMatching(/carl-prompt-.*[\\/]prompt\.md$/),
+        ],
         { stdio: "inherit" },
       );
     });
@@ -138,24 +141,17 @@ describe("Editor helper and phase output path mapping", () => {
       expect(result).toBe(path.join(workspaceRoot, ".agent", "prd.md"));
     });
 
+    test("maps blocked architect output to .agent/notes/architect.md", () => {
+      const result = getPhaseOutputPath(workspaceRoot, "architect", "blocked");
+      expect(result).toBe(
+        path.join(workspaceRoot, ".agent", "notes", "architect.md"),
+      );
+    });
+
     test("maps developer phase to .agent/notes/developer.md", () => {
       const result = getPhaseOutputPath(workspaceRoot, "developer");
       expect(result).toBe(
         path.join(workspaceRoot, ".agent", "notes", "developer.md"),
-      );
-    });
-
-    test("maps chat phase to .agent/notes/chat.md", () => {
-      const result = getPhaseOutputPath(workspaceRoot, "chat");
-      expect(result).toBe(
-        path.join(workspaceRoot, ".agent", "notes", "chat.md"),
-      );
-    });
-
-    test("maps reviewer phase to .agent/notes/reviewer.md", () => {
-      const result = getPhaseOutputPath(workspaceRoot, "reviewer");
-      expect(result).toBe(
-        path.join(workspaceRoot, ".agent", "notes", "reviewer.md"),
       );
     });
   });

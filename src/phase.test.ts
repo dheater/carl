@@ -113,6 +113,37 @@ describe("runPhase", () => {
     ).toBe("prd response");
   });
 
+  test("writes blocked architect output to .agent/notes/architect.md", async () => {
+    const client = {
+      onSessionUpdate: jest.fn(),
+      prompt: jest
+        .fn()
+        .mockResolvedValue("# Interview\n\n1. **Question?**\n\n   >\n"),
+      close: jest.fn().mockResolvedValue(undefined),
+      cancel: jest.fn().mockResolvedValue(undefined),
+    };
+    mockCreate.mockResolvedValue(client as any);
+
+    const result = await runPhase(
+      workspaceRoot,
+      "architect",
+      "plan",
+      "design it",
+      "test-model",
+    );
+
+    expect(result.status).toBe("blocked");
+    expect(
+      fs.readFileSync(
+        path.join(workspaceRoot, ".agent", "notes", "architect.md"),
+        "utf-8",
+      ),
+    ).toContain("# Interview");
+    expect(fs.existsSync(path.join(workspaceRoot, ".agent", "prd.md"))).toBe(
+      false,
+    );
+  });
+
   test("treats interview responses as blocked", async () => {
     const client = {
       onSessionUpdate: jest.fn(),
@@ -143,9 +174,22 @@ describe("runPhase", () => {
 
   test("skill content omits YAML frontmatter", () => {
     const instruction = buildSkillInstruction("reviewer", workspaceRoot);
-    expect(instruction).toContain("# Your skill for this session\n\n# Reviewer");
+    expect(instruction).toContain(
+      "# Your skill for this session\n\n# Reviewer",
+    );
     expect(instruction).not.toContain("# Your skill for this session\n\n---\n");
     expect(instruction).toContain("# Reviewer");
+  });
+
+  test("architect instruction allows repeated interviews before writing the PRD", () => {
+    const instruction = buildSkillInstruction("architect", workspaceRoot);
+
+    expect(instruction).toContain(
+      "If clarification is still missing, output another `# Interview`",
+    );
+    expect(instruction).toContain(
+      "When the request is clear enough, replace `.agent/prd.md` entirely with a complete PRD",
+    );
   });
 
   test("reviewer instruction requires acceptance-criteria validation when prd exists", () => {

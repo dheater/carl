@@ -1,4 +1,5 @@
 import { getGitStatus, getCurrentBranch } from "./git";
+import { getPhaseOutputPath } from "./editor";
 import { randomUUID } from "crypto";
 import * as path from "path";
 import * as fs from "fs";
@@ -210,32 +211,18 @@ export function buildSkillInstruction(
   return instruction;
 }
 
-// Architect output goes to .agent/prd.md (top-level, durable artifact).
-// All other phase output goes to .agent/notes/<phase>.md.
 function writePhaseOutput(
   phaseName: string,
+  status: "success" | "blocked",
   phaseOutput: string,
   workspaceRoot: string,
 ): void {
-  const agentDir = path.join(workspaceRoot, ".agent");
-  if (!fs.existsSync(agentDir)) {
-    fs.mkdirSync(agentDir, { recursive: true });
-  }
-
-  if (phaseName === "architect") {
-    fs.writeFileSync(path.join(agentDir, "prd.md"), phaseOutput, "utf-8");
+  const outputPath = getPhaseOutputPath(workspaceRoot, phaseName, status);
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+  if (phaseName === "architect" && status === "success" && fs.existsSync(outputPath)) {
     return;
   }
-
-  const notesDir = path.join(agentDir, "notes");
-  if (!fs.existsSync(notesDir)) {
-    fs.mkdirSync(notesDir, { recursive: true });
-  }
-  fs.writeFileSync(
-    path.join(notesDir, `${phaseName}.md`),
-    phaseOutput,
-    "utf-8",
-  );
+  fs.writeFileSync(outputPath, phaseOutput, "utf-8");
 }
 
 export interface PrdPhase {
@@ -288,7 +275,6 @@ export interface RunPhaseResult {
   response: string;
 }
 
-// Wall-clock timeout per phase. Phases not listed have no timeout.
 const PHASE_TIMEOUT_MS: Record<string, number> = {
   developer: 14 * 60 * 1000,
   reviewer: 6 * 60 * 1000,
@@ -479,9 +465,7 @@ export async function runPhase(
     } finally {
       try {
         await client.close();
-      } catch {
-        // Best-effort close
-      }
+      } catch {}
     }
 
     if (!shouldRetry) break;
@@ -490,7 +474,7 @@ export async function runPhase(
   const isBlocked = isBlockedResponse(response);
   const status: "success" | "blocked" = isBlocked ? "blocked" : "success";
 
-  writePhaseOutput(phaseName, response, workspaceRoot);
+  writePhaseOutput(phaseName, status, response, workspaceRoot);
 
   const phaseMeta: Record<string, any> = { status };
   logTimingDuration(

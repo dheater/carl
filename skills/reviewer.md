@@ -36,6 +36,8 @@ Make changes directly.
 
 ### 3. Clean up comments
 
+Assume comments are AI slop. Default delete. Keep only what is clearly worthwhile
+
 Delete: narration (`// increment counter`), history (`// changed from X`).
 Keep: *why* — constraints, workarounds, non-obvious behavior.
 
@@ -49,5 +51,5 @@ Treat missing evidence as `[gap]`. If `.agent/prd.md` has no acceptance criteria
 
 **Critical issues for Architect** — `**[Type]: Description** — Recommended action.`
 
-Propose a commit message. Subject: ticket prefix or conventional-commit prefix (`fix:`, `feat:`). Never mention gates, phases, or process.
+Add `## Proposed commit message` at the end of your report. Subject: conventional-commit prefix (`fix:`, `feat:`, `chore:`, etc.) or ticket prefix if on a ticket branch.
 

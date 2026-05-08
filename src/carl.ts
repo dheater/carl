@@ -64,8 +64,33 @@ function clearPendingPrompt(workspaceRoot: string, command: string): void {
   try {
     fs.unlinkSync(getPendingPromptPath(workspaceRoot, command));
   } catch {
-    // Best-effort cleanup.
   }
+}
+
+type PhaseResult = Awaited<ReturnType<typeof runPhase>>;
+
+function buildPlanFollowUpPrompt(
+  userInput: string,
+  interviewRounds: string[],
+): string {
+  const transcript =
+    interviewRounds.length > 0
+      ? interviewRounds
+          .map((round, index) =>
+            [`## Round ${index + 1}`, round.trim()].join("\n\n"),
+          )
+          .join("\n\n")
+      : "(no interview rounds)";
+
+  return [
+    "# Original planning request",
+    userInput.trim(),
+    "# Interview transcript",
+    transcript,
+    "Continue the planning workflow.",
+    "If any clarification still blocks a useful PRD, output another `# Interview` with only the remaining questions.",
+    "If the request is now clear enough, replace `.agent/prd.md` entirely with the complete PRD.",
+  ].join("\n\n");
 }
 
 function readEditedFile(filePath: string): string | null {
@@ -73,9 +98,34 @@ function readEditedFile(filePath: string): string | null {
 
   const before = fs.readFileSync(filePath, "utf-8");
   openFileInEditor(filePath);
-  const after = fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf-8") : "";
+  const after = fs.existsSync(filePath)
+    ? fs.readFileSync(filePath, "utf-8")
+    : "";
 
   return after.trimEnd() === before.trimEnd() ? null : after;
+}
+
+async function rerunFromEditedOutput(
+  initialResult: PhaseResult,
+  options: {
+    shouldContinue: (result: PhaseResult) => boolean;
+    getOutputPath: () => string;
+    rerun: (editedOutput: string) => Promise<PhaseResult>;
+  },
+): Promise<{ result: PhaseResult; noEdit: boolean }> {
+  let result = initialResult;
+
+  while (options.shouldContinue(result)) {
+    const outputPath = options.getOutputPath();
+    if (!fs.existsSync(outputPath)) break;
+
+    const editedOutput = readEditedFile(outputPath);
+    if (editedOutput === null) return { result, noEdit: true };
+
+    result = await options.rerun(editedOutput);
+  }
+
+  return { result, noEdit: false };
 }
 
 async function cmdPlan(
@@ -89,48 +139,60 @@ async function cmdPlan(
     return;
   }
 
-  // Delete .agent for clean context; prompt is already captured above.
   const agentDir = path.join(workspaceRoot, ".agent");
   if (fs.existsSync(agentDir)) {
     fs.rmSync(agentDir, { recursive: true, force: true });
     console.log("Cleared .agent/.");
   }
 
+  const interviewRounds: string[] = [];
+  let result: PhaseResult;
   try {
-    await runPhase(workspaceRoot, "architect", "plan", userInput, model);
+    result = await runPhase(
+      workspaceRoot,
+      "architect",
+      "plan",
+      userInput,
+      model,
+    );
   } catch (err) {
     if (err instanceof NetworkUnavailableError)
       savePendingPrompt(workspaceRoot, "plan", userInput);
     throw err;
   }
-  clearPendingPrompt(workspaceRoot, "plan");
 
-  const outputPath = getPhaseOutputPath(workspaceRoot, "architect");
-  let shouldOpenOutput = true;
-  while (fs.existsSync(outputPath)) {
-    if (readEditedFile(outputPath) === null) {
-      shouldOpenOutput = false;
-      break;
-    }
+  const interviewResult = await rerunFromEditedOutput(result, {
+    shouldContinue: (current) => current.status === "blocked",
+    getOutputPath: () =>
+      getPhaseOutputPath(workspaceRoot, "architect", "blocked"),
+    rerun: async (editedInterview) => {
+      interviewRounds.push(editedInterview);
 
-    let result: Awaited<ReturnType<typeof runPhase>>;
-    try {
-      result = await runPhase(
-        workspaceRoot,
-        "architect",
-        "plan",
-        "The user has answered the interview questions by editing .agent/prd.md.  Write the complete PRD, replacing the interview. Do not ask any more questions.",
-        model,
-      );
-    } catch (err) {
-      if (err instanceof NetworkUnavailableError)
-        savePendingPrompt(workspaceRoot, "plan", userInput);
-      throw err;
-    }
-    if (result.status === "success") break;
+      try {
+        return await runPhase(
+          workspaceRoot,
+          "architect",
+          "plan",
+          buildPlanFollowUpPrompt(userInput, interviewRounds),
+          model,
+        );
+      } catch (err) {
+        if (err instanceof NetworkUnavailableError)
+          savePendingPrompt(workspaceRoot, "plan", userInput);
+        throw err;
+      }
+    },
+  });
+  result = interviewResult.result;
+
+  if (interviewResult.noEdit && result.status === "blocked") {
+    console.log("No answers provided. Cancelled.");
+    return;
   }
 
-  if (shouldOpenOutput && fs.existsSync(outputPath)) openFileInEditor(outputPath);
+  clearPendingPrompt(workspaceRoot, "plan");
+  const prdPath = getPhaseOutputPath(workspaceRoot, "architect");
+  if (fs.existsSync(prdPath)) openFileInEditor(prdPath);
 }
 
 async function cmdCode(
@@ -142,19 +204,19 @@ async function cmdCode(
   if (fs.existsSync(prdPath)) {
     const phases = parsePrdPhases(fs.readFileSync(prdPath, "utf-8"));
     if (phases.length > 0) {
-      const nextIndex = phases.findIndex((p) => !p.completed);
-      if (nextIndex === -1) {
+      const nextIndex = phases.findIndex((phase) => !phase.completed);
+      const next = nextIndex === -1 ? null : phases[nextIndex];
+      if (!next) {
         console.log(
           "[System] All phases complete. Run `carl review` to validate.",
         );
         return;
       }
-      const next = phases[nextIndex];
       const phaseNumber = nextIndex + 1;
       console.log(
         `[System] Running phase ${phaseNumber} of ${phases.length}: ${next.title}`,
       );
-      let result: Awaited<ReturnType<typeof runPhase>>;
+      let result: PhaseResult;
       try {
         result = await runPhase(
           workspaceRoot,
@@ -171,6 +233,32 @@ async function cmdCode(
         }
         throw err;
       }
+
+      const outputPath = getPhaseOutputPath(workspaceRoot, "developer");
+      const interviewResult = await rerunFromEditedOutput(result, {
+        shouldContinue: (current) => current.status === "blocked",
+        getOutputPath: () => outputPath,
+        rerun: async (editedOutput) => {
+          try {
+            return await runPhase(
+              workspaceRoot,
+              "developer",
+              "code",
+              editedOutput,
+              model,
+            );
+          } catch (err) {
+            if (err instanceof NetworkUnavailableError) {
+              console.log(
+                `[System] Phase "${next.title}" interrupted by network failure. Run \`carl code\` to retry this phase.`,
+              );
+            }
+            throw err;
+          }
+        },
+      });
+      result = interviewResult.result;
+
       if (result.status !== "blocked") {
         markPhaseComplete(prdPath, next.lineIndex);
         const stillRemaining = phases.length - phaseNumber;
@@ -188,8 +276,9 @@ async function cmdCode(
           "[System] Phase blocked — not marked complete. Fix the blocker then run `carl code` again.",
         );
       }
-      const outputPath = getPhaseOutputPath(workspaceRoot, "developer");
-      if (fs.existsSync(outputPath)) openFileInEditor(outputPath);
+      if (!interviewResult.noEdit && fs.existsSync(outputPath)) {
+        openFileInEditor(outputPath);
+      }
       return;
     }
   }
@@ -205,9 +294,15 @@ async function cmdCode(
     return;
   }
 
-  let result: Awaited<ReturnType<typeof runPhase>>;
+  let result: PhaseResult;
   try {
-    result = await runPhase(workspaceRoot, "developer", "code", userInput, model);
+    result = await runPhase(
+      workspaceRoot,
+      "developer",
+      "code",
+      userInput,
+      model,
+    );
   } catch (err) {
     if (err instanceof NetworkUnavailableError)
       savePendingPrompt(workspaceRoot, "code", userInput);
@@ -216,29 +311,29 @@ async function cmdCode(
   clearPendingPrompt(workspaceRoot, "code");
 
   const outputPath = getPhaseOutputPath(workspaceRoot, "developer");
-  let shouldOpenOutput = true;
-  while (result.status === "blocked" && fs.existsSync(outputPath)) {
-    if (readEditedFile(outputPath) === null) {
-      shouldOpenOutput = false;
-      break;
-    }
+  const interviewResult = await rerunFromEditedOutput(result, {
+    shouldContinue: (current) => current.status === "blocked",
+    getOutputPath: () => outputPath,
+    rerun: async (editedOutput) => {
+      try {
+        return await runPhase(
+          workspaceRoot,
+          "developer",
+          "code",
+          editedOutput,
+          model,
+        );
+      } catch (err) {
+        if (err instanceof NetworkUnavailableError)
+          savePendingPrompt(workspaceRoot, "code", userInput);
+        throw err;
+      }
+    },
+  });
+  result = interviewResult.result;
 
-    try {
-      result = await runPhase(
-        workspaceRoot,
-        "developer",
-        "code",
-        "The user has answered the interview questions by editing .agent/notes/developer.md. Proceed with implementation. Do not ask any more questions.",
-        model,
-      );
-    } catch (err) {
-      if (err instanceof NetworkUnavailableError)
-        savePendingPrompt(workspaceRoot, "code", userInput);
-      throw err;
-    }
-  }
-
-  if (shouldOpenOutput && fs.existsSync(outputPath)) openFileInEditor(outputPath);
+  if (!interviewResult.noEdit && fs.existsSync(outputPath))
+    openFileInEditor(outputPath);
 }
 
 async function cmdReview(workspaceRoot: string, model?: string): Promise<void> {
@@ -262,7 +357,7 @@ async function cmdChat(
     console.log("No prompt provided. Cancelled.");
     return;
   }
-  let result: Awaited<ReturnType<typeof runPhase>>;
+  let result: PhaseResult;
   try {
     result = await runPhase(workspaceRoot, "chat", "chat", userInput, model);
   } catch (err) {
@@ -273,11 +368,26 @@ async function cmdChat(
   clearPendingPrompt(workspaceRoot, "chat");
 
   const outputPath = getPhaseOutputPath(workspaceRoot, "chat");
-  while (fs.existsSync(outputPath)) {
-    const after = readEditedFile(outputPath);
-    if (after === null) break;
-    result = await runPhase(workspaceRoot, "chat", "chat", after, model);
-  }
+  const interviewResult = await rerunFromEditedOutput(result, {
+    shouldContinue: () => true,
+    getOutputPath: () => outputPath,
+    rerun: async (editedOutput) => {
+      try {
+        return await runPhase(
+          workspaceRoot,
+          "chat",
+          "chat",
+          editedOutput,
+          model,
+        );
+      } catch (err) {
+        if (err instanceof NetworkUnavailableError)
+          savePendingPrompt(workspaceRoot, "chat", userInput);
+        throw err;
+      }
+    },
+  });
+  result = interviewResult.result;
 
   if (result.status === "blocked") {
     console.log("[System] Chat response indicated a blocker.");
@@ -396,7 +506,7 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error) => {
+export const cliPromise = main().catch((error) => {
   console.error(error);
   process.exit(1);
 });
