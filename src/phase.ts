@@ -31,7 +31,7 @@ type CarlConfig = {
 };
 
 export const DEFAULT_MODELS: Record<string, string> = {
-  architect: "gpt5.5",
+  architect: "gpt5.4",
   developer: "sonnet4.6",
   reviewer: "gpt5.4",
   chat: "gpt5.4",
@@ -101,6 +101,10 @@ function extractPromptResponseText(
     ? { source: "auggie", ...response.usage }
     : undefined;
   return [response.text, usage];
+}
+
+function isBlockedResponse(response: string): boolean {
+  return /^#\s+Interview\s*$/im.test(response);
 }
 
 function writeTimingEvent(workspaceRoot: string, event: TimingEvent): void {
@@ -483,7 +487,7 @@ export async function runPhase(
     if (!shouldRetry) break;
   }
 
-  const isBlocked = /block(?:ed|er):/i.test(response);
+  const isBlocked = isBlockedResponse(response);
   const status: "success" | "blocked" = isBlocked ? "blocked" : "success";
 
   writePhaseOutput(phaseName, response, workspaceRoot);

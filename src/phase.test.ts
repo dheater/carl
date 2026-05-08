@@ -113,6 +113,34 @@ describe("runPhase", () => {
     ).toBe("prd response");
   });
 
+  test("treats interview responses as blocked", async () => {
+    const client = {
+      onSessionUpdate: jest.fn(),
+      prompt: jest
+        .fn()
+        .mockResolvedValue("# Interview\n\n1. **Question?**\n\n   >\n"),
+      close: jest.fn().mockResolvedValue(undefined),
+      cancel: jest.fn().mockResolvedValue(undefined),
+    };
+    mockCreate.mockResolvedValue(client as any);
+
+    const result = await runPhase(
+      workspaceRoot,
+      "developer",
+      "code",
+      "ship it",
+      "test-model",
+    );
+
+    expect(result.status).toBe("blocked");
+    expect(
+      fs.readFileSync(
+        path.join(workspaceRoot, ".agent", "notes", "developer.md"),
+        "utf-8",
+      ),
+    ).toContain("# Interview");
+  });
+
   test("skill content omits YAML frontmatter", () => {
     const instruction = buildSkillInstruction("reviewer", workspaceRoot);
     expect(instruction).toContain("# Your skill for this session\n\n# Reviewer");

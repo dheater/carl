@@ -10,6 +10,14 @@ jest.mock("./phase", () => {
   };
 });
 
+jest.mock("./editor", () => {
+  const actual = jest.requireActual("./editor") as typeof import("./editor");
+  return {
+    ...actual,
+    openFileInEditor: jest.fn(),
+  };
+});
+
 describe("carl CLI", () => {
   const originalArgv = process.argv;
   const NETWORK_FAILURE_MESSAGE =
@@ -69,6 +77,24 @@ describe("carl CLI", () => {
     return mockRunPhase;
   }
 
+  test("--version prints version and exits 0", async () => {
+    process.argv = ["node", "carl", "--version"];
+    const exitSpy = jest
+      .spyOn(process, "exit")
+      .mockImplementation((() => undefined) as never);
+    const logSpy = jest.spyOn(console, "log").mockImplementation(() => {});
+
+    try {
+      require("./carl");
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(logSpy).toHaveBeenCalledWith(expect.stringMatching(/^carl \d+\.\d+\.\d+/));
+    } finally {
+      exitSpy.mockRestore();
+      logSpy.mockRestore();
+    }
+  });
+
   test("passes prompt file content to code", async () => {
     const mockRunPhase = await runCli(["code", promptFile]);
     expect(mockRunPhase).toHaveBeenCalledWith(
@@ -89,6 +115,203 @@ describe("carl CLI", () => {
       "ship it",
       undefined,
     );
+  });
+
+  describe("interview follow-up", () => {
+    let tmpDir: string;
+
+    beforeEach(() => {
+      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-follow-up-"));
+      fs.mkdirSync(path.join(tmpDir, ".agent"), { recursive: true });
+    });
+
+    afterEach(() => {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    test("plan deletes .agent before running", async () => {
+      const staleFile = path.join(tmpDir, ".agent", "notes", "stale.md");
+      fs.mkdirSync(path.dirname(staleFile), { recursive: true });
+      fs.writeFileSync(staleFile, "stale content", "utf-8");
+
+      const mockRunPhase = await runCli(["plan", promptFile], { cwd: tmpDir });
+
+      expect(mockRunPhase).toHaveBeenCalledWith(
+        tmpDir,
+        "architect",
+        "plan",
+        "ship it",
+        undefined,
+      );
+      expect(fs.existsSync(staleFile)).toBe(false);
+    });
+
+    test("reruns plan after the user edits .agent/prd.md", async () => {
+      const prdPath = path.join(tmpDir, ".agent", "prd.md");
+
+      const phase = require("./phase") as typeof import("./phase");
+      const mockRunPhase = phase.runPhase as jest.MockedFunction<
+        typeof phase.runPhase
+      >;
+      mockRunPhase
+        .mockImplementationOnce(async () => {
+          fs.mkdirSync(path.join(tmpDir, ".agent"), { recursive: true });
+          fs.writeFileSync(prdPath, "# Interview\n\n1. **Question?**\n\n   >\n", "utf-8");
+          return { status: "success", response: "interview" };
+        })
+        .mockResolvedValueOnce({ status: "success", response: "final prd" });
+
+      const editor = require("./editor") as typeof import("./editor");
+      const mockOpenFileInEditor =
+        editor.openFileInEditor as jest.MockedFunction<
+          typeof editor.openFileInEditor
+        >;
+      mockOpenFileInEditor.mockImplementationOnce((filePath: string) => {
+        fs.writeFileSync(filePath, "# Interview\n\n1. **Question?**\n\n   > answered\n", "utf-8");
+      });
+
+      process.argv = ["node", "carl", "plan", promptFile];
+      const cwdSpy = jest.spyOn(process, "cwd").mockReturnValue(tmpDir);
+      const exitSpy = jest
+        .spyOn(process, "exit")
+        .mockImplementation((() => undefined) as never);
+      const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+      const logSpy = jest.spyOn(console, "log").mockImplementation(() => {});
+
+      try {
+        require("./carl");
+        await new Promise((resolve) => setImmediate(resolve));
+        expect(exitSpy).not.toHaveBeenCalled();
+        expect(errorSpy).not.toHaveBeenCalled();
+      } finally {
+        cwdSpy.mockRestore();
+        exitSpy.mockRestore();
+        errorSpy.mockRestore();
+        logSpy.mockRestore();
+      }
+
+      expect(mockRunPhase).toHaveBeenNthCalledWith(
+        1,
+        tmpDir,
+        "architect",
+        "plan",
+        "ship it",
+        undefined,
+      );
+      expect(mockOpenFileInEditor).toHaveBeenCalledTimes(2);
+    });
+
+    test("saves pending plan prompt if the follow-up PRD run hits a network failure", async () => {
+      const prdPath = path.join(tmpDir, ".agent", "prd.md");
+      const pendingPath = path.join(tmpDir, ".agent", "pending-plan-prompt.md");
+
+      const phase = require("./phase") as typeof import("./phase");
+      const mockRunPhase = phase.runPhase as jest.MockedFunction<
+        typeof phase.runPhase
+      >;
+      mockRunPhase
+        .mockImplementationOnce(async () => {
+          fs.mkdirSync(path.join(tmpDir, ".agent"), { recursive: true });
+          fs.writeFileSync(prdPath, "# Interview\n\n1. **Question?**\n\n   >\n", "utf-8");
+          return { status: "success", response: "interview" };
+        })
+        .mockRejectedValueOnce(
+          new phase.NetworkUnavailableError(
+            "Network unavailable after 3 attempts — run `carl plan` to retry.",
+          ),
+        );
+
+      const editor = require("./editor") as typeof import("./editor");
+      const mockOpenFileInEditor =
+        editor.openFileInEditor as jest.MockedFunction<
+          typeof editor.openFileInEditor
+        >;
+      mockOpenFileInEditor.mockImplementationOnce((filePath: string) => {
+        fs.writeFileSync(filePath, "# Interview\n\n1. **Question?**\n\n   > answered\n", "utf-8");
+      });
+
+      process.argv = ["node", "carl", "plan", promptFile];
+      const cwdSpy = jest.spyOn(process, "cwd").mockReturnValue(tmpDir);
+      const exitSpy = jest
+        .spyOn(process, "exit")
+        .mockImplementation((() => undefined) as never);
+      const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+      const logSpy = jest.spyOn(console, "log").mockImplementation(() => {});
+
+      try {
+        require("./carl");
+        await new Promise((resolve) => setImmediate(resolve));
+        expect(exitSpy).toHaveBeenCalledWith(1);
+      } finally {
+        cwdSpy.mockRestore();
+        exitSpy.mockRestore();
+        errorSpy.mockRestore();
+        logSpy.mockRestore();
+      }
+
+      expect(fs.readFileSync(pendingPath, "utf-8")).toBe("ship it");
+    });
+
+    test("reruns code after the user edits .agent/notes/developer.md", async () => {
+      const notesPath = path.join(tmpDir, ".agent", "notes", "developer.md");
+      fs.mkdirSync(path.dirname(notesPath), { recursive: true });
+      fs.writeFileSync(notesPath, "# Interview\n\n1. **Question?**\n\n   >\n", "utf-8");
+
+      const phase = require("./phase") as typeof import("./phase");
+      const mockRunPhase = phase.runPhase as jest.MockedFunction<
+        typeof phase.runPhase
+      >;
+      mockRunPhase
+        .mockResolvedValueOnce({ status: "blocked", response: "BLOCKED: need input" })
+        .mockResolvedValueOnce({ status: "success", response: "implemented" });
+
+      const editor = require("./editor") as typeof import("./editor");
+      const mockOpenFileInEditor =
+        editor.openFileInEditor as jest.MockedFunction<
+          typeof editor.openFileInEditor
+        >;
+      mockOpenFileInEditor.mockImplementationOnce((filePath: string) => {
+        fs.writeFileSync(filePath, "# Interview\n\n1. **Question?**\n\n   > answered\n", "utf-8");
+      });
+
+      process.argv = ["node", "carl", "code", promptFile];
+      const cwdSpy = jest.spyOn(process, "cwd").mockReturnValue(tmpDir);
+      const exitSpy = jest
+        .spyOn(process, "exit")
+        .mockImplementation((() => undefined) as never);
+      const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+      const logSpy = jest.spyOn(console, "log").mockImplementation(() => {});
+
+      try {
+        require("./carl");
+        await new Promise((resolve) => setImmediate(resolve));
+        expect(exitSpy).not.toHaveBeenCalled();
+        expect(errorSpy).not.toHaveBeenCalled();
+      } finally {
+        cwdSpy.mockRestore();
+        exitSpy.mockRestore();
+        errorSpy.mockRestore();
+        logSpy.mockRestore();
+      }
+
+      expect(mockRunPhase).toHaveBeenNthCalledWith(
+        1,
+        tmpDir,
+        "developer",
+        "code",
+        "ship it",
+        undefined,
+      );
+      expect(mockRunPhase).toHaveBeenNthCalledWith(
+        2,
+        tmpDir,
+        "developer",
+        "code",
+        "The user has answered the interview questions by editing .agent/notes/developer.md. Proceed with implementation. Do not ask any more questions.",
+        undefined,
+      );
+      expect(mockOpenFileInEditor).toHaveBeenCalledTimes(2);
+    });
   });
 
   describe("pending prompt", () => {
@@ -167,7 +390,6 @@ describe("carl CLI", () => {
         require("./carl");
         await new Promise((resolve) => setImmediate(resolve));
       } catch {
-        // Expected to throw.
       } finally {
         cwdSpy.mockRestore();
         exitSpy.mockRestore();
@@ -290,7 +512,6 @@ describe("carl CLI", () => {
         require("./carl");
         await new Promise((resolve) => setImmediate(resolve));
       } catch {
-        // Expected to throw.
       } finally {
         cwdSpy.mockRestore();
         exitSpy.mockRestore();

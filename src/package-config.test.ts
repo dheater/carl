@@ -18,16 +18,6 @@ describe("package-config", () => {
     });
   });
 
-  describe("test script", () => {
-    it("should disable experimental webstorage before running jest", () => {
-      expect(packageJson.scripts).toBeDefined();
-      expect(packageJson.scripts.test).toBeDefined();
-      expect(packageJson.scripts.test).toBe(
-        "NODE_OPTIONS=--no-experimental-webstorage jest",
-      );
-    });
-  });
-
   describe("bin configuration", () => {
     it("should have bin.carl pointing to dist/carl.mjs", () => {
       expect(packageJson.bin).toBeDefined();

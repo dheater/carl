@@ -68,6 +68,16 @@ function clearPendingPrompt(workspaceRoot: string, command: string): void {
   }
 }
 
+function readEditedFile(filePath: string): string | null {
+  if (!fs.existsSync(filePath)) return null;
+
+  const before = fs.readFileSync(filePath, "utf-8");
+  openFileInEditor(filePath);
+  const after = fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf-8") : "";
+
+  return after.trimEnd() === before.trimEnd() ? null : after;
+}
+
 async function cmdPlan(
   workspaceRoot: string,
   promptFile?: string,
@@ -77,6 +87,13 @@ async function cmdPlan(
   if (!userInput) {
     console.log("No prompt provided. Cancelled.");
     return;
+  }
+
+  // Delete .agent for clean context; prompt is already captured above.
+  const agentDir = path.join(workspaceRoot, ".agent");
+  if (fs.existsSync(agentDir)) {
+    fs.rmSync(agentDir, { recursive: true, force: true });
+    console.log("Cleared .agent/.");
   }
 
   try {
@@ -89,24 +106,31 @@ async function cmdPlan(
   clearPendingPrompt(workspaceRoot, "plan");
 
   const outputPath = getPhaseOutputPath(workspaceRoot, "architect");
+  let shouldOpenOutput = true;
   while (fs.existsSync(outputPath)) {
-    const before = fs.readFileSync(outputPath, "utf-8");
-    openFileInEditor(outputPath);
-    const after = fs.existsSync(outputPath)
-      ? fs.readFileSync(outputPath, "utf-8")
-      : "";
+    if (readEditedFile(outputPath) === null) {
+      shouldOpenOutput = false;
+      break;
+    }
 
-    if (after.trimEnd() === before.trimEnd()) break;
-
-    const result = await runPhase(
-      workspaceRoot,
-      "architect",
-      "plan",
-      "The user has answered your questions by editing prd.md. The interview is complete. Read prd.md and finalize the PRD with acceptance criteria. Do not ask any more questions.",
-      model,
-    );
+    let result: Awaited<ReturnType<typeof runPhase>>;
+    try {
+      result = await runPhase(
+        workspaceRoot,
+        "architect",
+        "plan",
+        "The user has answered the interview questions by editing .agent/prd.md.  Write the complete PRD, replacing the interview. Do not ask any more questions.",
+        model,
+      );
+    } catch (err) {
+      if (err instanceof NetworkUnavailableError)
+        savePendingPrompt(workspaceRoot, "plan", userInput);
+      throw err;
+    }
     if (result.status === "success") break;
   }
+
+  if (shouldOpenOutput && fs.existsSync(outputPath)) openFileInEditor(outputPath);
 }
 
 async function cmdCode(
@@ -181,16 +205,40 @@ async function cmdCode(
     return;
   }
 
+  let result: Awaited<ReturnType<typeof runPhase>>;
   try {
-    await runPhase(workspaceRoot, "developer", "code", userInput, model);
+    result = await runPhase(workspaceRoot, "developer", "code", userInput, model);
   } catch (err) {
     if (err instanceof NetworkUnavailableError)
       savePendingPrompt(workspaceRoot, "code", userInput);
     throw err;
   }
   clearPendingPrompt(workspaceRoot, "code");
+
   const outputPath = getPhaseOutputPath(workspaceRoot, "developer");
-  if (fs.existsSync(outputPath)) openFileInEditor(outputPath);
+  let shouldOpenOutput = true;
+  while (result.status === "blocked" && fs.existsSync(outputPath)) {
+    if (readEditedFile(outputPath) === null) {
+      shouldOpenOutput = false;
+      break;
+    }
+
+    try {
+      result = await runPhase(
+        workspaceRoot,
+        "developer",
+        "code",
+        "The user has answered the interview questions by editing .agent/notes/developer.md. Proceed with implementation. Do not ask any more questions.",
+        model,
+      );
+    } catch (err) {
+      if (err instanceof NetworkUnavailableError)
+        savePendingPrompt(workspaceRoot, "code", userInput);
+      throw err;
+    }
+  }
+
+  if (shouldOpenOutput && fs.existsSync(outputPath)) openFileInEditor(outputPath);
 }
 
 async function cmdReview(workspaceRoot: string, model?: string): Promise<void> {
@@ -226,14 +274,8 @@ async function cmdChat(
 
   const outputPath = getPhaseOutputPath(workspaceRoot, "chat");
   while (fs.existsSync(outputPath)) {
-    const before = fs.readFileSync(outputPath, "utf-8");
-    openFileInEditor(outputPath);
-    const after = fs.existsSync(outputPath)
-      ? fs.readFileSync(outputPath, "utf-8")
-      : "";
-
-    if (after.trimEnd() === before.trimEnd()) break;
-
+    const after = readEditedFile(outputPath);
+    if (after === null) break;
     result = await runPhase(workspaceRoot, "chat", "chat", after, model);
   }
 
@@ -252,10 +294,23 @@ function cmdReset(workspaceRoot: string): void {
   }
 }
 
+function getVersion(): string {
+  try {
+    const pkgPath = path.join(__dirname, "..", "package.json");
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8")) as {
+      version: string;
+    };
+    return pkg.version;
+  } catch {
+    return "unknown";
+  }
+}
+
 function usage(): void {
   console.error("Usage: carl [--model <model>] <command>");
   console.error("");
   console.error("Options:");
+  console.error("  --version        Print version and exit");
   console.error(
     "  --model <model>  Override the model for this run (ignores config and defaults)",
   );
@@ -279,6 +334,11 @@ function usage(): void {
 
 async function main(): Promise<void> {
   const rawArgs = process.argv.slice(2);
+
+  if (rawArgs.includes("--version")) {
+    console.log(`carl ${getVersion()}`);
+    return;
+  }
 
   let model: string | undefined;
   const args: string[] = [];
