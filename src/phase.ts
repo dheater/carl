@@ -1,5 +1,6 @@
 import { getGitStatus, getCurrentBranch } from "./git";
 import { getPhaseOutputPath } from "./editor";
+import type { PrMetadata } from "./github";
 import { randomUUID } from "crypto";
 import * as path from "path";
 import * as fs from "fs";
@@ -28,6 +29,7 @@ type CarlConfig = {
     developer?: string;
     reviewer?: string;
     chat?: string;
+    "pr-review"?: string;
   };
 };
 
@@ -36,20 +38,14 @@ export const DEFAULT_MODELS: Record<string, string> = {
   developer: "sonnet4.6",
   reviewer: "gpt5.4",
   chat: "gpt5.4",
+  "pr-review": "code-review",
 };
 
 function loadCarlConfig(workspaceRoot: string): CarlConfig {
   const carlDir = path.join(workspaceRoot, EVENTS_LOG_DIR);
   const configPath = path.join(carlDir, "config.json");
   if (!fs.existsSync(configPath)) {
-    const defaults: CarlConfig = {
-      models: {
-        architect: DEFAULT_MODELS.architect,
-        developer: DEFAULT_MODELS.developer,
-        reviewer: DEFAULT_MODELS.reviewer,
-        chat: DEFAULT_MODELS.chat,
-      },
-    };
+    const defaults: CarlConfig = { models: { ...DEFAULT_MODELS } };
     fs.mkdirSync(carlDir, { recursive: true });
     fs.writeFileSync(
       configPath,
@@ -89,7 +85,7 @@ function getPhaseModel(phase: string, workspaceRoot?: string): string {
 }
 
 function shouldAllowIndexing(phaseName: string): boolean {
-  return phaseName !== "chat";
+  return phaseName !== "chat" && phaseName !== "pr-review";
 }
 
 function extractPromptResponseText(
@@ -211,6 +207,39 @@ export function buildSkillInstruction(
   return instruction;
 }
 
+export function buildPrReviewInstruction(
+  owner: string,
+  repo: string,
+  metadata: PrMetadata,
+  diff: string,
+): string {
+  const commitLines = metadata.commits
+    .map((c, i) => `${i + 1}. ${c.sha.slice(0, 8)} — ${c.author}: ${c.message}`)
+    .join("\n");
+
+  const sections = [
+    `# PR #${metadata.number}: ${metadata.title}`,
+    [
+      `- Repository: ${owner}/${repo}`,
+      `- Base: ${metadata.baseRef} ← ${metadata.headRef}`,
+      `- Head SHA: ${metadata.headSha.slice(0, 8)}`,
+      `- State: ${metadata.state}`,
+    ].join("\n"),
+  ];
+
+  if (metadata.body && metadata.body.trim()) {
+    sections.push(`## PR description\n\n${metadata.body.trim()}`);
+  }
+
+  sections.push(
+    `## Commits (${metadata.commits.length} commit(s) — context only, do not review individually)\n\n${commitLines}`,
+  );
+
+  sections.push(`## Cumulative diff (merge-base → head)\n\n\`\`\`diff\n${diff}\n\`\`\``);
+
+  return sections.join("\n\n");
+}
+
 function writePhaseOutput(
   phaseName: string,
   status: "success" | "blocked",
@@ -279,6 +308,7 @@ const PHASE_TIMEOUT_MS: Record<string, number> = {
   developer: 14 * 60 * 1000,
   reviewer: 6 * 60 * 1000,
   architect: 12 * 60 * 1000,
+  "pr-review": 13 * 60 * 1000,
 };
 
 function writeTimeoutDiagnostic(
