@@ -7,6 +7,7 @@ import * as fs from "fs";
 import * as os from "os";
 
 const CARL_SKILLS_DIR = path.join(__dirname, "..", "skills");
+const CARL_RULES_DIR = path.join(__dirname, "..", "rules");
 const GLOBAL_SKILLS_DIR = path.join(os.homedir(), ".augment", "skills");
 const EVENTS_LOG_DIR = ".carl";
 const EVENTS_LOG_FILE = "events.jsonl";
@@ -67,6 +68,20 @@ function loadCarlConfig(
 }
 
 type PromptResponse = string | { text: string; usage?: Record<string, any> };
+
+function loadRules(): string {
+  if (!fs.existsSync(CARL_RULES_DIR)) return "";
+  const files = fs.readdirSync(CARL_RULES_DIR)
+    .filter((f) => f.endsWith(".md"))
+    .sort();
+  return files
+    .map((f) => {
+      const raw = fs.readFileSync(path.join(CARL_RULES_DIR, f), "utf-8");
+      return raw.replace(/^---\n[\s\S]*?\n---\n?/, "").trimStart();
+    })
+    .filter(Boolean)
+    .join("\n\n---\n\n");
+}
 
 function loadSkillFile(name: string): string {
   for (const dir of [CARL_SKILLS_DIR, GLOBAL_SKILLS_DIR]) {
@@ -150,8 +165,13 @@ export function buildSkillInstruction(
   phaseName: string,
   workspaceRoot?: string,
 ): string {
+  const rules = loadRules();
   const skillContent = loadSkillFile(phaseName);
-  let instruction = skillContent
+  let instruction = "";
+  if (rules) {
+    instruction += `# Rules\n\n${rules}\n\n---\n\n`;
+  }
+  instruction += skillContent
     ? `# Your skill for this session\n\n${skillContent}`
     : `Follow the ${phaseName} skill.`;
 

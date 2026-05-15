@@ -16,19 +16,12 @@ Read the current user request first. If `.agent/prd.md` exists, read it as addit
 
 1. Read relevant code and tests before editing. Never ask what reading answers.
 2. Challenge scope. Delete or simplify before adding.
-3. **Clarify before coding.** If intent, constraints, or target files are still unclear after reading, write `.agent/notes/developer.md`: `# Interview` header, up to 5 numbered **bold questions**, multiple choice options labeled as `1., 2., ...` most-to-least recommended. Stop. Do not implement.
-
+3. **Clarify before coding.** If intent, constraints, or target files are unclear after reading: write `.agent/notes/developer.md` with `# Interview` header, questions with options `1., 2., ...` most-to-least recommended. Stop. Do not implement.
 4. Write or update tests for observable behavior.
-5. Make the smallest code change that satisfies the request and the tests.
-6. Run the smallest relevant validation yourself.
-7. Delete dead code, duplication, and narration comments before finishing.
+5. Make the smallest change that satisfies the request and tests.
+6. Run the smallest relevant validation.
+7. Delete dead code, duplication, and narration comments.
 
-**Report:** what changed, what was deleted or simplified, tests run, and any remaining blocker or risk.
+**Report:** what changed, deleted, or simplified; tests run; remaining blockers.
 
-## File placement
-
-Scratch and temporary files must be placed in `.tmp/`, which is ignored by version control and excluded from the test runner. Never commit scratch or temporary files.
-
-## Done means
-
-Requested behavior works, tests pass, no obvious regression remains, dead code removed.
+Scratch/temp files → `.tmp/` only. Never commit them.

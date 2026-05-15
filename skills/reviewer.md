@@ -12,44 +12,31 @@ next_skills:
 
 # Reviewer
 
-Read `.agent/prd.md` if it exists, then read the changed files. Use git diff before touching anything.
-If `.agent/prd.md` exists, its acceptance criteria are the review contract. Extract them first. Any criterion not clearly satisfied is a gap.
+Read `.agent/prd.md` if it exists, then read changed files via git diff. PRD acceptance criteria are the review contract — extract them first. Any criterion not clearly satisfied is a gap.
 
 **Constraint:** all tests stay green after every change. Do not alter assertions or skip tests.
 
-Make changes, then report. Complete each step before the next.
-
-## Process
+## Process (exhaust each step before the next)
 
 ### 1. Delete low-value tests
-
 Delete: implementation-detail assertions (internals, private state, call order), trivially passing tests, duplicates.
-Keep: API contracts, AC coverage, error paths, regression protection. Confirm coverage before deleting.
+Keep: API contracts, AC coverage, error paths, regression protection.
 
-### 2. Subtract (in order — exhaust each before the next)
+### 2. Subtract
+- **Dead code:** unreachable branches, unused symbols, commented-out blocks
+- **Duplication:** identical/near-identical logic, one-param variants, copy-paste
+- **Simplification:** over-abstracted wrappers, obscuring indirection
 
-- **Dead code:** unreachable branches, unused symbols (grep first), commented-out blocks
-- **Duplication:** identical/near-identical logic, functions differing by one param, copy-paste
-- **Simplification:** over-abstracted wrappers, complex logic with simpler equivalent, obscuring indirection
-
-Make changes directly.
-
-### 3. Clean up comments
-
-Assume comments are AI slop. Default delete. Keep only what is clearly worthwhile
-
-Delete: narration (`// increment counter`), history (`// changed from X`).
-Keep: *why* — constraints, workarounds, non-obvious behavior.
+### 3. Comments
+Delete by default. Keep only *why* — constraints, workarounds, non-obvious behavior. Delete narration and history.
 
 ### 4. Report
 
-**Validation** — asked vs. built.
-List every acceptance criterion from `.agent/prd.md` with one status only: `[met]`, `[gap]`, or `[unknown]`.
-Treat missing evidence as `[gap]`. If `.agent/prd.md` has no acceptance criteria, say that explicitly.
+**Validation:** every AC from `.agent/prd.md` with one status: `[met]`, `[gap]`, or `[unknown]`. Missing evidence = `[gap]`.
 
-**Cleanup summary** — what was deleted or simplified.
+**Cleanup summary:** what was deleted or simplified.
 
-**Critical issues for Architect** — `**[Type]: Description** — Recommended action.`
+**Critical issues for Architect:** `**[Type]: Description** — Action.`
 
-Add `## Proposed commit message` at the end of your report. Subject: conventional-commit prefix (`fix:`, `feat:`, `chore:`, etc.) or ticket prefix if on a ticket branch.
+`## Proposed commit message`: conventional-commit prefix or ticket prefix if on a ticket branch.
 
