@@ -1,6 +1,6 @@
 import { execSync } from "child_process";
 
-export interface GitStatus {
+interface GitStatus {
   isRepo: boolean;
   trackedChanged: string[];
   untracked: string[];
@@ -31,6 +31,20 @@ export function getCurrentBranch(workspaceRoot?: string): string | null {
   }
 }
 
+export function getHeadSha(workspaceRoot: string): string {
+  try {
+    return execSync("git rev-parse HEAD", {
+      cwd: workspaceRoot,
+      stdio: "pipe",
+      encoding: "utf-8",
+    }).trim();
+  } catch (err: any) {
+    throw new Error(
+      `Could not resolve HEAD in ${workspaceRoot}: ${err.stderr?.trim() || err.message}`,
+    );
+  }
+}
+
 export function getGitStatus(workspaceRoot: string): GitStatus {
   try {
     const isRepo = detectGit();
@@ -38,7 +52,6 @@ export function getGitStatus(workspaceRoot: string): GitStatus {
       return { isRepo: false, trackedChanged: [], untracked: [] };
     }
 
-    // Get porcelain status output
     const statusOutput = execSync("git status --porcelain", {
       cwd: workspaceRoot,
       stdio: "pipe",
@@ -51,16 +64,12 @@ export function getGitStatus(workspaceRoot: string): GitStatus {
     for (const line of statusOutput.split("\n")) {
       if (!line.trim()) continue;
 
-      // Format: XY FILENAME
-      // X is index status, Y is worktree status
-      // ? is untracked
       const status = line.substring(0, 2);
       const filename = line.substring(3);
 
       if (status.includes("?")) {
         untracked.push(filename);
       } else {
-        // Any other status means tracked file with changes
         trackedChanged.push(filename);
       }
     }

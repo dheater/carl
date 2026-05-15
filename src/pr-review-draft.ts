@@ -1,264 +1,243 @@
 import * as path from "path";
-import type { PrMetadata } from "./github";
 
 export interface ReviewComment {
-  type: "inline" | "file" | "overall";
+  type: "inline" | "overall";
   path?: string;
+  startLine?: number;
   line?: number;
   body: string;
 }
 
-export interface PrReviewPayload {
-  owner: string;
-  repo: string;
-  number: number;
-  headSha: string;
-  comments: ReviewComment[];
+interface DiffHunk {
+  newStart: number;
+  newEnd: number;
+  newSideLines: Set<number>;
 }
 
-function formatCommentBlock(comment: ReviewComment): string {
-  let header = `||| COMMENT ${comment.type}`;
+function getCommentLabel(comment: ReviewComment, index: number): string {
   if (comment.type === "inline" && comment.path && comment.line != null) {
-    header += ` ${comment.path}:${comment.line}`;
-  } else if (comment.type === "file" && comment.path) {
-    header += ` ${comment.path}`;
+    const range =
+      comment.startLine != null && comment.startLine !== comment.line
+        ? `${comment.startLine}-${comment.line}`
+        : `${comment.line}`;
+    return `${comment.path}:${range}`;
   }
-  return `${header}\n${comment.body}\n||| END`;
+  return `overall comment ${index + 1}`;
 }
 
-export function parsePrReviewOutput(llmOutput: string): ReviewComment[] {
+export function parsePrReviewDraftComments(draft: string): ReviewComment[] {
   const comments: ReviewComment[] = [];
+  const lines = draft.split("\n");
+  let current: ReviewComment | null = null;
+  let currentBody: string[] = [];
 
-  const summaryHeader = llmOutput.match(/^##\s+Summary\s*$/m);
-  if (summaryHeader?.index != null) {
-    const bodyStart = summaryHeader.index + summaryHeader[0].length;
-    const nextHeaderOffset = llmOutput.slice(bodyStart).search(/\n##\s+/);
-    const bodyEnd =
-      nextHeaderOffset === -1 ? llmOutput.length : bodyStart + nextHeaderOffset;
-    const body = llmOutput.slice(bodyStart, bodyEnd).trim();
-    if (body) comments.push({ type: "overall", body });
-  }
-
-  const matches = [...llmOutput.matchAll(/^###\s+\[[^\]]+\]\s+(.+)$/gm)];
-  for (let i = 0; i < matches.length; i++) {
-    const match = matches[i];
-    const location = match[1].trim();
-    const bodyStart = match.index! + match[0].length;
-    const bodyEnd =
-      i + 1 < matches.length ? matches[i + 1].index! : llmOutput.length;
-    const body = llmOutput.slice(bodyStart, bodyEnd).trim();
-    if (!body) continue;
-
-    if (/^overall$/i.test(location)) {
-      comments.push({ type: "overall", body });
-      continue;
-    }
-    const fileLevelMatch = location.match(/^(.+?)\s+file-level$/i);
-    if (fileLevelMatch) {
-      comments.push({ type: "file", path: fileLevelMatch[1].trim(), body });
-      continue;
-    }
-    const inlineMatch = location.match(/^(.+?)\s+line\s+(\d+)$/i);
-    if (inlineMatch) {
-      comments.push({
-        type: "inline",
-        path: inlineMatch[1].trim(),
-        line: parseInt(inlineMatch[2], 10),
-        body,
-      });
-      continue;
-    }
-
-    comments.push({ type: "file", path: location, body });
-  }
-
-  return comments;
-}
-
-export function parsePrReviewDraft(content: string): ReviewComment[] {
-  const comments: ReviewComment[] = [];
-  const OPEN = /^\|\|\| COMMENT (inline|file|overall)(?:\s+(.+))?$/;
-  const CLOSE = /^\|\|\| END\s*$/;
-
-  let inBlock = false;
-  let blockType: ReviewComment["type"] = "overall";
-  let blockPath: string | undefined;
-  let blockLine: number | undefined;
-  const bodyLines: string[] = [];
-
-  for (const line of content.split("\n")) {
-    if (!inBlock) {
-      const m = line.match(OPEN);
-      if (!m) continue;
-      inBlock = true;
-      blockType = m[1] as ReviewComment["type"];
-      blockPath = undefined;
-      blockLine = undefined;
-      bodyLines.length = 0;
-      const loc = m[2]?.trim();
-      if (blockType === "inline" && loc) {
-        const colon = loc.lastIndexOf(":");
-        blockPath = colon !== -1 ? loc.slice(0, colon) : loc;
-        blockLine =
-          colon !== -1 ? parseInt(loc.slice(colon + 1), 10) || undefined : undefined;
-      } else if (blockType === "file" && loc) {
-        blockPath = loc;
-      }
-    } else {
-      if (CLOSE.test(line)) {
-        const body = bodyLines.join("\n").trim();
-        if (body) {
-          const comment: ReviewComment = { type: blockType, body };
-          if (blockPath) comment.path = blockPath;
-          if (blockLine != null) comment.line = blockLine;
-          comments.push(comment);
+  for (const line of lines) {
+    if (current) {
+      if (line.trim() === "||| END") {
+        current.body = currentBody.join("\n").trim();
+        if (!current.body) {
+          throw new Error(`Empty review comment body for ${getCommentLabel(current, comments.length)}.`);
         }
-        inBlock = false;
-      } else {
-        bodyLines.push(line);
+        comments.push(current);
+        current = null;
+        currentBody = [];
+        continue;
       }
+      currentBody.push(line);
+      continue;
     }
+
+    const match = line.match(/^\|\|\| COMMENT (overall|inline)(?: (.+):(\d+)(?:-(\d+))?)?\s*$/);
+    if (!match) continue;
+    const [, type, file, start, end] = match;
+    if (type === "inline") {
+      if (!file || !start) {
+        throw new Error(`Malformed inline review comment header: ${line}`);
+      }
+      current = {
+        type: "inline",
+        path: file,
+        startLine: end ? parseInt(start, 10) : undefined,
+        line: parseInt(end ?? start, 10),
+        body: "",
+      };
+    } else {
+      current = { type: "overall", body: "" };
+    }
+  }
+
+  if (current) {
+    throw new Error(`Unterminated review comment block for ${getCommentLabel(current, comments.length)}.`);
   }
 
   return comments;
-}
-
-function insertCommentsIntoDiff(diff: string, comments: ReviewComment[]): string {
-  const inlineIndex = new Map<string, Map<number, ReviewComment[]>>();
-  const fileIndex = new Map<string, ReviewComment[]>();
-  const renderedComments = new Set<ReviewComment>();
-
-  for (const c of comments) {
-    if (c.type === "inline" && c.path && c.line != null) {
-      if (!inlineIndex.has(c.path)) inlineIndex.set(c.path, new Map());
-      const lm = inlineIndex.get(c.path)!;
-      if (!lm.has(c.line)) lm.set(c.line, []);
-      lm.get(c.line)!.push(c);
-    } else if (c.type === "file" && c.path) {
-      if (!fileIndex.has(c.path)) fileIndex.set(c.path, []);
-      fileIndex.get(c.path)!.push(c);
-    }
-  }
-
-  const out: string[] = [];
-  let currentFile: string | null = null;
-  let newLineNum = 0;
-
-  const flushFile = () => {
-    if (!currentFile) return;
-    const fc = fileIndex.get(currentFile);
-    if (fc) {
-      for (const c of fc) {
-        out.push(formatCommentBlock(c));
-        renderedComments.add(c);
-      }
-    }
-  };
-
-  const checkInline = () => {
-    if (!currentFile) return;
-    const lm = inlineIndex.get(currentFile);
-    if (!lm) return;
-    const cs = lm.get(newLineNum);
-    if (cs) {
-      for (const c of cs) {
-        out.push(formatCommentBlock(c));
-        renderedComments.add(c);
-      }
-    }
-  };
-
-  for (const line of diff.split("\n")) {
-    if (line.startsWith("diff --git ")) {
-      flushFile();
-      currentFile = null;
-      newLineNum = 0;
-      out.push(line);
-    } else if (line.startsWith("+++ b/")) {
-      currentFile = line.slice("+++ b/".length);
-      out.push(line);
-    } else if (line.startsWith("@@ ")) {
-      const m = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
-      if (m) newLineNum = parseInt(m[1], 10) - 1;
-      out.push(line);
-    } else if (line.startsWith("+") && !line.startsWith("+++")) {
-      newLineNum++;
-      out.push(line);
-      checkInline();
-    } else if (line.startsWith(" ")) {
-      newLineNum++;
-      out.push(line);
-      checkInline();
-    } else {
-      out.push(line);
-    }
-  }
-  flushFile();
-
-  const unmatchedComments = comments.filter((c) => !renderedComments.has(c));
-  if (unmatchedComments.length > 0) {
-    out.push("");
-    for (const c of unmatchedComments) {
-      out.push(formatCommentBlock(c));
-    }
-  }
-
-  return out.join("\n");
 }
 
 export function buildPrReviewDraft(
   diff: string,
-  comments: ReviewComment[],
-  metadata: PrMetadata,
-  owner: string,
-  repo: string,
+  prIdentity: string,
+  headSha: string,
 ): string {
-  const header = [
-    `# PR Review Draft: ${owner}/${repo}#${metadata.number} — ${metadata.title}`,
-    `# Head: ${metadata.headSha.slice(0, 8)} | ${metadata.headRef} → ${metadata.baseRef}`,
+  const draftDiff = diff.endsWith("\n") ? diff.slice(0, -1) : diff;
+
+  return [
+    `# PR Review Draft`,
+    `# PR: ${prIdentity} | HEAD: ${headSha.slice(0, 8)}`,
     `#`,
-    `# Edit or delete comment blocks. Empty bodies are ignored on submission.`,
-    `# Add a block: ||| COMMENT <type> [path[:line]]`,
-    `# Types:  inline <path>:<line>   file <path>   overall`,
-    `# Close:  ||| END`,
+    `# Append \`||| COMMENT\` blocks below \`## Review comments\`. Two formats:`,
+    `#`,
+    `#   ||| COMMENT inline <path>:<line>`,
+    `#   <prose rationale: why this matters>`,
+    `#   ||| END`,
+    `#`,
+    `#   ||| COMMENT overall`,
+    `#   <prose rationale>`,
+    `#   ||| END`,
+    `#`,
+    `# Inline line numbers must reference new-side lines that appear in the PR diff hunks below.`,
+    ``,
+    `## PR Diff`,
+    ``,
+    "```diff",
+    draftDiff,
+    "```",
+    ``,
+    `## Review comments`,
     ``,
   ].join("\n");
+}
 
-  const overallComments = comments.filter((c) => c.type === "overall");
-  const restComments = comments.filter((c) => c.type !== "overall");
+export function getPrReviewDraftPath(workspaceRoot: string): string {
+  return path.join(workspaceRoot, ".agent", "pr-review.md");
+}
 
-  const parts: string[] = [header];
-  for (const c of overallComments) {
-    parts.push(formatCommentBlock(c));
-    parts.push("");
+export function parseDiffHunks(diff: string): Map<string, DiffHunk[]> {
+  const hunks = new Map<string, DiffHunk[]>();
+  const lines = diff.split("\n");
+  let currentPath: string | null = null;
+  let currentHunk: DiffHunk | null = null;
+  let nextLineNo = 0;
+
+  for (const line of lines) {
+    if (line.startsWith("diff --git")) {
+      currentPath = null;
+      currentHunk = null;
+      continue;
+    }
+    if (line.startsWith("+++ /dev/null")) {
+      currentPath = null;
+      currentHunk = null;
+      continue;
+    }
+    const plusPlus = line.match(/^\+\+\+ b\/(.+)$/);
+    if (plusPlus) {
+      currentPath = plusPlus[1];
+      currentHunk = null;
+      continue;
+    }
+
+    const hunkHeader = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/);
+    if (hunkHeader && currentPath) {
+      const start = parseInt(hunkHeader[1], 10);
+      const len = hunkHeader[2] ? parseInt(hunkHeader[2], 10) : 1;
+      currentHunk = {
+        newStart: start,
+        newEnd: start + len - 1,
+        newSideLines: new Set(),
+      };
+      let list = hunks.get(currentPath);
+      if (!list) {
+        list = [];
+        hunks.set(currentPath, list);
+      }
+      list.push(currentHunk);
+      nextLineNo = start;
+      continue;
+    }
+
+    if (!currentHunk) continue;
+
+    if (line.startsWith("+") && !line.startsWith("+++")) {
+      currentHunk.newSideLines.add(nextLineNo);
+      nextLineNo++;
+    } else if (line.startsWith(" ")) {
+      currentHunk.newSideLines.add(nextLineNo);
+      nextLineNo++;
+    }
   }
-  parts.push(insertCommentsIntoDiff(diff, restComments));
-
-  return parts.join("\n");
+  return hunks;
 }
 
-export function getPrReviewDraftPath(
-  workspaceRoot: string,
-  owner: string,
-  repo: string,
-  number: number,
-): string {
-  return path.join(
-    workspaceRoot,
-    ".agent",
-    `pr-review-${owner}-${repo}-${number}.md`,
-  );
+export function validateCommentsInScope(
+  comments: ReviewComment[],
+  hunks: Map<string, DiffHunk[]>,
+): string[] {
+  const errors: string[] = [];
+  comments.forEach((c, i) => {
+    if (c.type !== "inline") return;
+    const label = getCommentLabel(c, i);
+    if (!c.path || c.line == null) {
+      errors.push(`${label}: malformed inline comment (missing path or line)`);
+      return;
+    }
+    const fileHunks = hunks.get(c.path);
+    if (!fileHunks || fileHunks.length === 0) {
+      errors.push(`${label}: ${c.path} is not in the PR diff`);
+      return;
+    }
+    if (c.startLine != null) {
+      const start = c.startLine;
+      const end = c.line;
+      if (start > end) {
+        errors.push(`${label}: start line ${start} > end line ${end}`);
+        return;
+      }
+      const containing = fileHunks.find(
+        (h) => start >= h.newStart && end <= h.newEnd,
+      );
+      if (!containing) {
+        errors.push(
+          `${label}: range ${start}-${end} crosses a hunk boundary (GitHub requires a single hunk)`,
+        );
+        return;
+      }
+      for (let n = start; n <= end; n++) {
+        if (!containing.newSideLines.has(n)) {
+          errors.push(
+            `${label}: line ${n} is not an added or context line in the hunk`,
+          );
+          return;
+        }
+      }
+    } else {
+      const found = fileHunks.some((h) => h.newSideLines.has(c.line!));
+      if (!found) {
+        errors.push(
+          `${label}: line ${c.line} is not an added or context line in any hunk`,
+        );
+      }
+    }
+  });
+  return errors;
 }
 
-export function getPrReviewPayloadPath(
-  workspaceRoot: string,
-  owner: string,
-  repo: string,
-  number: number,
-): string {
-  return path.join(
-    workspaceRoot,
-    ".agent",
-    `pr-review-${owner}-${repo}-${number}-payload.json`,
-  );
+
+export function validateInlineCommentsHaveRationale(
+  comments: ReviewComment[],
+): string[] {
+  const errors: string[] = [];
+  comments.forEach((c, i) => {
+    if (c.type !== "inline") return;
+    const label = getCommentLabel(c, i);
+    const lines = c.body.split("\n");
+    const fenceIdx = lines.findIndex((l) => /^\s*```/.test(l));
+    const proseLines = fenceIdx === -1 ? lines : lines.slice(0, fenceIdx);
+    const hasProse = proseLines.some((l) => l.trim().length > 0);
+    if (!hasProse) {
+      errors.push(
+        `${label}: inline comment is missing a rationale line above the suggestion (explain WHY the fix is needed, not just WHAT changed)`,
+      );
+    }
+  });
+  return errors;
 }

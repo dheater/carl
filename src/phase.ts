@@ -1,6 +1,6 @@
 import { getGitStatus, getCurrentBranch } from "./git";
 import { getPhaseOutputPath } from "./editor";
-import type { PrMetadata } from "./github";
+
 import { randomUUID } from "crypto";
 import * as path from "path";
 import * as fs from "fs";
@@ -29,7 +29,6 @@ type CarlConfig = {
     developer?: string;
     reviewer?: string;
     chat?: string;
-    "pr-review"?: string;
   };
 };
 
@@ -38,13 +37,19 @@ export const DEFAULT_MODELS: Record<string, string> = {
   developer: "sonnet4.6",
   reviewer: "gpt5.4",
   chat: "gpt5.4",
-  "pr-review": "code-review",
+  "pr-reviewer": "gpt5.4",
 };
 
-function loadCarlConfig(workspaceRoot: string): CarlConfig {
+function loadCarlConfig(
+  workspaceRoot: string,
+  createIfMissing = true,
+): CarlConfig {
   const carlDir = path.join(workspaceRoot, EVENTS_LOG_DIR);
   const configPath = path.join(carlDir, "config.json");
   if (!fs.existsSync(configPath)) {
+    if (!createIfMissing) {
+      return {};
+    }
     const defaults: CarlConfig = { models: { ...DEFAULT_MODELS } };
     fs.mkdirSync(carlDir, { recursive: true });
     fs.writeFileSync(
@@ -76,7 +81,7 @@ function loadSkillFile(name: string): string {
 
 function getPhaseModel(phase: string, workspaceRoot?: string): string {
   if (workspaceRoot) {
-    const config = loadCarlConfig(workspaceRoot);
+    const config = loadCarlConfig(workspaceRoot, phase !== "pr-reviewer");
     const override =
       config.models?.[phase as keyof NonNullable<CarlConfig["models"]>];
     if (override) return override;
@@ -85,7 +90,7 @@ function getPhaseModel(phase: string, workspaceRoot?: string): string {
 }
 
 function shouldAllowIndexing(phaseName: string): boolean {
-  return phaseName !== "chat" && phaseName !== "pr-review";
+  return phaseName !== "chat";
 }
 
 function extractPromptResponseText(
@@ -125,17 +130,19 @@ function logTimingDuration(
   command: string | undefined,
   meta?: Record<string, any>,
 ): void {
-  writeTimingEvent(workspaceRoot, {
-    timestamp: new Date().toISOString(),
-    run_id: runId,
-    event,
-    subject,
-    duration_ms: durationMs,
-    phase,
-    model,
-    command,
-    meta,
-  });
+  if (phase !== "pr-reviewer") {
+    writeTimingEvent(workspaceRoot, {
+      timestamp: new Date().toISOString(),
+      run_id: runId,
+      event,
+      subject,
+      duration_ms: durationMs,
+      phase,
+      model,
+      command,
+      meta,
+    });
+  }
   console.log(`[Timing] ${event} duration ${durationMs}ms ${subject}`);
 }
 
@@ -207,38 +214,6 @@ export function buildSkillInstruction(
   return instruction;
 }
 
-export function buildPrReviewInstruction(
-  owner: string,
-  repo: string,
-  metadata: PrMetadata,
-  diff: string,
-): string {
-  const commitLines = metadata.commits
-    .map((c, i) => `${i + 1}. ${c.sha.slice(0, 8)} — ${c.author}: ${c.message}`)
-    .join("\n");
-
-  const sections = [
-    `# PR #${metadata.number}: ${metadata.title}`,
-    [
-      `- Repository: ${owner}/${repo}`,
-      `- Base: ${metadata.baseRef} ← ${metadata.headRef}`,
-      `- Head SHA: ${metadata.headSha.slice(0, 8)}`,
-      `- State: ${metadata.state}`,
-    ].join("\n"),
-  ];
-
-  if (metadata.body && metadata.body.trim()) {
-    sections.push(`## PR description\n\n${metadata.body.trim()}`);
-  }
-
-  sections.push(
-    `## Commits (${metadata.commits.length} commit(s) — context only, do not review individually)\n\n${commitLines}`,
-  );
-
-  sections.push(`## Cumulative diff (merge-base → head)\n\n\`\`\`diff\n${diff}\n\`\`\``);
-
-  return sections.join("\n\n");
-}
 
 function writePhaseOutput(
   phaseName: string,
@@ -246,6 +221,9 @@ function writePhaseOutput(
   phaseOutput: string,
   workspaceRoot: string,
 ): void {
+  if (phaseName === "pr-reviewer") {
+    return;
+  }
   const outputPath = getPhaseOutputPath(workspaceRoot, phaseName, status);
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
   if (phaseName === "architect" && status === "success" && fs.existsSync(outputPath)) {
@@ -308,7 +286,6 @@ const PHASE_TIMEOUT_MS: Record<string, number> = {
   developer: 14 * 60 * 1000,
   reviewer: 6 * 60 * 1000,
   architect: 12 * 60 * 1000,
-  "pr-review": 13 * 60 * 1000,
 };
 
 function writeTimeoutDiagnostic(
@@ -320,6 +297,9 @@ function writeTimeoutDiagnostic(
   elapsedMs: number,
   sessionLog: string[],
 ): void {
+  if (phaseName === "pr-reviewer") {
+    return;
+  }
   try {
     const dir = path.join(workspaceRoot, ".agent", "notes");
     fs.mkdirSync(dir, { recursive: true });
@@ -440,6 +420,7 @@ export async function runPhase(
         if (timeoutMs) {
           const timeoutPromise = new Promise<never>((_, reject) => {
             timeoutHandle = setTimeout(() => {
+              const writesTimeoutDiagnostic = phaseName !== "pr-reviewer";
               writeTimeoutDiagnostic(
                 workspaceRoot,
                 phaseName,
@@ -452,7 +433,9 @@ export async function runPhase(
               client.cancel().catch(() => {});
               reject(
                 new Error(
-                  `${phaseName} exceeded ${timeoutMs / 60000}m timeout — cancelled. Diagnostic written to .agent/notes/timeout-${phaseName}-${runId}.md`,
+                  writesTimeoutDiagnostic
+                    ? `${phaseName} exceeded ${timeoutMs / 60000}m timeout — cancelled. Diagnostic written to .agent/notes/timeout-${phaseName}-${runId}.md`
+                    : `${phaseName} exceeded ${timeoutMs / 60000}m timeout — cancelled. Re-run \`carl ${command}\` to retry.`,
                 ),
               );
             }, timeoutMs);

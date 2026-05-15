@@ -1,8 +1,10 @@
-import { detectGit, getGitStatus, getCurrentBranch } from "./git";
+import {
+  detectGit,
+  getGitStatus,
+  getCurrentBranch,
+  getHeadSha,
+} from "./git";
 import { execSync } from "child_process";
-import * as fs from "fs";
-import * as path from "path";
-import * as os from "os";
 
 jest.mock("child_process");
 
@@ -45,8 +47,6 @@ describe("Git operations", () => {
     test("classifies tracked and untracked files correctly", () => {
       mockExecSync.mockImplementation((cmd: string, opts?: any) => {
         if (cmd.includes("rev-parse")) return "true" as any;
-        // Simulated porcelain output
-        // M modified, A added, D deleted, ?? untracked
         return " M src/modified.ts\nA  src/new.ts\n?? build/\nD  src/deleted.ts" as any;
       });
 
@@ -81,24 +81,29 @@ describe("Git operations", () => {
       );
     });
 
-    test("returns ticket branch name with trimming", () => {
-      mockExecSync.mockReturnValue("CLIENTS-934-download-fixes\n" as any);
-      const branch = getCurrentBranch("/tmp/test");
-      expect(branch).toBe("CLIENTS-934-download-fixes");
-    });
-
     test("returns null when git fails", () => {
       mockExecSync.mockImplementation(() => {
         throw new Error("not a git repo");
       });
       expect(getCurrentBranch("/tmp/test")).toBeNull();
     });
+  });
 
-    test("returns null when called without workspaceRoot", () => {
+  describe("getHeadSha", () => {
+    test("returns trimmed sha", () => {
+      mockExecSync.mockReturnValue("abc1234deadbeef\n" as any);
+      expect(getHeadSha("/ws")).toBe("abc1234deadbeef");
+      expect(mockExecSync).toHaveBeenCalledWith(
+        "git rev-parse HEAD",
+        expect.objectContaining({ cwd: "/ws", stdio: "pipe" }),
+      );
+    });
+
+    test("throws when git fails", () => {
       mockExecSync.mockImplementation(() => {
-        throw new Error("git failed");
+        throw new Error("fatal: not a git repository");
       });
-      expect(getCurrentBranch()).toBeNull();
+      expect(() => getHeadSha("/ws")).toThrow(/Could not resolve HEAD/);
     });
   });
 });

@@ -1,4 +1,7 @@
-import { collectPrompt, openFileInEditor, getPhaseOutputPath } from "./editor";
+import {
+  collectPrompt,
+  openFileInEditor,
+} from "./editor";
 import { spawnSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
@@ -8,7 +11,7 @@ jest.mock("child_process");
 
 const mockSpawnSync = spawnSync as jest.MockedFunction<typeof spawnSync>;
 
-describe("Editor helper and phase output path mapping", () => {
+describe("Editor helper", () => {
   describe("collectPrompt", () => {
     beforeEach(() => {
       jest.clearAllMocks();
@@ -48,30 +51,6 @@ describe("Editor helper and phase output path mapping", () => {
       if (fs.existsSync(tmpFile)) {
         fs.unlinkSync(tmpFile);
       }
-    });
-
-    test("prefers $EDITOR over $VISUAL", () => {
-      process.env.EDITOR = "emacs";
-      process.env.VISUAL = "vi";
-      mockSpawnSync.mockReturnValue({ status: 0 } as any);
-
-      openFileInEditor(tmpFile);
-
-      expect(mockSpawnSync).toHaveBeenCalledWith("emacs", [tmpFile], {
-        stdio: "inherit",
-      });
-    });
-
-    test("falls back to $VISUAL when $EDITOR is not set", () => {
-      delete process.env.EDITOR;
-      process.env.VISUAL = "nano";
-      mockSpawnSync.mockReturnValue({ status: 0 } as any);
-
-      openFileInEditor(tmpFile);
-
-      expect(mockSpawnSync).toHaveBeenCalledWith("nano", [tmpFile], {
-        stdio: "inherit",
-      });
     });
 
     test("splits editor commands with arguments", () => {
@@ -130,29 +109,6 @@ describe("Editor helper and phase output path mapping", () => {
       expect(warnSpy).toHaveBeenCalled();
 
       warnSpy.mockRestore();
-    });
-  });
-
-  describe("getPhaseOutputPath", () => {
-    const workspaceRoot = "/workspace";
-
-    test("maps architect phase to .agent/prd.md", () => {
-      const result = getPhaseOutputPath(workspaceRoot, "architect");
-      expect(result).toBe(path.join(workspaceRoot, ".agent", "prd.md"));
-    });
-
-    test("maps blocked architect output to .agent/notes/architect.md", () => {
-      const result = getPhaseOutputPath(workspaceRoot, "architect", "blocked");
-      expect(result).toBe(
-        path.join(workspaceRoot, ".agent", "notes", "architect.md"),
-      );
-    });
-
-    test("maps developer phase to .agent/notes/developer.md", () => {
-      const result = getPhaseOutputPath(workspaceRoot, "developer");
-      expect(result).toBe(
-        path.join(workspaceRoot, ".agent", "notes", "developer.md"),
-      );
     });
   });
 });

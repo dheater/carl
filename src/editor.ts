@@ -62,6 +62,22 @@ function runEditor(filePath: string) {
   };
 }
 
+function throwIfEditorFailed(
+  editorCommand: string,
+  result: ReturnType<typeof spawnSync>,
+): void {
+  if (result.error) {
+    throw new Error(
+      `Failed to open editor '${editorCommand}': ${result.error.message}`,
+    );
+  }
+  if (result.status !== 0) {
+    throw new Error(
+      `Editor '${editorCommand}' exited with status ${result.status}.`,
+    );
+  }
+}
+
 export function collectPrompt(
   header = "# What would you like to work on?",
 ): string | null {
@@ -73,11 +89,7 @@ export function collectPrompt(
 
   try {
     const { editorCommand, result } = runEditor(tmpFile);
-    if (result.error) {
-      throw new Error(
-        `Failed to open editor '${editorCommand}': ${result.error.message}`,
-      );
-    }
+    throwIfEditorFailed(editorCommand, result);
 
     const content = fs.readFileSync(tmpFile, "utf-8");
     const response = content
@@ -92,7 +104,6 @@ export function collectPrompt(
   }
 }
 
-/** Open a file in the configured editor. Logs warnings but does not throw. */
 export function openFileInEditor(filePath: string): void {
   const { result } = runEditor(filePath);
 
@@ -104,11 +115,6 @@ export function openFileInEditor(filePath: string): void {
   }
 }
 
-/**
- * Map a phase name and workspace root to the output file path.
- * architect success → .agent/prd.md
- * blocked architect + all other phases → .agent/notes/<phase>.md
- */
 export function getPhaseOutputPath(
   workspaceRoot: string,
   phaseName: string,

@@ -5,27 +5,32 @@ import {
   DEFAULT_MODELS,
   parsePrdPhases,
   markPhaseComplete,
-  buildPrReviewInstruction,
   NetworkUnavailableError,
 } from "./phase";
-import { collectPrompt, openFileInEditor, getPhaseOutputPath } from "./editor";
+import {
+  collectPrompt,
+  openFileInEditor,
+  getPhaseOutputPath,
+} from "./editor";
 import {
   parsePrUrl,
   checkGhCli,
   checkRepoMatch,
   fetchPrMetadata,
   fetchPrDiff,
-  fetchPrHeadSha,
-  submitPrReview,
+  checkNotForkPr,
+  createPendingReview,
 } from "./github";
 import {
-  parsePrReviewOutput,
-  buildPrReviewDraft,
-  parsePrReviewDraft,
   getPrReviewDraftPath,
-  getPrReviewPayloadPath,
-  type PrReviewPayload,
+  buildPrReviewDraft,
+  parsePrReviewDraftComments,
+  parseDiffHunks,
+  validateCommentsInScope,
+  validateInlineCommentsHaveRationale,
+  type ReviewComment,
 } from "./pr-review-draft";
+import { getGitStatus, getHeadSha } from "./git";
 import { red } from "./colors";
 import * as fs from "fs";
 import * as path from "path";
@@ -416,128 +421,155 @@ async function cmdPrReview(
   workspaceRoot: string,
   url: string,
   model?: string,
-  noPub?: boolean,
 ): Promise<void> {
+  if (!url.startsWith("http://") && !url.startsWith("https://")) {
+    throw new Error(
+      `\`carl pr-review\` now requires a GitHub PR URL.\n` +
+        `Usage: carl pr-review https://github.com/owner/repo/pull/NUMBER\n` +
+        `(received: ${JSON.stringify(url)})`,
+    );
+  }
+
   checkGhCli();
 
   const { owner, repo, number } = parsePrUrl(url);
+
   checkRepoMatch(workspaceRoot, owner, repo);
 
   console.log(`Fetching PR metadata for ${owner}/${repo}#${number}...`);
   const metadata = fetchPrMetadata(owner, repo, number);
+  checkNotForkPr(metadata, owner, repo);
 
-  console.log(`Fetching diff for ${owner}/${repo}#${number}...`);
-  const diff = fetchPrDiff(owner, repo, number);
+  const localHead = getHeadSha(workspaceRoot);
+  if (localHead !== metadata.headSha) {
+    throw new Error(
+      `Local HEAD (${localHead.slice(0, 8)}) does not match PR head (${metadata.headSha.slice(0, 8)}).\n` +
+        `Check out the PR branch at the correct commit:\n` +
+        `  git fetch origin && git checkout ${metadata.headSha}`,
+    );
+  }
 
-  console.log(`PR #${metadata.number}: ${metadata.title}`);
-  console.log(
-    `  ${metadata.headRef} → ${metadata.baseRef} (${metadata.commits.length} commit(s), head ${metadata.headSha.slice(0, 8)})`,
+  const driftedFiles = getGitStatus(workspaceRoot).trackedChanged.filter(
+    (file) => file !== ".agent" && !file.startsWith(".agent/"),
+  );
+  if (driftedFiles.length > 0) {
+    throw new Error(
+      `Local checkout has tracked changes outside .agent and may not match the PR head cleanly.\n` +
+        `Revert or stash these files before reviewing:\n` +
+        driftedFiles.map((file) => `  - ${file}`).join("\n"),
+    );
+  }
+
+  console.log(`Fetching PR diff...`);
+  const prDiff = fetchPrDiff(owner, repo, number);
+  if (!prDiff.trim()) {
+    throw new Error(`No diff for ${owner}/${repo}#${number}. Nothing to review.`);
+  }
+
+  const agentDir = path.join(workspaceRoot, ".agent");
+  fs.mkdirSync(agentDir, { recursive: true });
+  const draftPath = getPrReviewDraftPath(workspaceRoot);
+  const draftRel = path.relative(workspaceRoot, draftPath);
+  const prIdentity = `${owner}/${repo}#${number}`;
+  fs.writeFileSync(
+    draftPath,
+    buildPrReviewDraft(prDiff, prIdentity, metadata.headSha),
+    "utf-8",
   );
 
-  const prompt = buildPrReviewInstruction(owner, repo, metadata, diff);
-  const result = await runPhase(workspaceRoot, "pr-review", "pr-review", prompt, model);
-  const reviewComments = parsePrReviewOutput(result.response);
-  const draftContent = buildPrReviewDraft(diff, reviewComments, metadata, owner, repo);
-  const draftPath = getPrReviewDraftPath(workspaceRoot, owner, repo, number);
-  fs.mkdirSync(path.dirname(draftPath), { recursive: true });
-  fs.writeFileSync(draftPath, draftContent, "utf-8");
-  const draftRelPath = path.relative(workspaceRoot, draftPath);
-  console.log(`Review draft written to ${draftRelPath}`);
+  function assertDraftExists(): void {
+    if (!fs.existsSync(draftPath)) {
+      throw new Error(
+        `Draft ${draftRel} is missing.\n` +
+          `Reset .agent and re-run: carl pr-review ${url}`,
+      );
+    }
+  }
 
-  openFileInEditor(draftPath);
-  const editedContent = fs.existsSync(draftPath)
-    ? fs.readFileSync(draftPath, "utf-8")
-    : draftContent;
-  const submittedComments = parsePrReviewDraft(editedContent);
+  const initialPrompt = [
+    `Review GitHub PR ${prIdentity}.`,
+    `The draft file is at \`${draftRel}\` and contains the full PR diff.`,
+    `Append \`||| COMMENT\` blocks under \`## Review comments\` per the pr-reviewer skill.`,
+    `Inline comments must reference a path + new-side line that appears in a diff hunk; multi-line ranges must lie within a single hunk.`,
+    `Every inline comment must start with a rationale line explaining WHY the change matters; the reader is the PR author.`,
+    `Write prose comments only — do not write suggestion blocks.`,
+    `Read any workspace file you need for context. Do not modify any file outside the draft.`,
+  ].join("\n");
 
-  const payload: PrReviewPayload = {
+  await runPhase(workspaceRoot, "pr-reviewer", "pr-review", initialPrompt, model);
+  assertDraftExists();
+
+  const hunks = parseDiffHunks(prDiff);
+  function loadCommentsAndErrors(): {
+    comments: ReviewComment[];
+    errors: string[];
+  } {
+    try {
+      const comments = parsePrReviewDraftComments(fs.readFileSync(draftPath, "utf-8"));
+      return {
+        comments,
+        errors: [
+          ...validateCommentsInScope(comments, hunks),
+          ...validateInlineCommentsHaveRationale(comments),
+        ],
+      };
+    } catch (err: any) {
+      return {
+        comments: [],
+        errors: [err?.message ?? String(err)],
+      };
+    }
+  }
+
+  let { comments, errors } = loadCommentsAndErrors();
+
+  if (errors.length > 0) {
+    const rerunPrompt = [
+      `Some review comments in \`${draftRel}\` will be rejected.`,
+      ``,
+      `Errors:`,
+      ...errors.map((e) => `- ${e}`),
+      ``,
+      `Inline comments must reference a path + new-side line that appears in a PR diff hunk (added \`+\` or context line); multi-line ranges must lie within a single hunk.`,
+      `Inline comments must also start with a rationale line that explains WHY the change matters.`,
+      ``,
+      `Edit \`${draftRel}\`: remove or fix only the failing comments and keep the valid ones. Do not modify any other file.`,
+    ].join("\n");
+    await runPhase(workspaceRoot, "pr-reviewer", "pr-review", rerunPrompt, model);
+    assertDraftExists();
+    ({ comments, errors } = loadCommentsAndErrors());
+  }
+
+  if (errors.length > 0) {
+    throw new Error(
+      `Invalid review comments remain in ${draftRel}:\n` +
+        errors.map((e) => `  - ${e}`).join("\n") +
+        `\nEdit ${draftRel} by hand and re-run: carl pr-review ${url}`,
+    );
+  }
+
+  if (comments.length === 0) {
+    throw new Error(
+      `No \`||| COMMENT\` blocks found in ${draftRel}. Add comments or delete the draft.`,
+    );
+  }
+
+  console.log(
+    `Creating pending review on ${prIdentity} (${comments.length} comment(s))...`,
+  );
+  const reviewId = createPendingReview(
     owner,
     repo,
     number,
-    headSha: metadata.headSha,
-    comments: submittedComments,
-  };
-  const payloadPath = getPrReviewPayloadPath(workspaceRoot, owner, repo, number);
-  fs.writeFileSync(payloadPath, JSON.stringify(payload, null, 2) + "\n", "utf-8");
-  const payloadRelPath = path.relative(workspaceRoot, payloadPath);
-
-  if (submittedComments.length === 0) {
-    console.log(`No comments extracted. Payload written to ${payloadRelPath}`);
-    return;
-  }
-
-  console.log(
-    `Extracted ${submittedComments.length} comment(s). Payload saved to ${payloadRelPath}`,
+    metadata.headSha,
+    comments,
   );
-
-  if (noPub) {
-    console.log(`Skipping GitHub upload (--no-pub).`);
-    return;
-  }
-
-  const currentHeadSha = fetchPrHeadSha(owner, repo, number);
-  if (currentHeadSha !== metadata.headSha) {
-    throw new Error(
-      `PR ${owner}/${repo}#${number} changed after review was generated.\n` +
-        `Review SHA: ${metadata.headSha.slice(0, 8)}, current SHA: ${currentHeadSha.slice(0, 8)}\n` +
-        `Extracted comments saved to ${payloadRelPath}. Regenerate the review with: carl pr-review ${url}`,
-    );
-  }
-
   console.log(
-    `Submitting ${submittedComments.length} comment(s) to ${owner}/${repo}#${number}...`,
+    `Pending review created (id: ${reviewId}).\n` +
+      `Open the PR on GitHub and submit it.`,
   );
-  try {
-    submitPrReview(owner, repo, number, metadata.headSha, submittedComments);
-    console.log(`Review submitted successfully.`);
-  } catch (err: any) {
-    throw new Error(
-      `${err.message}\n` +
-        `Review draft remains saved at ${draftRelPath}.\n` +
-        `Extracted comments remain saved at ${payloadRelPath}.\n` +
-        `To retry: carl pr-review-submit ${url}`,
-    );
-  }
 }
 
-async function cmdPrReviewSubmit(
-  workspaceRoot: string,
-  url: string,
-): Promise<void> {
-  checkGhCli();
-
-  const { owner, repo, number } = parsePrUrl(url);
-  const payloadPath = getPrReviewPayloadPath(workspaceRoot, owner, repo, number);
-
-  if (!fs.existsSync(payloadPath)) {
-    throw new Error(
-      `No saved payload found for ${owner}/${repo}#${number}.\n` +
-        `Run: carl pr-review ${url}`,
-    );
-  }
-
-  const payload: PrReviewPayload = JSON.parse(fs.readFileSync(payloadPath, "utf-8"));
-
-  if (payload.comments.length === 0) {
-    console.log(`Saved payload for ${owner}/${repo}#${number} has no comments. Nothing to submit.`);
-    return;
-  }
-
-  const currentHeadSha = fetchPrHeadSha(owner, repo, number);
-  if (currentHeadSha !== payload.headSha) {
-    throw new Error(
-      `PR ${owner}/${repo}#${number} changed since payload was saved.\n` +
-        `Payload SHA: ${payload.headSha.slice(0, 8)}, current SHA: ${currentHeadSha.slice(0, 8)}\n` +
-        `Regenerate the review with: carl pr-review ${url}`,
-    );
-  }
-
-  console.log(
-    `Submitting ${payload.comments.length} comment(s) to ${owner}/${repo}#${number}...`,
-  );
-  submitPrReview(owner, repo, number, payload.headSha, payload.comments);
-  console.log(`Review submitted successfully.`);
-}
 
 function cmdReset(workspaceRoot: string): void {
   const agentDir = path.join(workspaceRoot, ".agent");
@@ -577,19 +609,13 @@ function usage(): void {
   console.error(
     "  code [<file>]  Read prompt from file or open editor; run the implementation session",
   );
-  console.error("  review        Run reviewer once");
+  console.error("  review        Run reviewer once (your own local changes)");
   console.error(
     `  chat [<file>] Read prompt from file or open editor; run the general-purpose chat skill (default: ${DEFAULT_MODELS.chat})`,
   );
   console.error("  reset         Clear .agent/");
   console.error(
-    "  pr-review [--no-pub] <URL>  Fetch and review a GitHub PR (requires gh CLI)",
-  );
-  console.error(
-    "    --no-pub  Skip uploading comments to GitHub",
-  );
-  console.error(
-    "  pr-review-submit <URL>      Re-submit a saved review payload (recovery after failure)",
+    "  pr-review <github-pr-url>  Fetch PR diff, draft review comments in .agent/pr-review.md, and upload as a pending GitHub review (requires gh CLI)",
   );
   console.error("");
   console.error("Config: .carl/config.json (optional)");
@@ -651,25 +677,11 @@ async function main(): Promise<void> {
         cmdReset(workspaceRoot);
         break;
       case "pr-review": {
-        const noPub = args.includes("--no-pub");
-        const prArgs = args.filter((a) => a !== "--no-pub");
-        if (prArgs.length !== 2) {
-          console.error(
-            "Usage: carl [--model <model>] pr-review [--no-pub] <github-pr-url>",
-          );
-          process.exit(1);
-        }
-        await cmdPrReview(workspaceRoot, prArgs[1], model, noPub);
-        break;
-      }
-      case "pr-review-submit": {
         if (args.length !== 2) {
-          console.error(
-            "Usage: carl pr-review-submit <github-pr-url>",
-          );
+          console.error("Usage: carl pr-review <github-pr-url>");
           process.exit(1);
         }
-        await cmdPrReviewSubmit(workspaceRoot, args[1]);
+        await cmdPrReview(workspaceRoot, args[1], model);
         break;
       }
       default:

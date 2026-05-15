@@ -1,27 +1,16 @@
 import { execSync } from "child_process";
+import type { ReviewComment } from "./pr-review-draft";
 
-export interface PrUrl {
+interface PrUrl {
   owner: string;
   repo: string;
   number: number;
 }
 
-export interface CommitInfo {
-  sha: string;
-  message: string;
-  author: string;
-}
-
 export interface PrMetadata {
   number: number;
-  title: string;
-  body: string;
   headSha: string;
-  baseSha: string;
-  baseRef: string;
-  headRef: string;
-  state: string;
-  commits: CommitInfo[];
+  headRepoFullName: string;
 }
 
 export function parsePrUrl(url: string): PrUrl {
@@ -102,12 +91,18 @@ export function fetchPrMetadata(
   repo: string,
   number: number,
 ): PrMetadata {
-  let prJson: string;
   try {
-    prJson = execSync(`gh api repos/${owner}/${repo}/pulls/${number}`, {
+    const prJson = execSync(`gh api repos/${owner}/${repo}/pulls/${number}`, {
       stdio: "pipe",
       encoding: "utf-8",
     });
+    const pr = JSON.parse(prJson);
+
+    return {
+      number: pr.number,
+      headSha: pr.head.sha,
+      headRepoFullName: pr.head.repo?.full_name ?? "",
+    };
   } catch (err: any) {
     const stderr: string = err.stderr ?? "";
     if (stderr.includes("Not Found") || stderr.includes("Could not resolve")) {
@@ -130,37 +125,21 @@ export function fetchPrMetadata(
       `Failed to fetch PR metadata for ${owner}/${repo}#${number}: ${stderr || err.message}`,
     );
   }
+}
 
-  let commitsJson: string;
-  try {
-    commitsJson = execSync(
-      `gh api repos/${owner}/${repo}/pulls/${number}/commits`,
-      { stdio: "pipe", encoding: "utf-8" },
-    );
-  } catch (err: any) {
+export function checkNotForkPr(
+  metadata: PrMetadata,
+  owner: string,
+  repo: string,
+): void {
+  const expected = `${owner}/${repo}`.toLowerCase();
+  if (!metadata.headRepoFullName || metadata.headRepoFullName.toLowerCase() !== expected) {
     throw new Error(
-      `Failed to fetch commits for ${owner}/${repo}#${number}: ${err.message}`,
+      `Fork PRs are not supported.\n` +
+        `PR source is from ${metadata.headRepoFullName || "an unknown fork"}, expected ${owner}/${repo}.\n` +
+        `Ensure the PR source branch is pushed directly to ${owner}/${repo}.`,
     );
   }
-
-  const pr = JSON.parse(prJson);
-  const commits = JSON.parse(commitsJson);
-
-  return {
-    number: pr.number,
-    title: pr.title,
-    body: pr.body ?? "",
-    headSha: pr.head.sha,
-    baseSha: pr.base.sha,
-    baseRef: pr.base.ref,
-    headRef: pr.head.ref,
-    state: pr.state,
-    commits: commits.map((c: any) => ({
-      sha: c.sha,
-      message: c.commit.message,
-      author: c.commit.author?.name ?? c.author?.login ?? "unknown",
-    })),
-  };
 }
 
 export function fetchPrDiff(
@@ -180,102 +159,60 @@ export function fetchPrDiff(
   }
 }
 
-export function fetchPrHeadSha(
-  owner: string,
-  repo: string,
-  number: number,
-): string {
-  try {
-    return execSync(
-      `gh api repos/${owner}/${repo}/pulls/${number} --jq '.head.sha'`,
-      { stdio: "pipe", encoding: "utf-8" },
-    ).trim();
-  } catch (err: any) {
-    throw new Error(
-      `Failed to fetch current head SHA for ${owner}/${repo}#${number}: ${err.message}`,
-    );
-  }
-}
-
-interface SubmitComment {
-  type: "inline" | "file" | "overall";
-  path?: string;
-  line?: number;
-  body: string;
-}
-
-export function submitPrReview(
+export function createPendingReview(
   owner: string,
   repo: string,
   number: number,
   headSha: string,
-  comments: SubmitComment[],
-): void {
+  comments: ReviewComment[],
+): string {
   const inlineComments = comments.filter(
     (c) => c.type === "inline" && c.path && c.line != null,
   );
-  const fileComments = comments.filter((c) => c.type === "file" && c.path);
   const overallComments = comments.filter((c) => c.type === "overall");
-
   const body = overallComments.map((c) => c.body).join("\n\n");
-  const reviewComments = inlineComments.map((c) => ({
-    path: c.path!,
-    line: c.line!,
-    side: "RIGHT",
-    body: c.body,
-  }));
 
-  const reviewPayload = {
+  const apiComments = inlineComments.map((c) => {
+    const comment: Record<string, unknown> = {
+      path: c.path!,
+      line: c.line!,
+      side: "RIGHT",
+      body: c.body,
+    };
+    if (c.startLine != null && c.startLine !== c.line) {
+      comment.start_line = c.startLine;
+      comment.start_side = "RIGHT";
+    }
+    return comment;
+  });
+
+  // No "event" field → review is created as PENDING (not auto-submitted).
+  const reviewPayload: Record<string, unknown> = {
     commit_id: headSha,
-    body,
-    event: "COMMENT",
-    comments: reviewComments,
+    comments: apiComments,
   };
+  if (body) reviewPayload.body = body;
 
-  if (body || reviewComments.length > 0) {
-    try {
-      execSync(
-        `gh api repos/${owner}/${repo}/pulls/${number}/reviews -X POST --input -`,
-        {
-          input: JSON.stringify(reviewPayload),
-          stdio: ["pipe", "pipe", "pipe"],
-          encoding: "utf-8",
-        },
-      );
-    } catch (err: any) {
-      throw new Error(
-        `Failed to submit review for ${owner}/${repo}#${number}: ${err.stderr?.trim() || err.message}`,
-      );
-    }
-  }
-
-  const failedFileComments: string[] = [];
-  for (const c of fileComments) {
-    try {
-      const filePayload = {
-        body: c.body,
-        commit_id: headSha,
-        path: c.path!,
-        subject_type: "file",
-      };
-      execSync(
-        `gh api repos/${owner}/${repo}/pulls/${number}/comments -X POST --input -`,
-        {
-          input: JSON.stringify(filePayload),
-          stdio: ["pipe", "pipe", "pipe"],
-          encoding: "utf-8",
-        },
-      );
-    } catch (err: any) {
-      failedFileComments.push(
-        `${c.path!}: ${err.stderr?.trim() || err.message}`,
-      );
-    }
-  }
-
-  if (failedFileComments.length > 0) {
-    throw new Error(
-      `Failed to submit file-level comment(s) for ${owner}/${repo}#${number}: ${failedFileComments.join("; ")}`,
+  let result: string;
+  try {
+    result = execSync(
+      `gh api repos/${owner}/${repo}/pulls/${number}/reviews -X POST --input -`,
+      {
+        input: JSON.stringify(reviewPayload),
+        stdio: ["pipe", "pipe", "pipe"],
+        encoding: "utf-8",
+      },
     );
+  } catch (err: any) {
+    throw new Error(
+      `Failed to create pending review for ${owner}/${repo}#${number}: ${err.stderr?.trim() || err.message}`,
+    );
+  }
+
+  try {
+    const data = JSON.parse(result);
+    return String(data.id);
+  } catch {
+    return "unknown";
   }
 }
