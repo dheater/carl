@@ -25,6 +25,12 @@ function getCommentLabel(comment: ReviewComment, index: number): string {
   return `overall comment ${index + 1}`;
 }
 
+function getInlineAnchorKey(comment: ReviewComment): string | null {
+  if (comment.type !== "inline" || !comment.path || comment.line == null) return null;
+  const start = comment.startLine != null ? comment.startLine : comment.line;
+  return `${comment.path}:${start}-${comment.line}`;
+}
+
 export function parsePrReviewDraftComments(draft: string): ReviewComment[] {
   const comments: ReviewComment[] = [];
   const lines = draft.split("\n");
@@ -217,6 +223,27 @@ export function validateCommentsInScope(
         );
       }
     }
+  });
+  return errors;
+}
+
+export function validateNoDuplicateInlineComments(
+  comments: ReviewComment[],
+): string[] {
+  const errors: string[] = [];
+  const seen = new Map<string, string>();
+  comments.forEach((comment, index) => {
+    const key = getInlineAnchorKey(comment);
+    if (!key) return;
+    const label = getCommentLabel(comment, index);
+    const first = seen.get(key);
+    if (first) {
+      errors.push(
+        `${label}: duplicates inline anchor ${first} (GitHub review creation rejects multiple comments on the same exact range; merge them or move one)`,
+      );
+      return;
+    }
+    seen.set(key, label);
   });
   return errors;
 }

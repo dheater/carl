@@ -1,6 +1,16 @@
 import { execSync } from "child_process";
 import type { ReviewComment } from "./pr-review-draft";
 
+interface GitHubUser {
+  login?: string;
+}
+
+interface PullRequestReview {
+  id?: number | string;
+  state?: string;
+  user?: GitHubUser;
+}
+
 interface PrUrl {
   owner: string;
   repo: string;
@@ -159,6 +169,38 @@ export function fetchPrDiff(
   }
 }
 
+function findOwnPendingReviewId(
+  owner: string,
+  repo: string,
+  number: number,
+): string | null {
+  try {
+    const viewerJson = execSync("gh api user", {
+      stdio: "pipe",
+      encoding: "utf-8",
+    });
+    const viewer = JSON.parse(viewerJson) as GitHubUser;
+    if (!viewer.login) return null;
+
+    const reviewsJson = execSync(
+      `gh api repos/${owner}/${repo}/pulls/${number}/reviews`,
+      {
+        stdio: "pipe",
+        encoding: "utf-8",
+      },
+    );
+    const reviews = JSON.parse(reviewsJson) as PullRequestReview[];
+    const pending = reviews.find(
+      (review) =>
+        review.state === "PENDING" &&
+        review.user?.login?.toLowerCase() === viewer.login!.toLowerCase(),
+    );
+    return pending?.id != null ? String(pending.id) : null;
+  } catch {
+    return null;
+  }
+}
+
 export function createPendingReview(
   owner: string,
   repo: string,
@@ -204,8 +246,19 @@ export function createPendingReview(
       },
     );
   } catch (err: any) {
+    const stderr = err.stderr?.trim() || err.message;
+    if (stderr.includes("422")) {
+      const pendingReviewId = findOwnPendingReviewId(owner, repo, number);
+      if (pendingReviewId) {
+        throw new Error(
+          `Pending review already exists for ${owner}/${repo}#${number}.\n` +
+            `GitHub rejects creating a second pending review for the same user.\n` +
+            `Submit or delete review ${pendingReviewId} in the PR UI, then re-run: carl pr-review https://github.com/${owner}/${repo}/pull/${number}`,
+        );
+      }
+    }
     throw new Error(
-      `Failed to create pending review for ${owner}/${repo}#${number}: ${err.stderr?.trim() || err.message}`,
+      `Failed to create pending review for ${owner}/${repo}#${number}: ${stderr}`,
     );
   }
 

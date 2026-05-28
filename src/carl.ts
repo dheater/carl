@@ -6,6 +6,8 @@ import {
   parsePrdPhases,
   markPhaseComplete,
   NetworkUnavailableError,
+  buildSkillInstruction,
+  getPhaseModel,
 } from "./phase";
 import {
   collectPrompt,
@@ -27,13 +29,16 @@ import {
   parsePrReviewDraftComments,
   parseDiffHunks,
   validateCommentsInScope,
+  validateNoDuplicateInlineComments,
   validateInlineCommentsHaveRationale,
   type ReviewComment,
 } from "./pr-review-draft";
 import { getGitStatus, getHeadSha } from "./git";
 import { red } from "./colors";
 import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
+import { spawnSync } from "child_process";
 
 function getPendingPromptPath(workspaceRoot: string, command: string): string {
   return path.join(workspaceRoot, ".agent", `pending-${command}-prompt.md`);
@@ -231,7 +236,7 @@ async function cmdCode(
       const next = nextIndex === -1 ? null : phases[nextIndex];
       if (!next) {
         console.log(
-          "[System] All phases complete. Run `carl review` to validate.",
+          "[System] All phases complete. Run `carl verify` to validate.",
         );
         return;
       }
@@ -291,7 +296,7 @@ async function cmdCode(
           );
         } else {
           console.log(
-            "[System] All phases complete. Run `carl review` to validate.",
+            "[System] All phases complete. Run `carl verify` to validate.",
           );
         }
       } else {
@@ -365,55 +370,76 @@ async function cmdReview(workspaceRoot: string, model?: string): Promise<void> {
   if (fs.existsSync(outputPath)) openFileInEditor(outputPath);
 }
 
+async function cmdVerify(workspaceRoot: string, model?: string): Promise<void> {
+  await runPhase(workspaceRoot, "verify", "verify", undefined, model);
+  const outputPath = getPhaseOutputPath(workspaceRoot, "verify");
+  if (fs.existsSync(outputPath)) openFileInEditor(outputPath);
+}
+
 async function cmdChat(
   workspaceRoot: string,
   promptFile?: string,
   model?: string,
 ): Promise<void> {
-  const userInput = collectCommandPrompt(
-    workspaceRoot,
-    "chat",
-    promptFile,
-    "# Message to agent",
-  );
-  if (!userInput) {
+  const initialPrompt = collectCommandPrompt(workspaceRoot, "chat", promptFile);
+  if (!initialPrompt) {
     console.log("No prompt provided. Cancelled.");
     return;
   }
-  let result: PhaseResult;
-  try {
-    result = await runPhase(workspaceRoot, "chat", "chat", userInput, model);
-  } catch (err) {
-    if (err instanceof NetworkUnavailableError)
-      savePendingPrompt(workspaceRoot, "chat", userInput);
-    throw err;
-  }
+  // Clear any stale pending prompt immediately — auggie is a synchronous interactive
+  // session with no network-retry path, so auto-resume would only replay stale input.
   clearPendingPrompt(workspaceRoot, "chat");
 
-  const outputPath = getPhaseOutputPath(workspaceRoot, "chat");
-  const interviewResult = await rerunFromEditedOutput(result, {
-    shouldContinue: () => true,
-    getOutputPath: () => outputPath,
-    rerun: async (editedOutput) => {
-      try {
-        return await runPhase(
-          workspaceRoot,
-          "chat",
-          "chat",
-          editedOutput,
-          model,
-        );
-      } catch (err) {
-        if (err instanceof NetworkUnavailableError)
-          savePendingPrompt(workspaceRoot, "chat", userInput);
-        throw err;
-      }
-    },
-  });
-  result = interviewResult.result;
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-chat-"));
+  const rulesPath = path.join(tempDir, "chat-rules.md");
+  try {
+    const instructionFile = promptFile ?? path.join(tempDir, "initial-prompt.md");
+    if (!promptFile) {
+      fs.writeFileSync(instructionFile, `${initialPrompt}\n`, "utf-8");
+    }
 
-  if (result.status === "blocked") {
-    console.log("[System] Chat response indicated a blocker.");
+    fs.writeFileSync(
+      rulesPath,
+      `${buildSkillInstruction("chat", workspaceRoot, initialPrompt)}\n`,
+      "utf-8",
+    );
+
+    const result = spawnSync(
+      "auggie",
+      [
+        "--workspace-root",
+        workspaceRoot,
+        "--model",
+        model ?? getPhaseModel("chat", workspaceRoot),
+        "--rules",
+        rulesPath,
+        "--instruction-file",
+        instructionFile,
+      ],
+      {
+        cwd: workspaceRoot,
+        stdio: "inherit",
+      },
+    );
+
+    if (result.error) {
+      throw new Error(
+        `[WHAT] Could not start \`auggie\` for \`carl chat\`. [WHY] \`carl chat\` now shells out to the Auggie CLI directly, so chat cannot start without that binary. [HOW] Install Auggie or put it on PATH, then re-run \`carl chat\`. [CONTEXT] workspace=${workspaceRoot} cause=${result.error.message}`,
+      );
+    }
+
+    if (result.signal) {
+      throw new Error(
+        `[WHAT] \`auggie\` exited from signal ${result.signal}. [WHY] The interactive chat session did not finish normally. [HOW] Re-run \`carl chat\`; if this repeats, run \`auggie\` directly to isolate the failure. [CONTEXT] workspace=${workspaceRoot}`,
+      );
+    }
+
+    if ((result.status ?? 1) !== 0) {
+      process.exit(result.status ?? 1);
+      return;
+    }
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
   }
 }
 
@@ -510,6 +536,7 @@ async function cmdPrReview(
         comments,
         errors: [
           ...validateCommentsInScope(comments, hunks),
+          ...validateNoDuplicateInlineComments(comments),
           ...validateInlineCommentsHaveRationale(comments),
         ],
       };
@@ -609,9 +636,10 @@ function usage(): void {
   console.error(
     "  code [<file>]  Read prompt from file or open editor; run the implementation session",
   );
-  console.error("  review        Run reviewer once (your own local changes)");
+  console.error("  review        Run reviewer once (cleanup/refactor your own local changes)");
+  console.error("  verify        Run verifier once (validation evidence for your local changes)");
   console.error(
-    `  chat [<file>] Read prompt from file or open editor; run the general-purpose chat skill (default: ${DEFAULT_MODELS.chat})`,
+    `  chat [<file>] Read prompt from file or open editor; start interactive auggie with Carl chat rules (default: ${DEFAULT_MODELS.chat})`,
   );
   console.error("  reset         Clear .agent/");
   console.error(
@@ -665,6 +693,13 @@ async function main(): Promise<void> {
         break;
       case "review":
         await cmdReview(workspaceRoot, model);
+        break;
+      case "verify":
+        if (args.length > 1) {
+          console.error("Usage: carl [--model <model>] verify");
+          process.exit(1);
+        }
+        await cmdVerify(workspaceRoot, model);
         break;
       case "chat":
         if (args.length > 2) {

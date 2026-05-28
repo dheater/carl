@@ -1,6 +1,11 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { DEFAULT_MODELS } from "./phase";
+
+jest.mock("child_process", () => ({
+  spawnSync: jest.fn(),
+}));
 
 const SAMPLE_DIFF = [
   "diff --git a/src/f.ts b/src/f.ts",
@@ -47,6 +52,7 @@ jest.mock("./editor", () => {
   const actual = jest.requireActual("./editor") as typeof import("./editor");
   return {
     ...actual,
+    collectPrompt: jest.fn(),
     openFileInEditor: jest.fn(),
   };
 });
@@ -63,6 +69,13 @@ describe("carl CLI", () => {
   beforeEach(() => {
     jest.resetModules();
     jest.clearAllMocks();
+    const childProcess = require("child_process") as typeof import("child_process");
+    (childProcess.spawnSync as jest.MockedFunction<typeof childProcess.spawnSync>)
+      .mockReturnValue({ status: 0, signal: null } as any);
+    const editor = require("./editor") as typeof import("./editor");
+    (
+      editor.collectPrompt as jest.MockedFunction<typeof editor.collectPrompt>
+    ).mockReturnValue("ship it");
     promptDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-prompt-"));
     promptFile = path.join(promptDir, "prompt.md");
     fs.writeFileSync(promptFile, "ship it\n", "utf-8");
@@ -172,6 +185,7 @@ describe("carl CLI", () => {
       expect(exitSpy).toHaveBeenCalledWith(1);
       const allErrors = errorSpy.mock.calls.map((call) => String(call[0])).join("\n");
       expect(allErrors).toContain("Usage: carl [--model <model>] <command>");
+      expect(allErrors).toContain("verify        Run verifier once");
       expect(allErrors).toContain("pr-review <github-pr-url>");
     } finally {
       cwdSpy.mockRestore();
@@ -192,15 +206,130 @@ describe("carl CLI", () => {
     );
   });
 
-  test("passes prompt file content to chat", async () => {
-    const mockRunPhase = await runCli(["chat", promptFile]);
+  test("dispatches verify to the verify phase", async () => {
+    const mockRunPhase = await runCli(["verify"]);
     expect(mockRunPhase).toHaveBeenCalledWith(
       "/tmp/carl-workspace",
-      "chat",
-      "chat",
-      "ship it",
+      "verify",
+      "verify",
+      undefined,
       undefined,
     );
+  });
+
+  test("chat shells out to auggie with Carl rules and the configured model", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-chat-cli-"));
+    const reviewPromptFile = path.join(tmpDir, "review.md");
+    const configDir = path.join(tmpDir, ".carl");
+    let rulesContent = "";
+
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(configDir, "config.json"),
+      JSON.stringify({ models: { chat: "configured-chat-model" } }),
+      "utf-8",
+    );
+    fs.writeFileSync(reviewPromptFile, "review code in this repo\n", "utf-8");
+
+    const childProcess = require("child_process") as typeof import("child_process");
+    const mockSpawnSync = childProcess.spawnSync as jest.MockedFunction<
+      typeof childProcess.spawnSync
+    >;
+    mockSpawnSync.mockImplementationOnce((command, args) => {
+      const argList = args as string[];
+      const rulesPath = argList[argList.indexOf("--rules") + 1];
+      rulesContent = fs.readFileSync(rulesPath, "utf-8");
+      return { status: 0, signal: null } as any;
+    });
+
+    const mockRunPhase = await runCli(["chat", reviewPromptFile], { cwd: tmpDir });
+
+    expect(mockRunPhase).not.toHaveBeenCalled();
+    expect(mockSpawnSync).toHaveBeenCalledWith(
+      "auggie",
+      [
+        "--workspace-root",
+        tmpDir,
+        "--model",
+        "configured-chat-model",
+        "--rules",
+        expect.any(String),
+        "--instruction-file",
+        reviewPromptFile,
+      ],
+      expect.objectContaining({ cwd: tmpDir, stdio: "inherit" }),
+    );
+    expect(rulesContent).toContain("# Chat");
+    expect(rulesContent).toContain("# Code Review");
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("chat captures the initial prompt in $EDITOR before starting auggie", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-chat-interactive-"));
+    const childProcess = require("child_process") as typeof import("child_process");
+    const mockSpawnSync = childProcess.spawnSync as jest.MockedFunction<
+      typeof childProcess.spawnSync
+    >;
+    const editor = require("./editor") as typeof import("./editor");
+    const mockCollectPrompt =
+      editor.collectPrompt as jest.MockedFunction<typeof editor.collectPrompt>;
+    const mockOpenFileInEditor =
+      editor.openFileInEditor as jest.MockedFunction<typeof editor.openFileInEditor>;
+    let capturedInstruction = "";
+
+    mockCollectPrompt.mockReturnValueOnce("review code in this repo");
+    mockSpawnSync.mockImplementationOnce((command, args) => {
+      const argList = args as string[];
+      const instructionPath = argList[argList.indexOf("--instruction-file") + 1];
+      capturedInstruction = fs.readFileSync(instructionPath, "utf-8");
+      return { status: 0, signal: null } as any;
+    });
+
+    const mockRunPhase = await runCli(["chat"], { cwd: tmpDir });
+
+    expect(mockRunPhase).not.toHaveBeenCalled();
+    expect(mockCollectPrompt).toHaveBeenCalled();
+    expect(mockOpenFileInEditor).not.toHaveBeenCalled();
+    expect(mockSpawnSync).toHaveBeenCalledWith(
+      "auggie",
+      [
+        "--workspace-root",
+        tmpDir,
+        "--model",
+        DEFAULT_MODELS.chat,
+        "--rules",
+        expect.any(String),
+        "--instruction-file",
+        expect.any(String),
+      ],
+      expect.objectContaining({ cwd: tmpDir, stdio: "inherit" }),
+    );
+    expect(capturedInstruction).toBe("review code in this repo\n");
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("chat cancels when the editor prompt is blank", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-chat-cancel-"));
+    const childProcess = require("child_process") as typeof import("child_process");
+    const mockSpawnSync = childProcess.spawnSync as jest.MockedFunction<
+      typeof childProcess.spawnSync
+    >;
+    const editor = require("./editor") as typeof import("./editor");
+    const mockCollectPrompt =
+      editor.collectPrompt as jest.MockedFunction<typeof editor.collectPrompt>;
+
+    mockCollectPrompt.mockReturnValueOnce(null);
+
+    try {
+      const mockRunPhase = await runCli(["chat"], { cwd: tmpDir });
+
+      expect(mockRunPhase).not.toHaveBeenCalled();
+      expect(mockSpawnSync).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
   describe("interview follow-up", () => {
@@ -506,52 +635,6 @@ describe("carl CLI", () => {
       expect(mockOpenFileInEditor).toHaveBeenCalledTimes(2);
     });
 
-    test("reruns chat after the user edits .agent/notes/chat.md", async () => {
-      const notesPath = path.join(tmpDir, ".agent", "notes", "chat.md");
-      fs.mkdirSync(path.dirname(notesPath), { recursive: true });
-      fs.writeFileSync(notesPath, "initial reply\n", "utf-8");
-
-      const phase = require("./phase") as typeof import("./phase");
-      const mockRunPhase = phase.runPhase as jest.MockedFunction<
-        typeof phase.runPhase
-      >;
-      mockRunPhase
-        .mockResolvedValueOnce({ status: "success", response: "initial reply" })
-        .mockImplementationOnce(async () => {
-          fs.writeFileSync(notesPath, "edited follow-up\n", "utf-8");
-          return { status: "success", response: "edited follow-up" };
-        });
-
-      const editor = require("./editor") as typeof import("./editor");
-      const mockOpenFileInEditor =
-        editor.openFileInEditor as jest.MockedFunction<
-          typeof editor.openFileInEditor
-        >;
-      mockOpenFileInEditor
-        .mockImplementationOnce((filePath: string) => {
-          fs.writeFileSync(filePath, "edited follow-up\n", "utf-8");
-        })
-        .mockImplementationOnce(() => {});
-
-      await expectCliSuccess(["chat", promptFile], tmpDir);
-
-      expect(mockRunPhase).toHaveBeenNthCalledWith(
-        1,
-        tmpDir,
-        "chat",
-        "chat",
-        "ship it",
-        undefined,
-      );
-      expect(mockRunPhase).toHaveBeenNthCalledWith(
-        2,
-        tmpDir,
-        "chat",
-        "chat",
-        "edited follow-up\n",
-        undefined,
-      );
-    });
   });
 
   describe("pending prompt", () => {

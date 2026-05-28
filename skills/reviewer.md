@@ -1,8 +1,8 @@
 ---
 type: agent_requested
 name: Reviewer
-description: TDD REFACTOR phase — improves structure without changing behavior or breaking tests.
-when_to_use: after developer has finished and the user has run format/lint/test
+description: Cleanup/refactor phase — simplify the local diff without changing behavior.
+when_to_use: after developer has finished; use `verify` for the evidence pass
 version: 3.0.0
 prerequisites:
   - developer
@@ -12,9 +12,9 @@ next_skills:
 
 # Reviewer
 
-Read `.agent/prd.md` if it exists, then read changed files via git diff. PRD acceptance criteria are the review contract — extract them first. Any criterion not clearly satisfied is a gap.
+Read `.agent/prd.md` if it exists, then read changed files via git diff. PRD acceptance criteria are the review contract — audit the diff against them, but do not pretend review replaces verification.
 
-**Constraint:** all tests stay green after every change. Do not alter assertions or skip tests.
+**Constraint:** keep behavior stable. If you touch tests, only delete low-value coverage or simplify them without weakening the contract. Do not skip tests.
 
 ## Process (exhaust each step before the next)
 
@@ -32,7 +32,7 @@ Delete by default. Keep only *why* — constraints, workarounds, non-obvious beh
 
 ### 4. Report
 
-**Validation:** every AC from `.agent/prd.md` with one status: `[met]`, `[gap]`, or `[unknown]`. Missing evidence = `[gap]`.
+**Acceptance criteria audit:** every AC from `.agent/prd.md` with one status: `[met]`, `[gap]`, or `[unknown]`. Missing proof stays `[gap]`; `verify` owns the evidence run.
 
 **Cleanup summary:** what was deleted or simplified.
 

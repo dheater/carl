@@ -3,6 +3,7 @@ import {
   parsePrReviewDraftComments,
   parseDiffHunks,
   validateCommentsInScope,
+  validateNoDuplicateInlineComments,
   validateInlineCommentsHaveRationale,
   type ReviewComment,
 } from "./pr-review-draft";
@@ -165,6 +166,26 @@ describe("validateCommentsInScope", () => {
   test("rejects start > end", () => {
     const errors = validateCommentsInScope([inline(1, 3)], hunks);
     expect(errors[0]).toMatch(/start line 3 > end line 1/);
+  });
+});
+
+describe("validateNoDuplicateInlineComments", () => {
+  test("rejects duplicate exact inline anchors", () => {
+    const comments: ReviewComment[] = [
+      { type: "inline", path: "src/f.ts", startLine: 10, line: 12, body: "first" },
+      { type: "inline", path: "src/f.ts", startLine: 10, line: 12, body: "second" },
+    ];
+    const errors = validateNoDuplicateInlineComments(comments);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/duplicates inline anchor/);
+  });
+
+  test("allows different inline anchors", () => {
+    const comments: ReviewComment[] = [
+      { type: "inline", path: "src/f.ts", line: 10, body: "first" },
+      { type: "inline", path: "src/f.ts", line: 11, body: "second" },
+    ];
+    expect(validateNoDuplicateInlineComments(comments)).toEqual([]);
   });
 });
 

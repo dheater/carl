@@ -29,7 +29,9 @@ type CarlConfig = {
     architect?: string;
     developer?: string;
     reviewer?: string;
+    verify?: string;
     chat?: string;
+    "pr-reviewer"?: string;
   };
 };
 
@@ -37,9 +39,29 @@ export const DEFAULT_MODELS: Record<string, string> = {
   architect: "gpt5.4",
   developer: "sonnet4.6",
   reviewer: "gpt5.4",
+  verify: "gpt5.4",
   chat: "gpt5.4",
   "pr-reviewer": "gpt5.4",
 };
+
+const BASE_RULE_FILES = ["carl.md", "errors.md"] as const;
+
+const PHASE_RULE_FILES: Record<string, readonly string[]> = {
+  developer: ["git-policy.md"],
+  reviewer: ["git-policy.md", "review-code.md"],
+  verify: ["git-policy.md"],
+  chat: ["git-policy.md"],
+};
+
+type GitStatusCounts = {
+  is_repo: boolean;
+  tracked_changed: number;
+  untracked: number;
+};
+
+export interface RunPhaseContext {
+  prdPhaseTitle?: string;
+}
 
 function loadCarlConfig(
   workspaceRoot: string,
@@ -69,14 +91,28 @@ function loadCarlConfig(
 
 type PromptResponse = string | { text: string; usage?: Record<string, any> };
 
-function loadRules(): string {
+function isInteractiveReviewRequest(initialPrompt?: string): boolean {
+  if (!initialPrompt) return false;
+  return /\breview\s+(?:code|project)\b/i.test(initialPrompt);
+}
+
+function getRuleFiles(phaseName: string, initialPrompt?: string): string[] {
+  const files = [
+    ...BASE_RULE_FILES,
+    ...(PHASE_RULE_FILES[phaseName] ?? []),
+  ];
+  if (phaseName === "chat" && isInteractiveReviewRequest(initialPrompt)) {
+    files.push("review-code.md");
+  }
+  return files;
+}
+
+function loadRules(phaseName: string, initialPrompt?: string): string {
   if (!fs.existsSync(CARL_RULES_DIR)) return "";
-  const files = fs.readdirSync(CARL_RULES_DIR)
-    .filter((f) => f.endsWith(".md"))
-    .sort();
-  return files
-    .map((f) => {
-      const raw = fs.readFileSync(path.join(CARL_RULES_DIR, f), "utf-8");
+  return getRuleFiles(phaseName, initialPrompt)
+    .filter((f) => fs.existsSync(path.join(CARL_RULES_DIR, f)))
+    .map((fileName) => {
+      const raw = fs.readFileSync(path.join(CARL_RULES_DIR, fileName), "utf-8");
       return raw.replace(/^---\n[\s\S]*?\n---\n?/, "").trimStart();
     })
     .filter(Boolean)
@@ -94,7 +130,7 @@ function loadSkillFile(name: string): string {
   return "";
 }
 
-function getPhaseModel(phase: string, workspaceRoot?: string): string {
+export function getPhaseModel(phase: string, workspaceRoot?: string): string {
   if (workspaceRoot) {
     const config = loadCarlConfig(workspaceRoot, phase !== "pr-reviewer");
     const override =
@@ -164,8 +200,9 @@ function logTimingDuration(
 export function buildSkillInstruction(
   phaseName: string,
   workspaceRoot?: string,
+  initialPrompt?: string,
 ): string {
-  const rules = loadRules();
+  const rules = loadRules(phaseName, initialPrompt);
   const skillContent = loadSkillFile(phaseName);
   let instruction = "";
   if (rules) {
@@ -175,31 +212,28 @@ export function buildSkillInstruction(
     ? `# Your skill for this session\n\n${skillContent}`
     : `Follow the ${phaseName} skill.`;
 
-  if (phaseName === "reviewer" && workspaceRoot) {
-    const branch = getCurrentBranch(workspaceRoot);
+  if ((phaseName === "reviewer" || phaseName === "verify") && workspaceRoot) {
+    const branch = phaseName === "reviewer" ? getCurrentBranch(workspaceRoot) : null;
     if (branch) {
       instruction += `\n\n---\n\n# Current branch\n\n\`${branch}\`\n\n`;
     }
 
     const prdPath = path.join(workspaceRoot, ".agent", "prd.md");
     if (fs.existsSync(prdPath)) {
+      const phaseLabel = phaseName === "reviewer" ? "review" : "verification";
+      const criteriaVerb = phaseName === "reviewer" ? "audit" : "validate";
+      const evidenceLine =
+        phaseName === "reviewer"
+          ? "Treat anything not clearly implemented and later proven by `verify` as `[gap]`."
+          : "Treat anything not clearly implemented and validated as `[gap]`.";
       instruction += "\n\n---\n\n# PRD acceptance criteria\n\n";
       instruction +=
-        "`.agent/prd.md` exists and is the source of truth for this review.\n\n";
+        `.agent/prd.md exists and is the source of truth for this ${phaseLabel}.\n\n`;
       instruction +=
-        "Before you change code or report results, extract the acceptance criteria from that file and check the current diff against each one.\n\n";
+        `Before you ${criteriaVerb} results, extract the acceptance criteria from that file and check the current workspace state against each one.\n\n`;
       instruction +=
-        "In `## Validation`, list every acceptance criterion with exactly one status: `[met]`, `[gap]`, or `[unknown]`. " +
-        "Treat anything not clearly implemented and validated as `[gap]`. If `.agent/prd.md` has no acceptance criteria, say that explicitly.\n\n";
-    }
-
-    const isTicketBranch = branch && branch !== "main" && branch !== "master";
-    instruction += "\n\n---\n\n# Commit message\n\n";
-    if (isTicketBranch) {
-      instruction += `Add \`## Proposed commit message\`. Subject: ticket prefix from \`${branch}\` + summary. Optional body.\n`;
-    } else {
-      instruction +=
-        "Add `## Proposed commit message`. Subject: `fix:`/`feat:`/`chore:` + summary. Optional body.\n";
+        "In `## Acceptance criteria`, list every acceptance criterion with exactly one status: `[met]`, `[gap]`, or `[unknown]`. " +
+        `${evidenceLine} If .agent/prd.md has no acceptance criteria, say that explicitly.\n\n`;
     }
 
     const gitStatus = getGitStatus(workspaceRoot);
@@ -228,6 +262,17 @@ export function buildSkillInstruction(
     } else {
       instruction +=
         "\n\n---\n\n# Files changed\n\nNot in a git repository.\n\n";
+    }
+
+    if (phaseName === "reviewer") {
+      const isTicketBranch = branch && branch !== "main" && branch !== "master";
+      instruction += "\n\n---\n\n# Commit message\n\n";
+      if (isTicketBranch) {
+        instruction += `Add \`## Proposed commit message\`. Subject: ticket prefix from \`${branch}\` + summary. Optional body.\n`;
+      } else {
+        instruction +=
+          "Add `## Proposed commit message`. Subject: `fix:`/`feat:`/`chore:` + summary. Optional body.\n";
+      }
     }
   }
 
@@ -302,11 +347,87 @@ export interface RunPhaseResult {
   response: string;
 }
 
+class PhaseTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PhaseTimeoutError";
+  }
+}
+
 const PHASE_TIMEOUT_MS: Record<string, number> = {
   developer: 14 * 60 * 1000,
   reviewer: 6 * 60 * 1000,
+  verify: 10 * 60 * 1000,
   architect: 12 * 60 * 1000,
 };
+
+function countGitStatus(workspaceRoot: string): GitStatusCounts {
+  const status = getGitStatus(workspaceRoot);
+  return {
+    is_repo: status.isRepo,
+    tracked_changed: status.trackedChanged.length,
+    untracked: status.untracked.length,
+  };
+}
+
+function getPhaseOutputRelativePath(
+  workspaceRoot: string,
+  phaseName: string,
+  status: "success" | "blocked" | "error",
+): string | null {
+  if (phaseName === "pr-reviewer") {
+    return null;
+  }
+  const outputPath = getPhaseOutputPath(
+    workspaceRoot,
+    phaseName,
+    status === "blocked" ? "blocked" : "success",
+  );
+  return path.relative(workspaceRoot, outputPath) || path.basename(outputPath);
+}
+
+function buildPhaseEventMeta(
+  workspaceRoot: string,
+  phaseName: string,
+  status: "success" | "blocked" | "error",
+  gitStatusBefore: GitStatusCounts,
+  retryCount: number,
+  context?: RunPhaseContext,
+  errorType?: "network" | "timeout" | "exception",
+): Record<string, any> {
+  const gitStatusAfter = countGitStatus(workspaceRoot);
+  const outputPath = getPhaseOutputRelativePath(workspaceRoot, phaseName, status);
+  const absoluteOutputPath = outputPath ? path.join(workspaceRoot, outputPath) : null;
+
+  return {
+    status,
+    blocked_reason: status === "blocked" ? "interview" : null,
+    error_type: status === "error" ? (errorType ?? "exception") : null,
+    retry_count: retryCount,
+    interview_triggered: status === "blocked",
+    prd_present: fs.existsSync(path.join(workspaceRoot, ".agent", "prd.md")),
+    git_repo: gitStatusBefore.is_repo,
+    tracked_changed_before: gitStatusBefore.tracked_changed,
+    tracked_changed_after: gitStatusAfter.tracked_changed,
+    untracked_before: gitStatusBefore.untracked,
+    untracked_after: gitStatusAfter.untracked,
+    output_path: outputPath,
+    output_exists: absoluteOutputPath ? fs.existsSync(absoluteOutputPath) : false,
+    ...(context?.prdPhaseTitle ? { prd_phase_title: context.prdPhaseTitle } : {}),
+  };
+}
+
+function classifyPhaseError(
+  err: unknown,
+): "network" | "timeout" | "exception" {
+  if (err instanceof NetworkUnavailableError) {
+    return "network";
+  }
+  if (err instanceof PhaseTimeoutError) {
+    return "timeout";
+  }
+  return "exception";
+}
 
 function writeTimeoutDiagnostic(
   workspaceRoot: string,
@@ -346,13 +467,15 @@ export async function runPhase(
   command: string,
   initialPrompt?: string,
   modelOverride?: string,
+  context?: RunPhaseContext,
 ): Promise<RunPhaseResult> {
   const runId = randomUUID();
   const model = modelOverride ?? getPhaseModel(phaseName, workspaceRoot);
   const phaseStartTime = Date.now();
   const allowIndexing = shouldAllowIndexing(phaseName);
+  const gitStatusBefore = countGitStatus(workspaceRoot);
 
-  let instruction = buildSkillInstruction(phaseName, workspaceRoot);
+  let instruction = buildSkillInstruction(phaseName, workspaceRoot, initialPrompt);
   if (initialPrompt) {
     instruction += `\n\n# User request\n\n${initialPrompt}`;
     if (phaseName === "architect") {
@@ -376,151 +499,184 @@ export async function runPhase(
 
   let response = "";
   let usage: Record<string, any> | undefined;
-  for (let attempt = 0; attempt <= MAX_FETCH_RETRIES; attempt++) {
-    if (attempt > 0) {
-      console.log(
-        `  [System] Network error. Retrying (attempt ${attempt + 1}/${MAX_FETCH_RETRIES + 1})...`,
-      );
-      await new Promise((r) => setTimeout(r, 5000));
-    }
-
-    console.log(`  [System] Initializing agent...`);
-    console.log(`[Timing] Auggie.create entry ${phaseName}/${model}`);
-    const auggleCreateStart = Date.now();
-    const client = await Auggie.create({
-      workspaceRoot,
-      model: model as any,
-      allowIndexing,
-    });
-    logTimingDuration(
-      workspaceRoot,
-      runId,
-      "Auggie.create",
-      `${phaseName}/${model}`,
-      Date.now() - auggleCreateStart,
-      phaseName,
-      model,
-      command,
-    );
-
-    const sessionLog: string[] = [];
-    client.onSessionUpdate((notification: any) => {
-      const update = notification.update;
-      if (!update) return;
-      const ts = new Date().toISOString();
-      if (update.sessionUpdate === "tool_call") {
+  let retryCount = 0;
+  try {
+    for (let attempt = 0; attempt <= MAX_FETCH_RETRIES; attempt++) {
+      retryCount = attempt;
+      if (attempt > 0) {
         console.log(
-          `\n  [${phaseName}/${model}] Running tool: ${update.title || "unknown"}...`,
+          `  [System] Network error. Retrying (attempt ${attempt + 1}/${MAX_FETCH_RETRIES + 1})...`,
         );
-        sessionLog.push(`[${ts}] tool_call: ${update.title || "unknown"}`);
-      } else if (update.sessionUpdate === "agent_thought_chunk") {
-        if (update.content && update.content.text) {
-          process.stdout.write(`\x1b[90m${update.content.text}\x1b[0m`);
-          sessionLog.push(`[${ts}] thought: ${update.content.text}`);
-        }
-      } else if (update.sessionUpdate === "agent_message_chunk") {
-        if (update.content && update.content.text) {
-          sessionLog.push(`[${ts}] message: ${update.content.text}`);
-        }
+        await new Promise((r) => setTimeout(r, 5000));
       }
-    });
 
-    let shouldRetry = false;
-    try {
-      console.log(
-        `  [System] Agent initialized. Sending prompt and awaiting response...`,
-      );
-      console.log(`[Timing] prompt entry ${phaseName}/${model}`);
-      const promptStart = Date.now();
-      const timeoutMs = PHASE_TIMEOUT_MS[phaseName];
-      let timeoutHandle: NodeJS.Timeout | undefined;
-      const promptPromise = client.prompt(instruction, { isAnswerOnly: true });
-      let raw: string;
-      try {
-        if (timeoutMs) {
-          const timeoutPromise = new Promise<never>((_, reject) => {
-            timeoutHandle = setTimeout(() => {
-              const writesTimeoutDiagnostic = phaseName !== "pr-reviewer";
-              writeTimeoutDiagnostic(
-                workspaceRoot,
-                phaseName,
-                command,
-                runId,
-                timeoutMs,
-                Date.now() - promptStart,
-                sessionLog,
-              );
-              client.cancel().catch(() => {});
-              reject(
-                new Error(
-                  writesTimeoutDiagnostic
-                    ? `${phaseName} exceeded ${timeoutMs / 60000}m timeout — cancelled. Diagnostic written to .agent/notes/timeout-${phaseName}-${runId}.md`
-                    : `${phaseName} exceeded ${timeoutMs / 60000}m timeout — cancelled. Re-run \`carl ${command}\` to retry.`,
-                ),
-              );
-            }, timeoutMs);
-          });
-          raw = await Promise.race([promptPromise, timeoutPromise]);
-        } else {
-          raw = await promptPromise;
-        }
-      } finally {
-        if (timeoutHandle) clearTimeout(timeoutHandle);
-      }
-      [response, usage] = extractPromptResponseText(raw);
-      const promptDuration = Date.now() - promptStart;
+      console.log(`  [System] Initializing agent...`);
+      console.log(`[Timing] Auggie.create entry ${phaseName}/${model}`);
+      const auggleCreateStart = Date.now();
+      const client = await Auggie.create({
+        workspaceRoot,
+        model: model as any,
+        allowIndexing,
+      });
       logTimingDuration(
         workspaceRoot,
         runId,
-        "prompt",
+        "Auggie.create",
         `${phaseName}/${model}`,
-        promptDuration,
+        Date.now() - auggleCreateStart,
         phaseName,
         model,
         command,
-        {
-          prompt_chars: instruction.length,
-          response_chars: response.length,
-          ...(usage && { usage }),
-        },
       );
-    } catch (err) {
-      if (attempt < MAX_FETCH_RETRIES && isTransientFetchError(err)) {
-        shouldRetry = true;
-      } else if (isTransientFetchError(err)) {
-        // All retries exhausted — surface a clean message instead of the raw SDK error.
-        throw new NetworkUnavailableError(
-          `Network unavailable after ${MAX_FETCH_RETRIES + 1} attempts — run \`carl ${command}\` to retry.`,
-        );
-      } else {
-        throw err;
-      }
-    } finally {
+
+      const sessionLog: string[] = [];
+      client.onSessionUpdate((notification: any) => {
+        const update = notification.update;
+        if (!update) return;
+        const ts = new Date().toISOString();
+        if (update.sessionUpdate === "tool_call") {
+          console.log(
+            `\n  [${phaseName}/${model}] Running tool: ${update.title || "unknown"}...`,
+          );
+          sessionLog.push(`[${ts}] tool_call: ${update.title || "unknown"}`);
+        } else if (update.sessionUpdate === "agent_thought_chunk") {
+          if (update.content && update.content.text) {
+            process.stdout.write(`\x1b[90m${update.content.text}\x1b[0m`);
+            sessionLog.push(`[${ts}] thought: ${update.content.text}`);
+          }
+        } else if (update.sessionUpdate === "agent_message_chunk") {
+          if (update.content && update.content.text) {
+            sessionLog.push(`[${ts}] message: ${update.content.text}`);
+          }
+        }
+      });
+
+      let shouldRetry = false;
       try {
-        await client.close();
-      } catch {}
+        console.log(
+          `  [System] Agent initialized. Sending prompt and awaiting response...`,
+        );
+        console.log(`[Timing] prompt entry ${phaseName}/${model}`);
+        const promptStart = Date.now();
+        const timeoutMs = PHASE_TIMEOUT_MS[phaseName];
+        let timeoutHandle: NodeJS.Timeout | undefined;
+        const promptPromise = client.prompt(instruction, { isAnswerOnly: true });
+        let raw: string;
+        try {
+          if (timeoutMs) {
+            const timeoutPromise = new Promise<never>((_, reject) => {
+              timeoutHandle = setTimeout(() => {
+                const writesTimeoutDiagnostic = phaseName !== "pr-reviewer";
+                writeTimeoutDiagnostic(
+                  workspaceRoot,
+                  phaseName,
+                  command,
+                  runId,
+                  timeoutMs,
+                  Date.now() - promptStart,
+                  sessionLog,
+                );
+                client.cancel().catch(() => {});
+                reject(
+                  new PhaseTimeoutError(
+                    writesTimeoutDiagnostic
+                      ? `${phaseName} exceeded ${timeoutMs / 60000}m timeout — cancelled. Diagnostic written to .agent/notes/timeout-${phaseName}-${runId}.md`
+                      : `${phaseName} exceeded ${timeoutMs / 60000}m timeout — cancelled. Re-run \`carl ${command}\` to retry.`,
+                  ),
+                );
+              }, timeoutMs);
+            });
+            raw = await Promise.race([promptPromise, timeoutPromise]);
+          } else {
+            raw = await promptPromise;
+          }
+        } finally {
+          if (timeoutHandle) clearTimeout(timeoutHandle);
+        }
+        [response, usage] = extractPromptResponseText(raw);
+        const promptDuration = Date.now() - promptStart;
+        logTimingDuration(
+          workspaceRoot,
+          runId,
+          "prompt",
+          `${phaseName}/${model}`,
+          promptDuration,
+          phaseName,
+          model,
+          command,
+          {
+            prompt_chars: instruction.length,
+            response_chars: response.length,
+            ...(usage && { usage }),
+          },
+        );
+      } catch (err) {
+        if (attempt < MAX_FETCH_RETRIES && isTransientFetchError(err)) {
+          shouldRetry = true;
+        } else if (isTransientFetchError(err)) {
+          // All retries exhausted — surface a clean message instead of the raw SDK error.
+          throw new NetworkUnavailableError(
+            `Network unavailable after ${MAX_FETCH_RETRIES + 1} attempts — run \`carl ${command}\` to retry.`,
+          );
+        } else {
+          throw err;
+        }
+      } finally {
+        try {
+          await client.close();
+        } catch {}
+      }
+
+      if (!shouldRetry) break;
     }
 
-    if (!shouldRetry) break;
+    const isBlocked = isBlockedResponse(response);
+    const status: "success" | "blocked" = isBlocked ? "blocked" : "success";
+
+    writePhaseOutput(phaseName, status, response, workspaceRoot);
+
+    logTimingDuration(
+      workspaceRoot,
+      runId,
+      "phase",
+      phaseName,
+      Date.now() - phaseStartTime,
+      phaseName,
+      model,
+      command,
+      buildPhaseEventMeta(
+        workspaceRoot,
+        phaseName,
+        status,
+        gitStatusBefore,
+        retryCount,
+        context,
+      ),
+    );
+
+    return { status, response };
+  } catch (err) {
+    if (phaseName !== "pr-reviewer") {
+      logTimingDuration(
+        workspaceRoot,
+        runId,
+        "phase",
+        phaseName,
+        Date.now() - phaseStartTime,
+        phaseName,
+        model,
+        command,
+        buildPhaseEventMeta(
+          workspaceRoot,
+          phaseName,
+          "error",
+          gitStatusBefore,
+          retryCount,
+          context,
+          classifyPhaseError(err),
+        ),
+      );
+    }
+    throw err;
   }
-
-  const isBlocked = isBlockedResponse(response);
-  const status: "success" | "blocked" = isBlocked ? "blocked" : "success";
-
-  writePhaseOutput(phaseName, status, response, workspaceRoot);
-
-  const phaseMeta: Record<string, any> = { status };
-  logTimingDuration(
-    workspaceRoot,
-    runId,
-    "phase",
-    phaseName,
-    Date.now() - phaseStartTime,
-    phaseName,
-    model,
-    command,
-    phaseMeta,
-  );
-
-  return { status, response };
 }

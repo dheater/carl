@@ -17,6 +17,18 @@ describe("runPhase", () => {
   let workspaceRoot: string;
   let logSpy: jest.SpyInstance;
 
+  function readEvents(): any[] {
+    return fs
+      .readFileSync(path.join(workspaceRoot, ".carl", "events.jsonl"), "utf-8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+  }
+
+  function readPhaseEvent(): any {
+    return readEvents().find((event) => event.event === "phase");
+  }
+
   beforeEach(() => {
     workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "carl-phase-"));
     logSpy = jest.spyOn(console, "log").mockImplementation(() => {});
@@ -89,6 +101,47 @@ describe("runPhase", () => {
         "utf-8",
       ),
     ).toBe("dev response");
+
+    expect(readPhaseEvent().meta).toMatchObject({
+      status: "success",
+      blocked_reason: null,
+      error_type: null,
+      retry_count: 0,
+      interview_triggered: false,
+      output_path: ".agent/notes/developer.md",
+      output_exists: true,
+    });
+  });
+
+  test("writes verify output to .agent/notes/verify.md", async () => {
+    const client = {
+      onSessionUpdate: jest.fn(),
+      prompt: jest.fn().mockResolvedValue("verify response"),
+      close: jest.fn().mockResolvedValue(undefined),
+      cancel: jest.fn().mockResolvedValue(undefined),
+    };
+    mockCreate.mockResolvedValue(client as any);
+
+    const result = await runPhase(
+      workspaceRoot,
+      "verify",
+      "verify",
+      undefined,
+      "test-model",
+    );
+
+    expect(result).toEqual({ status: "success", response: "verify response" });
+    expect(mockCreate).toHaveBeenCalledWith({
+      workspaceRoot,
+      model: "test-model",
+      allowIndexing: true,
+    });
+    expect(
+      fs.readFileSync(
+        path.join(workspaceRoot, ".agent", "notes", "verify.md"),
+        "utf-8",
+      ),
+    ).toBe("verify response");
   });
 
   test("writes architect output to .agent/prd.md", async () => {
@@ -199,12 +252,63 @@ describe("runPhase", () => {
         "utf-8",
       ),
     ).toContain("# Interview");
+    expect(readPhaseEvent().meta).toMatchObject({
+      status: "blocked",
+      blocked_reason: "interview",
+      error_type: null,
+      interview_triggered: true,
+      output_path: ".agent/notes/developer.md",
+      output_exists: true,
+    });
+  });
+
+  test("logs error phase metadata when the prompt fails", async () => {
+    const client = {
+      onSessionUpdate: jest.fn(),
+      prompt: jest.fn().mockRejectedValue(new Error("boom")),
+      close: jest.fn().mockResolvedValue(undefined),
+      cancel: jest.fn().mockResolvedValue(undefined),
+    };
+    mockCreate.mockResolvedValue(client as any);
+
+    await expect(
+      runPhase(
+        workspaceRoot,
+        "developer",
+        "code",
+        "ship it",
+        "test-model",
+        { prdPhaseTitle: "Phase 1: Ship it" },
+      ),
+    ).rejects.toThrow("boom");
+
+    expect(readPhaseEvent().meta).toMatchObject({
+      status: "error",
+      blocked_reason: null,
+      error_type: "exception",
+      retry_count: 0,
+      interview_triggered: false,
+      output_exists: false,
+      prd_phase_title: "Phase 1: Ship it",
+    });
   });
 
   test("reviewer skill content omits YAML frontmatter", () => {
     const instruction = buildSkillInstruction("reviewer", workspaceRoot);
     expect(instruction).not.toContain("# Your skill for this session\n\n---\n");
     expect(instruction).toContain("# Reviewer");
+  });
+
+  test("chat includes code-review rules only for explicit review requests", () => {
+    const defaultInstruction = buildSkillInstruction("chat", workspaceRoot, "ship it");
+    const reviewInstruction = buildSkillInstruction(
+      "chat",
+      workspaceRoot,
+      "review code in this repo",
+    );
+
+    expect(defaultInstruction).not.toContain("# Code Review");
+    expect(reviewInstruction).toContain("# Code Review");
   });
 
   test("architect instruction allows repeated interviews before writing the PRD", () => {
@@ -216,23 +320,6 @@ describe("runPhase", () => {
     expect(instruction).toContain(
       "When the request is clear enough, replace `.agent/prd.md` entirely with a complete PRD",
     );
-  });
-
-  test("reviewer instruction requires acceptance-criteria validation when prd exists", () => {
-    fs.mkdirSync(path.join(workspaceRoot, ".agent"), { recursive: true });
-    fs.writeFileSync(
-      path.join(workspaceRoot, ".agent", "prd.md"),
-      "## Acceptance Criteria\n- ships\n",
-      "utf-8",
-    );
-
-    const instruction = buildSkillInstruction("reviewer", workspaceRoot);
-
-    expect(instruction).toContain("# PRD acceptance criteria");
-    expect(instruction).toContain("source of truth for this review");
-    expect(instruction).toContain("[met]");
-    expect(instruction).toContain("[gap]");
-    expect(instruction).toContain("[unknown]");
   });
 });
 

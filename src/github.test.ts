@@ -246,11 +246,43 @@ describe("createPendingReview", () => {
   test("throws with context on API failure", () => {
     const err: any = new Error("gh api failed");
     err.stderr = "HTTP 422: Unprocessable Entity";
-    mockExecSync.mockImplementation(() => { throw err; });
+    mockExecSync
+      .mockImplementationOnce(() => {
+        throw err;
+      })
+      .mockReturnValueOnce(JSON.stringify({ login: "me" }) as any)
+      .mockReturnValueOnce(JSON.stringify([]) as any);
     expect(() =>
       createPendingReview("owner", "repo", 42, "abc1234", [
         { type: "overall", body: "note" },
       ]),
     ).toThrow(/Failed to create pending review for owner\/repo#42/);
+  });
+
+  test("throws a direct error when a pending review already exists for the viewer", () => {
+    const err: any = new Error("gh api failed");
+    err.stderr = "HTTP 422: Unprocessable Entity";
+    mockExecSync
+      .mockImplementationOnce(() => {
+        throw err;
+      })
+      .mockReturnValueOnce(JSON.stringify({ login: "me" }) as any)
+      .mockReturnValueOnce(
+        JSON.stringify([
+          { id: 77, state: "PENDING", user: { login: "me" } },
+        ]) as any,
+      );
+
+    let message = "";
+    try {
+      createPendingReview("owner", "repo", 42, "abc1234", [
+        { type: "overall", body: "note" },
+      ]);
+    } catch (caught: any) {
+      message = String(caught.message || caught);
+    }
+
+    expect(message).toMatch(/Pending review already exists for owner\/repo#42/);
+    expect(message).toMatch(/review 77/);
   });
 });
