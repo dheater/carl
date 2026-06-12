@@ -93,7 +93,7 @@ export function buildPrReviewDraft(
     `# Append \`||| COMMENT\` blocks below \`## Review comments\`. Two formats:`,
     `#`,
     `#   ||| COMMENT inline <path>:<line>`,
-    `#   <prose rationale: why this matters>`,
+    `#   <what the problem is — then why it matters and how it happens>`,
     `#   ||| END`,
     `#`,
     `#   ||| COMMENT overall`,
@@ -262,7 +262,7 @@ export function validateInlineCommentsHaveRationale(
     const hasProse = proseLines.some((l) => l.trim().length > 0);
     if (!hasProse) {
       errors.push(
-        `${label}: inline comment is missing a rationale line above the suggestion (explain WHY the fix is needed, not just WHAT changed)`,
+        `${label}: inline comment must open with a prose line naming the problem (WHAT is broken), then why it matters — do not start with a code fence`,
       );
     }
   });

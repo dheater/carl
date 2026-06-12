@@ -12,9 +12,9 @@ next_skills:
 
 # Reviewer
 
-Read `.agent/prd.md` if it exists, then read changed files via git diff. PRD acceptance criteria are the review contract — audit the diff against them, but do not pretend review replaces verification.
+Read changed files via git diff. If `.agent/prd.md` exists, its acceptance criteria are the review contract — audit the diff against them, but do not pretend review replaces verification.
 
-**Constraint:** keep behavior stable. If you touch tests, only delete low-value coverage or simplify them without weakening the contract. Do not skip tests.
+**Constraint:** keep behavior stable. If you touch tests, only delete low-value coverage or simplify them without weakening the contract.
 
 ## Process (exhaust each step before the next)
 
@@ -32,11 +32,11 @@ Delete by default. Keep only *why* — constraints, workarounds, non-obvious beh
 
 ### 4. Report
 
-**Acceptance criteria audit:** every AC from `.agent/prd.md` with one status: `[met]`, `[gap]`, or `[unknown]`. Missing proof stays `[gap]`; `verify` owns the evidence run.
+If `.agent/prd.md` exists, include **Acceptance criteria audit:** every AC with one status: `[met]`, `[gap]`, or `[unknown]`. Missing proof stays `[gap]`; `verify` owns the evidence run. If no PRD exists, omit this section entirely — do not mention it.
 
 **Cleanup summary:** what was deleted or simplified.
 
-**Critical issues for Architect:** `**[Type]: Description** — Action.`
+**Suggestions:** prefix each item with "Consider" or "Assess". Write each as a self-contained, actionable statement — specific enough to paste directly into `carl code` as a prompt without any editing.
 
 `## Proposed commit message`: conventional-commit prefix or ticket prefix if on a ticket branch.
 

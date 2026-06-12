@@ -517,7 +517,7 @@ async function cmdPrReview(
     `The draft file is at \`${draftRel}\` and contains the full PR diff.`,
     `Append \`||| COMMENT\` blocks under \`## Review comments\` per the pr-reviewer skill.`,
     `Inline comments must reference a path + new-side line that appears in a diff hunk; multi-line ranges must lie within a single hunk.`,
-    `Every inline comment must start with a rationale line explaining WHY the change matters; the reader is the PR author.`,
+    `Every inline comment must open with a sentence naming WHAT the problem is, then explain why it matters. Do not start with impact or importance — state the defect first.`,
     `Write prose comments only — do not write suggestion blocks.`,
     `Read any workspace file you need for context. Do not modify any file outside the draft.`,
   ].join("\n");
@@ -558,7 +558,7 @@ async function cmdPrReview(
       ...errors.map((e) => `- ${e}`),
       ``,
       `Inline comments must reference a path + new-side line that appears in a PR diff hunk (added \`+\` or context line); multi-line ranges must lie within a single hunk.`,
-      `Inline comments must also start with a rationale line that explains WHY the change matters.`,
+      `Inline comments must also open with a prose line naming WHAT the problem is (the defect or broken contract), then why it matters.`,
       ``,
       `Edit \`${draftRel}\`: remove or fix only the failing comments and keep the valid ones. Do not modify any other file.`,
     ].join("\n");

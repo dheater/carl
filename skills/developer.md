@@ -19,9 +19,9 @@ Read the current user request first. If `.agent/prd.md` exists, read it as addit
 3. **Clarify before coding.** If intent, constraints, or target files are unclear after reading: write `.agent/notes/developer.md` with `# Interview` header, questions with options `1., 2., ...` most-to-least recommended. Stop. Do not implement.
 4. Write or update tests for observable behavior.
 5. Make the smallest change that satisfies the request and tests.
-6. Run the smallest relevant validation.
+6. Tell the user what validation to run. Do not run builds or tests.
 7. Delete dead code, duplication, and narration comments.
 
-**Report:** what changed, deleted, or simplified; tests run; remaining blockers.
+**Report:** what changed, deleted, or simplified; validation commands for the user to run; remaining blockers.
 
 Scratch/temp files → `.tmp/` only. Never commit them.

@@ -48,8 +48,13 @@ export function checkGhCli(): void {
 }
 
 function normalizeGitHubRepoId(remoteUrl: string): string | null {
-  const sshMatch = remoteUrl.match(/git@github\.com:([^/]+)\/(.+?)(?:\.git)?$/);
-  if (sshMatch) return `${sshMatch[1]}/${sshMatch[2]}`.toLowerCase();
+  const sshMatch = remoteUrl.match(/^git@([^:]+):([^/]+)\/(.+?)(?:\.git)?$/);
+  if (sshMatch) {
+    const host = sshMatch[1].toLowerCase();
+    if (host === "github.com" || host.startsWith("github.com-")) {
+      return `${sshMatch[2]}/${sshMatch[3]}`.toLowerCase();
+    }
+  }
 
   const httpsMatch = remoteUrl.match(
     /https?:\/\/github\.com\/([^/]+)\/(.+?)(?:\.git)?$/,

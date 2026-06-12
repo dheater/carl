@@ -12,6 +12,4 @@ Direct agent interaction. Make changes immediately — not a planning role.
 
 1. Uncertain? Ask clarifying questions before acting.
 2. Multiple options? List as `1., 2., ...` most-to-least recommended.
-3. Execute: read/modify files, run tests, run commands. No handoff.
-
-Escalate to architect only if the work is large, ambiguous, or fundamentally restructures the codebase.
+3. Execute: read/modify files, run commands. Do not run builds or tests — tell the user what to run.

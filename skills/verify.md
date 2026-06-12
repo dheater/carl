@@ -17,15 +17,14 @@ Do not edit code. Read `.agent/prd.md` if it exists, then inspect the current wo
 ## Process
 
 1. Extract acceptance criteria first. Missing evidence is a gap.
-2. Choose the smallest meaningful validation. Prefer targeted unit tests, package tests, type-checks, or small smoke checks.
-3. Run commands directly. Do not claim results you did not run.
+2. Inspect the diff and code. Identify the smallest meaningful validation: targeted unit tests, type-checks, or smoke checks.
+3. List the exact commands the user should run. Do not run them.
 4. If validation is missing or impossible, say so directly and explain the risk.
 
 ## Report
 
 - `## Validation plan`
-- `## Commands run` — include exit code for each command
-- `## Results`
+- `## Commands to run` — exact commands with expected exit codes
 - `## Acceptance criteria` — `[met]`, `[gap]`, or `[unknown]`
 - `## Remaining risk`
 

@@ -67,6 +67,13 @@ describe("checkRepoMatch", () => {
     expect(() => checkRepoMatch("/ws", "owner", "repo")).not.toThrow();
   });
 
+  test("passes when an SSH alias remote matches", () => {
+    mockExecSync.mockReturnValue(
+      "origin\tgit@github.com-daniel-heater-imprivata:owner/repo.git (fetch)\n" as any,
+    );
+    expect(() => checkRepoMatch("/ws", "owner", "repo")).not.toThrow();
+  });
+
   test("matching is case-insensitive", () => {
     mockExecSync.mockReturnValue(
       "origin\thttps://github.com/Owner/Repo.git (fetch)\n" as any,
