@@ -4,6 +4,7 @@ Trigger: "review code" = interactive (review → wait for approval → make chan
 Trigger: "review project" = analysis only — report findings, NO changes.
 
 Checklist (exhaust each before next):
+
 1. Dead code → delete: unused imports/vars/functions, commented-out, unreachable, always-passing tests
 2. Duplication → extract/unify: identical blocks, copy-paste, functions differing by one param
 3. Comments → delete narration; keep WHY (constraints, workarounds, bug refs, public API docs)
@@ -11,6 +12,7 @@ Checklist (exhaust each before next):
 5. Critical: unused params, silent error handling, missing propagation, type violations, memory leaks
 
 Output format:
+
 ```
 ## Code Review
 ### [Category]

@@ -9,11 +9,7 @@ import {
   buildSkillInstruction,
   getPhaseModel,
 } from "./phase";
-import {
-  collectPrompt,
-  openFileInEditor,
-  getPhaseOutputPath,
-} from "./editor";
+import { collectPrompt, openFileInEditor, getPhaseOutputPath } from "./editor";
 import {
   parsePrUrl,
   checkGhCli,
@@ -91,8 +87,7 @@ function savePendingPrompt(
 function clearPendingPrompt(workspaceRoot: string, command: string): void {
   try {
     fs.unlinkSync(getPendingPromptPath(workspaceRoot, command));
-  } catch {
-  }
+  } catch {}
 }
 
 type PhaseResult = Awaited<ReturnType<typeof runPhase>>;
@@ -393,7 +388,8 @@ async function cmdChat(
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-chat-"));
   const rulesPath = path.join(tempDir, "chat-rules.md");
   try {
-    const instructionFile = promptFile ?? path.join(tempDir, "initial-prompt.md");
+    const instructionFile =
+      promptFile ?? path.join(tempDir, "initial-prompt.md");
     if (!promptFile) {
       fs.writeFileSync(instructionFile, `${initialPrompt}\n`, "utf-8");
     }
@@ -489,7 +485,9 @@ async function cmdPrReview(
   console.log(`Fetching PR diff...`);
   const prDiff = fetchPrDiff(owner, repo, number);
   if (!prDiff.trim()) {
-    throw new Error(`No diff for ${owner}/${repo}#${number}. Nothing to review.`);
+    throw new Error(
+      `No diff for ${owner}/${repo}#${number}. Nothing to review.`,
+    );
   }
 
   const agentDir = path.join(workspaceRoot, ".agent");
@@ -522,7 +520,13 @@ async function cmdPrReview(
     `Read any workspace file you need for context. Do not modify any file outside the draft.`,
   ].join("\n");
 
-  await runPhase(workspaceRoot, "pr-reviewer", "pr-review", initialPrompt, model);
+  await runPhase(
+    workspaceRoot,
+    "pr-reviewer",
+    "pr-review",
+    initialPrompt,
+    model,
+  );
   assertDraftExists();
 
   const hunks = parseDiffHunks(prDiff);
@@ -531,7 +535,9 @@ async function cmdPrReview(
     errors: string[];
   } {
     try {
-      const comments = parsePrReviewDraftComments(fs.readFileSync(draftPath, "utf-8"));
+      const comments = parsePrReviewDraftComments(
+        fs.readFileSync(draftPath, "utf-8"),
+      );
       return {
         comments,
         errors: [
@@ -562,7 +568,13 @@ async function cmdPrReview(
       ``,
       `Edit \`${draftRel}\`: remove or fix only the failing comments and keep the valid ones. Do not modify any other file.`,
     ].join("\n");
-    await runPhase(workspaceRoot, "pr-reviewer", "pr-review", rerunPrompt, model);
+    await runPhase(
+      workspaceRoot,
+      "pr-reviewer",
+      "pr-review",
+      rerunPrompt,
+      model,
+    );
     assertDraftExists();
     ({ comments, errors } = loadCommentsAndErrors());
   }
@@ -596,7 +608,6 @@ async function cmdPrReview(
       `Open the PR on GitHub and submit it.`,
   );
 }
-
 
 function cmdReset(workspaceRoot: string): void {
   const agentDir = path.join(workspaceRoot, ".agent");
@@ -636,8 +647,12 @@ function usage(): void {
   console.error(
     "  code [<file>]  Read prompt from file or open editor; run the implementation session",
   );
-  console.error("  review        Run reviewer once (cleanup/refactor your own local changes)");
-  console.error("  verify        Run verifier once (validation evidence for your local changes)");
+  console.error(
+    "  review        Run reviewer once (cleanup/refactor your own local changes)",
+  );
+  console.error(
+    "  verify        Run verifier once (validation evidence for your local changes)",
+  );
   console.error(
     `  chat [<file>] Read prompt from file or open editor; start interactive auggie with Carl chat rules (default: ${DEFAULT_MODELS.chat})`,
   );

@@ -1,27 +1,15 @@
 {
   "$schema": "https://raw.githubusercontent.com/jetify-com/devbox/0.16.0/.schema/devbox.schema.json",
-  "packages": [
-    "nodejs@20",
-    "just@latest",
-    "git@latest"
-  ],
+  "packages": ["nodejs@20", "just@latest", "git@latest", "prettier@latest"],
   "shell": {
     "init_hook": [
       "echo 'Carl development environment ready. Node.js 20 available.'"
     ],
     "scripts": {
-      "build": [
-        "just build"
-      ],
-      "test": [
-        "just test"
-      ],
-      "run": [
-        "just run -- \"$@\""
-      ],
-      "install": [
-        "just install"
-      ]
+      "build": ["just build"],
+      "test": ["just test"],
+      "run": ["just run -- \"$@\""],
+      "install": ["just install"]
     }
   }
 }

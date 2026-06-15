@@ -1,7 +1,4 @@
-import {
-  collectPrompt,
-  openFileInEditor,
-} from "./editor";
+import { collectPrompt, openFileInEditor } from "./editor";
 import { spawnSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
@@ -27,10 +24,7 @@ describe("Editor helper", () => {
 
       expect(mockSpawnSync).toHaveBeenCalledWith(
         "code",
-        [
-          "--wait",
-          expect.stringMatching(/carl-prompt-.*[\\/]prompt\.md$/),
-        ],
+        ["--wait", expect.stringMatching(/carl-prompt-.*[\\/]prompt\.md$/)],
         { stdio: "inherit" },
       );
     });

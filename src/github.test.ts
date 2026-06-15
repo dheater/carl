@@ -18,9 +18,7 @@ afterEach(() => jest.clearAllMocks());
 
 describe("parsePrUrl", () => {
   test("parses a URL with trailing slash and dotted names", () => {
-    const result = parsePrUrl(
-      "https://github.com/my-org/my.repo/pull/100/",
-    );
+    const result = parsePrUrl("https://github.com/my-org/my.repo/pull/100/");
     expect(result).toEqual({ owner: "my-org", repo: "my.repo", number: 100 });
   });
 
@@ -31,9 +29,9 @@ describe("parsePrUrl", () => {
   });
 
   test("throws on an entirely wrong URL", () => {
-    expect(() => parsePrUrl("https://gitlab.com/owner/repo/merge_requests/1")).toThrow(
-      /Invalid GitHub PR URL/,
-    );
+    expect(() =>
+      parsePrUrl("https://gitlab.com/owner/repo/merge_requests/1"),
+    ).toThrow(/Invalid GitHub PR URL/);
   });
 });
 
@@ -131,18 +129,26 @@ describe("fetchPrMetadata", () => {
   test("throws a not-found error on 404", () => {
     const err: any = new Error("gh api failed");
     err.stderr = "HTTP 404: Not Found";
-    mockExecSync.mockImplementation(() => { throw err; });
+    mockExecSync.mockImplementation(() => {
+      throw err;
+    });
 
     expect(() => fetchPrMetadata("owner", "repo", 99)).toThrow(/not found/i);
-    expect(() => fetchPrMetadata("owner", "repo", 99)).toThrow(/gh auth status/);
+    expect(() => fetchPrMetadata("owner", "repo", 99)).toThrow(
+      /gh auth status/,
+    );
   });
 
   test("throws an auth error on 401", () => {
     const err: any = new Error("gh api failed");
     err.stderr = "HTTP 401: Must be authenticated";
-    mockExecSync.mockImplementation(() => { throw err; });
+    mockExecSync.mockImplementation(() => {
+      throw err;
+    });
 
-    expect(() => fetchPrMetadata("owner", "repo", 99)).toThrow(/Not authorized/);
+    expect(() => fetchPrMetadata("owner", "repo", 99)).toThrow(
+      /Not authorized/,
+    );
     expect(() => fetchPrMetadata("owner", "repo", 99)).toThrow(/gh auth login/);
   });
 });
@@ -157,20 +163,24 @@ describe("checkNotForkPr", () => {
   }
 
   test("does not throw when head repo matches owner/repo", () => {
-    expect(() => checkNotForkPr(makeMetadata("owner/repo"), "owner", "repo")).not.toThrow();
+    expect(() =>
+      checkNotForkPr(makeMetadata("owner/repo"), "owner", "repo"),
+    ).not.toThrow();
   });
 
   test("matching is case-insensitive", () => {
-    expect(() => checkNotForkPr(makeMetadata("Owner/Repo"), "owner", "repo")).not.toThrow();
+    expect(() =>
+      checkNotForkPr(makeMetadata("Owner/Repo"), "owner", "repo"),
+    ).not.toThrow();
   });
 
   test("throws for a fork PR with a different head repo", () => {
-    expect(() => checkNotForkPr(makeMetadata("fork-user/repo"), "owner", "repo")).toThrow(
-      /Fork PRs are not supported/,
-    );
-    expect(() => checkNotForkPr(makeMetadata("fork-user/repo"), "owner", "repo")).toThrow(
-      /fork-user\/repo/,
-    );
+    expect(() =>
+      checkNotForkPr(makeMetadata("fork-user/repo"), "owner", "repo"),
+    ).toThrow(/Fork PRs are not supported/);
+    expect(() =>
+      checkNotForkPr(makeMetadata("fork-user/repo"), "owner", "repo"),
+    ).toThrow(/fork-user\/repo/);
   });
 
   test("throws when head repo is empty (deleted fork)", () => {
@@ -191,14 +201,14 @@ describe("fetchPrDiff", () => {
   });
 
   test("throws with context on failure", () => {
-    mockExecSync.mockImplementation(() => { throw new Error("network error"); });
+    mockExecSync.mockImplementation(() => {
+      throw new Error("network error");
+    });
     expect(() => fetchPrDiff("owner", "repo", 42)).toThrow(
       /Failed to fetch diff for owner\/repo#42/,
     );
   });
 });
-
-
 
 describe("createPendingReview", () => {
   test("creates PENDING review — no event field in payload", () => {
@@ -226,7 +236,9 @@ describe("createPendingReview", () => {
       line: 10,
       side: "RIGHT",
     });
-    expect(payload.comments[0].body).toContain("Why:\nKeep the tested branch behavior intact.");
+    expect(payload.comments[0].body).toContain(
+      "Why:\nKeep the tested branch behavior intact.",
+    );
   });
 
   test("returns review id from API response", () => {
@@ -240,7 +252,13 @@ describe("createPendingReview", () => {
   test("includes start_line for multi-line suggestions", () => {
     mockExecSync.mockReturnValue(JSON.stringify({ id: 1 }) as any);
     createPendingReview("owner", "repo", 42, "abc1234", [
-      { type: "inline", path: "src/foo.ts", startLine: 5, line: 8, body: "```suggestion\nfixed\n```" },
+      {
+        type: "inline",
+        path: "src/foo.ts",
+        startLine: 5,
+        line: 8,
+        body: "```suggestion\nfixed\n```",
+      },
     ]);
 
     const call = mockExecSync.mock.calls[0];

@@ -74,10 +74,12 @@ No tracked workspace files are modified. Only `.agent/pr-review.md` changes.
 **Error cases**: repo mismatch, HEAD drift, tracked local drift outside `.agent/`, missing draft, empty diff, fork PR, malformed comment anchors, and missing rationale all fail with an explicit actionable message.
 
 Indexing:
+
 - **`plan` / `code` / `review` / `verify` / `chat`** index the repo by default (via Auggie).
 - **`pr-review`** reads workspace files for context but does not modify them.
 
 Artifacts:
+
 - **`.agent/prd.md`** — Optional PRD for complex work
 - **`.agent/pr-review.md`** — PR review draft (created and consumed by `carl pr-review`)
 - **`.agent/notes/*.md`** — Per-phase notes and reports

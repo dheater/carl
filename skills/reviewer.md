@@ -19,16 +19,19 @@ Read changed files via git diff. If `.agent/prd.md` exists, its acceptance crite
 ## Process (exhaust each step before the next)
 
 ### 1. Delete low-value tests
+
 Delete: implementation-detail assertions (internals, private state, call order), trivially passing tests, duplicates.
 Keep: API contracts, AC coverage, error paths, regression protection.
 
 ### 2. Subtract
+
 - **Dead code:** unreachable branches, unused symbols, commented-out blocks
 - **Duplication:** identical/near-identical logic, one-param variants, copy-paste
 - **Simplification:** over-abstracted wrappers, obscuring indirection
 
 ### 3. Comments
-Delete by default. Keep only *why* — constraints, workarounds, non-obvious behavior. Delete narration and history.
+
+Delete by default. Keep only _why_ — constraints, workarounds, non-obvious behavior. Delete narration and history.
 
 ### 4. Report
 
@@ -39,4 +42,3 @@ If `.agent/prd.md` exists, include **Acceptance criteria audit:** every AC with 
 **Suggestions:** prefix each item with "Consider" or "Assess". Write each as a self-contained, actionable statement — specific enough to paste directly into `carl code` as a prompt without any editing.
 
 `## Proposed commit message`: conventional-commit prefix or ticket prefix if on a ticket branch.
-

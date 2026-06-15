@@ -97,10 +97,7 @@ function isInteractiveReviewRequest(initialPrompt?: string): boolean {
 }
 
 function getRuleFiles(phaseName: string, initialPrompt?: string): string[] {
-  const files = [
-    ...BASE_RULE_FILES,
-    ...(PHASE_RULE_FILES[phaseName] ?? []),
-  ];
+  const files = [...BASE_RULE_FILES, ...(PHASE_RULE_FILES[phaseName] ?? [])];
   if (phaseName === "chat" && isInteractiveReviewRequest(initialPrompt)) {
     files.push("review-code.md");
   }
@@ -213,7 +210,8 @@ export function buildSkillInstruction(
     : `Follow the ${phaseName} skill.`;
 
   if ((phaseName === "reviewer" || phaseName === "verify") && workspaceRoot) {
-    const branch = phaseName === "reviewer" ? getCurrentBranch(workspaceRoot) : null;
+    const branch =
+      phaseName === "reviewer" ? getCurrentBranch(workspaceRoot) : null;
     if (branch) {
       instruction += `\n\n---\n\n# Current branch\n\n\`${branch}\`\n\n`;
     }
@@ -227,10 +225,8 @@ export function buildSkillInstruction(
           ? "Treat anything not clearly implemented and later proven by `verify` as `[gap]`."
           : "Treat anything not clearly implemented and validated as `[gap]`.";
       instruction += "\n\n---\n\n# PRD acceptance criteria\n\n";
-      instruction +=
-        `.agent/prd.md exists and is the source of truth for this ${phaseLabel}.\n\n`;
-      instruction +=
-        `Before you ${criteriaVerb} results, extract the acceptance criteria from that file and check the current workspace state against each one.\n\n`;
+      instruction += `.agent/prd.md exists and is the source of truth for this ${phaseLabel}.\n\n`;
+      instruction += `Before you ${criteriaVerb} results, extract the acceptance criteria from that file and check the current workspace state against each one.\n\n`;
       instruction +=
         "In `## Acceptance criteria`, list every acceptance criterion with exactly one status: `[met]`, `[gap]`, or `[unknown]`. " +
         `${evidenceLine} If .agent/prd.md has no acceptance criteria, say that explicitly.\n\n`;
@@ -279,7 +275,6 @@ export function buildSkillInstruction(
   return instruction;
 }
 
-
 function writePhaseOutput(
   phaseName: string,
   status: "success" | "blocked",
@@ -291,7 +286,11 @@ function writePhaseOutput(
   }
   const outputPath = getPhaseOutputPath(workspaceRoot, phaseName, status);
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-  if (phaseName === "architect" && status === "success" && fs.existsSync(outputPath)) {
+  if (
+    phaseName === "architect" &&
+    status === "success" &&
+    fs.existsSync(outputPath)
+  ) {
     return;
   }
   fs.writeFileSync(outputPath, phaseOutput, "utf-8");
@@ -396,8 +395,14 @@ function buildPhaseEventMeta(
   errorType?: "network" | "timeout" | "exception",
 ): Record<string, any> {
   const gitStatusAfter = countGitStatus(workspaceRoot);
-  const outputPath = getPhaseOutputRelativePath(workspaceRoot, phaseName, status);
-  const absoluteOutputPath = outputPath ? path.join(workspaceRoot, outputPath) : null;
+  const outputPath = getPhaseOutputRelativePath(
+    workspaceRoot,
+    phaseName,
+    status,
+  );
+  const absoluteOutputPath = outputPath
+    ? path.join(workspaceRoot, outputPath)
+    : null;
 
   return {
     status,
@@ -412,14 +417,16 @@ function buildPhaseEventMeta(
     untracked_before: gitStatusBefore.untracked,
     untracked_after: gitStatusAfter.untracked,
     output_path: outputPath,
-    output_exists: absoluteOutputPath ? fs.existsSync(absoluteOutputPath) : false,
-    ...(context?.prdPhaseTitle ? { prd_phase_title: context.prdPhaseTitle } : {}),
+    output_exists: absoluteOutputPath
+      ? fs.existsSync(absoluteOutputPath)
+      : false,
+    ...(context?.prdPhaseTitle
+      ? { prd_phase_title: context.prdPhaseTitle }
+      : {}),
   };
 }
 
-function classifyPhaseError(
-  err: unknown,
-): "network" | "timeout" | "exception" {
+function classifyPhaseError(err: unknown): "network" | "timeout" | "exception" {
   if (err instanceof NetworkUnavailableError) {
     return "network";
   }
@@ -475,7 +482,11 @@ export async function runPhase(
   const allowIndexing = shouldAllowIndexing(phaseName);
   const gitStatusBefore = countGitStatus(workspaceRoot);
 
-  let instruction = buildSkillInstruction(phaseName, workspaceRoot, initialPrompt);
+  let instruction = buildSkillInstruction(
+    phaseName,
+    workspaceRoot,
+    initialPrompt,
+  );
   if (initialPrompt) {
     instruction += `\n\n# User request\n\n${initialPrompt}`;
     if (phaseName === "architect") {
@@ -560,7 +571,9 @@ export async function runPhase(
         const promptStart = Date.now();
         const timeoutMs = PHASE_TIMEOUT_MS[phaseName];
         let timeoutHandle: NodeJS.Timeout | undefined;
-        const promptPromise = client.prompt(instruction, { isAnswerOnly: true });
+        const promptPromise = client.prompt(instruction, {
+          isAnswerOnly: true,
+        });
         let raw: string;
         try {
           if (timeoutMs) {

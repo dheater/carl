@@ -24,7 +24,7 @@ Use hedged language ("I think", "I'd suggest", "you might consider"). Assume goo
 ## What to look for (exhaust each before next)
 
 1. **Subtract.** Dead code, near-identical blocks, over-abstracted wrappers, obscuring indirection.
-2. **Comments.** Delete narration/history; keep *why* (constraints, workarounds, public API docs).
+2. **Comments.** Delete narration/history; keep _why_ (constraints, workarounds, public API docs).
 3. **Major issues.** Defects, broken contracts, security holes, regressions, missing error handling, missing test coverage.
 
 Skip style nits unless the diff introduces inconsistency with surrounding code.
@@ -37,4 +37,4 @@ Stop when you have written every comment a reasonable reviewer would leave. If n
 
 1. **Why it matters** — what breaks, who is affected, what the failure mode is.
 2. **How it happens** — for anything non-obvious: name the specific value, path, or call; trace execution with file/function/line step by step.
-3. **What to do** — concrete suggestion; name alternatives and tradeoffs. Explain *why* the fix is right.
+3. **What to do** — concrete suggestion; name alternatives and tradeoffs. Explain _why_ the fix is right.

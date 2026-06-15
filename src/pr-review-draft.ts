@@ -26,7 +26,8 @@ function getCommentLabel(comment: ReviewComment, index: number): string {
 }
 
 function getInlineAnchorKey(comment: ReviewComment): string | null {
-  if (comment.type !== "inline" || !comment.path || comment.line == null) return null;
+  if (comment.type !== "inline" || !comment.path || comment.line == null)
+    return null;
   const start = comment.startLine != null ? comment.startLine : comment.line;
   return `${comment.path}:${start}-${comment.line}`;
 }
@@ -42,7 +43,9 @@ export function parsePrReviewDraftComments(draft: string): ReviewComment[] {
       if (line.trim() === "||| END") {
         current.body = currentBody.join("\n").trim();
         if (!current.body) {
-          throw new Error(`Empty review comment body for ${getCommentLabel(current, comments.length)}.`);
+          throw new Error(
+            `Empty review comment body for ${getCommentLabel(current, comments.length)}.`,
+          );
         }
         comments.push(current);
         current = null;
@@ -53,7 +56,9 @@ export function parsePrReviewDraftComments(draft: string): ReviewComment[] {
       continue;
     }
 
-    const match = line.match(/^\|\|\| COMMENT (overall|inline)(?: (.+):(\d+)(?:-(\d+))?)?\s*$/);
+    const match = line.match(
+      /^\|\|\| COMMENT (overall|inline)(?: (.+):(\d+)(?:-(\d+))?)?\s*$/,
+    );
     if (!match) continue;
     const [, type, file, start, end] = match;
     if (type === "inline") {
@@ -73,7 +78,9 @@ export function parsePrReviewDraftComments(draft: string): ReviewComment[] {
   }
 
   if (current) {
-    throw new Error(`Unterminated review comment block for ${getCommentLabel(current, comments.length)}.`);
+    throw new Error(
+      `Unterminated review comment block for ${getCommentLabel(current, comments.length)}.`,
+    );
   }
 
   return comments;
@@ -248,7 +255,6 @@ export function validateNoDuplicateInlineComments(
   return errors;
 }
 
-
 export function validateInlineCommentsHaveRationale(
   comments: ReviewComment[],
 ): string[] {
@@ -262,7 +268,7 @@ export function validateInlineCommentsHaveRationale(
     const hasProse = proseLines.some((l) => l.trim().length > 0);
     if (!hasProse) {
       errors.push(
-        `${label}: inline comment must open with a prose line naming the problem (WHAT is broken), then why it matters — do not start with a code fence`,
+        `${label}: missing a rationale line — inline comment must open with a prose line naming the problem (WHAT is broken), then why it matters — do not start with a code fence`,
       );
     }
   });

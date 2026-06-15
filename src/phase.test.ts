@@ -214,16 +214,21 @@ describe("runPhase", () => {
       "test-model",
     );
 
-    expect(result).toEqual({ status: "success", response: "review draft updated" });
+    expect(result).toEqual({
+      status: "success",
+      response: "review draft updated",
+    });
     expect(
-      fs.existsSync(path.join(workspaceRoot, ".agent", "notes", "pr-reviewer.md")),
+      fs.existsSync(
+        path.join(workspaceRoot, ".agent", "notes", "pr-reviewer.md"),
+      ),
     ).toBe(false);
-    expect(fs.existsSync(path.join(workspaceRoot, ".carl", "config.json"))).toBe(
-      false,
-    );
-    expect(fs.existsSync(path.join(workspaceRoot, ".carl", "events.jsonl"))).toBe(
-      false,
-    );
+    expect(
+      fs.existsSync(path.join(workspaceRoot, ".carl", "config.json")),
+    ).toBe(false);
+    expect(
+      fs.existsSync(path.join(workspaceRoot, ".carl", "events.jsonl")),
+    ).toBe(false);
   });
 
   test("treats interview responses as blocked", async () => {
@@ -272,14 +277,9 @@ describe("runPhase", () => {
     mockCreate.mockResolvedValue(client as any);
 
     await expect(
-      runPhase(
-        workspaceRoot,
-        "developer",
-        "code",
-        "ship it",
-        "test-model",
-        { prdPhaseTitle: "Phase 1: Ship it" },
-      ),
+      runPhase(workspaceRoot, "developer", "code", "ship it", "test-model", {
+        prdPhaseTitle: "Phase 1: Ship it",
+      }),
     ).rejects.toThrow("boom");
 
     expect(readPhaseEvent().meta).toMatchObject({
@@ -300,7 +300,11 @@ describe("runPhase", () => {
   });
 
   test("chat includes code-review rules only for explicit review requests", () => {
-    const defaultInstruction = buildSkillInstruction("chat", workspaceRoot, "ship it");
+    const defaultInstruction = buildSkillInstruction(
+      "chat",
+      workspaceRoot,
+      "ship it",
+    );
     const reviewInstruction = buildSkillInstruction(
       "chat",
       workspaceRoot,
@@ -344,6 +348,3 @@ describe("parsePrdPhases", () => {
     expect(parsePrdPhases(prd)).toHaveLength(1);
   });
 });
-
-
-

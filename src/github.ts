@@ -148,7 +148,10 @@ export function checkNotForkPr(
   repo: string,
 ): void {
   const expected = `${owner}/${repo}`.toLowerCase();
-  if (!metadata.headRepoFullName || metadata.headRepoFullName.toLowerCase() !== expected) {
+  if (
+    !metadata.headRepoFullName ||
+    metadata.headRepoFullName.toLowerCase() !== expected
+  ) {
     throw new Error(
       `Fork PRs are not supported.\n` +
         `PR source is from ${metadata.headRepoFullName || "an unknown fork"}, expected ${owner}/${repo}.\n` +

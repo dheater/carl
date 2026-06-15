@@ -1,9 +1,4 @@
-import {
-  detectGit,
-  getGitStatus,
-  getCurrentBranch,
-  getHeadSha,
-} from "./git";
+import { detectGit, getGitStatus, getCurrentBranch, getHeadSha } from "./git";
 import { execSync } from "child_process";
 
 jest.mock("child_process");

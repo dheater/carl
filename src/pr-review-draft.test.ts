@@ -129,7 +129,11 @@ describe("validateCommentsInScope", () => {
   ].join("\n");
   const hunks = parseDiffHunks(diff);
 
-  function inline(line: number, startLine?: number, path = "src/f.ts"): ReviewComment {
+  function inline(
+    line: number,
+    startLine?: number,
+    path = "src/f.ts",
+  ): ReviewComment {
     return { type: "inline", path, line, startLine, body: "b" };
   }
 
@@ -154,7 +158,10 @@ describe("validateCommentsInScope", () => {
   });
 
   test("rejects a file not in the diff", () => {
-    const errors = validateCommentsInScope([inline(1, undefined, "other.ts")], hunks);
+    const errors = validateCommentsInScope(
+      [inline(1, undefined, "other.ts")],
+      hunks,
+    );
     expect(errors[0]).toMatch(/not in the PR diff/);
   });
 
@@ -172,8 +179,20 @@ describe("validateCommentsInScope", () => {
 describe("validateNoDuplicateInlineComments", () => {
   test("rejects duplicate exact inline anchors", () => {
     const comments: ReviewComment[] = [
-      { type: "inline", path: "src/f.ts", startLine: 10, line: 12, body: "first" },
-      { type: "inline", path: "src/f.ts", startLine: 10, line: 12, body: "second" },
+      {
+        type: "inline",
+        path: "src/f.ts",
+        startLine: 10,
+        line: 12,
+        body: "first",
+      },
+      {
+        type: "inline",
+        path: "src/f.ts",
+        startLine: 10,
+        line: 12,
+        body: "second",
+      },
     ];
     const errors = validateNoDuplicateInlineComments(comments);
     expect(errors).toHaveLength(1);
@@ -195,11 +214,21 @@ describe("validateInlineCommentsHaveRationale", () => {
   }
 
   test("accepts an inline comment with prose and no suggestion", () => {
-    expect(validateInlineCommentsHaveRationale([inline("Caller will see undefined here.")])).toEqual([]);
+    expect(
+      validateInlineCommentsHaveRationale([
+        inline("Caller will see undefined here."),
+      ]),
+    ).toEqual([]);
   });
 
   test("accepts an inline comment with a rationale line above a suggestion", () => {
-    const body = ["Caller will see undefined here.", "", "```suggestion", "return value;", "```"].join("\n");
+    const body = [
+      "Caller will see undefined here.",
+      "",
+      "```suggestion",
+      "return value;",
+      "```",
+    ].join("\n");
     expect(validateInlineCommentsHaveRationale([inline(body)])).toEqual([]);
   });
 
@@ -211,7 +240,9 @@ describe("validateInlineCommentsHaveRationale", () => {
   });
 
   test("rejects an inline comment with only blank lines before the suggestion fence", () => {
-    const body = ["", "   ", "```suggestion", "return value;", "```"].join("\n");
+    const body = ["", "   ", "```suggestion", "return value;", "```"].join(
+      "\n",
+    );
     const errors = validateInlineCommentsHaveRationale([inline(body)]);
     expect(errors).toHaveLength(1);
     expect(errors[0]).toMatch(/missing a rationale line/);
@@ -222,5 +253,3 @@ describe("validateInlineCommentsHaveRationale", () => {
     expect(validateInlineCommentsHaveRationale([c])).toEqual([]);
   });
 });
-
-

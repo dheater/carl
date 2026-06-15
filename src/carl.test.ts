@@ -18,7 +18,9 @@ const SAMPLE_DIFF = [
 ].join("\n");
 
 jest.mock("./github", () => ({
-  parsePrUrl: jest.fn().mockReturnValue({ owner: "owner", repo: "repo", number: 42 }),
+  parsePrUrl: jest
+    .fn()
+    .mockReturnValue({ owner: "owner", repo: "repo", number: 42 }),
   checkGhCli: jest.fn(),
   checkRepoMatch: jest.fn(),
   checkNotForkPr: jest.fn(),
@@ -69,9 +71,13 @@ describe("carl CLI", () => {
   beforeEach(() => {
     jest.resetModules();
     jest.clearAllMocks();
-    const childProcess = require("child_process") as typeof import("child_process");
-    (childProcess.spawnSync as jest.MockedFunction<typeof childProcess.spawnSync>)
-      .mockReturnValue({ status: 0, signal: null } as any);
+    const childProcess =
+      require("child_process") as typeof import("child_process");
+    (
+      childProcess.spawnSync as jest.MockedFunction<
+        typeof childProcess.spawnSync
+      >
+    ).mockReturnValue({ status: 0, signal: null } as any);
     const editor = require("./editor") as typeof import("./editor");
     (
       editor.collectPrompt as jest.MockedFunction<typeof editor.collectPrompt>
@@ -183,7 +189,9 @@ describe("carl CLI", () => {
     try {
       await runLoadedCli();
       expect(exitSpy).toHaveBeenCalledWith(1);
-      const allErrors = errorSpy.mock.calls.map((call) => String(call[0])).join("\n");
+      const allErrors = errorSpy.mock.calls
+        .map((call) => String(call[0]))
+        .join("\n");
       expect(allErrors).toContain("Usage: carl [--model <model>] <command>");
       expect(allErrors).toContain("verify        Run verifier once");
       expect(allErrors).toContain("pr-review <github-pr-url>");
@@ -231,7 +239,8 @@ describe("carl CLI", () => {
     );
     fs.writeFileSync(reviewPromptFile, "review code in this repo\n", "utf-8");
 
-    const childProcess = require("child_process") as typeof import("child_process");
+    const childProcess =
+      require("child_process") as typeof import("child_process");
     const mockSpawnSync = childProcess.spawnSync as jest.MockedFunction<
       typeof childProcess.spawnSync
     >;
@@ -242,7 +251,9 @@ describe("carl CLI", () => {
       return { status: 0, signal: null } as any;
     });
 
-    const mockRunPhase = await runCli(["chat", reviewPromptFile], { cwd: tmpDir });
+    const mockRunPhase = await runCli(["chat", reviewPromptFile], {
+      cwd: tmpDir,
+    });
 
     expect(mockRunPhase).not.toHaveBeenCalled();
     expect(mockSpawnSync).toHaveBeenCalledWith(
@@ -266,22 +277,28 @@ describe("carl CLI", () => {
   });
 
   test("chat captures the initial prompt in $EDITOR before starting auggie", async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-chat-interactive-"));
-    const childProcess = require("child_process") as typeof import("child_process");
+    const tmpDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "carl-chat-interactive-"),
+    );
+    const childProcess =
+      require("child_process") as typeof import("child_process");
     const mockSpawnSync = childProcess.spawnSync as jest.MockedFunction<
       typeof childProcess.spawnSync
     >;
     const editor = require("./editor") as typeof import("./editor");
-    const mockCollectPrompt =
-      editor.collectPrompt as jest.MockedFunction<typeof editor.collectPrompt>;
-    const mockOpenFileInEditor =
-      editor.openFileInEditor as jest.MockedFunction<typeof editor.openFileInEditor>;
+    const mockCollectPrompt = editor.collectPrompt as jest.MockedFunction<
+      typeof editor.collectPrompt
+    >;
+    const mockOpenFileInEditor = editor.openFileInEditor as jest.MockedFunction<
+      typeof editor.openFileInEditor
+    >;
     let capturedInstruction = "";
 
     mockCollectPrompt.mockReturnValueOnce("review code in this repo");
     mockSpawnSync.mockImplementationOnce((command, args) => {
       const argList = args as string[];
-      const instructionPath = argList[argList.indexOf("--instruction-file") + 1];
+      const instructionPath =
+        argList[argList.indexOf("--instruction-file") + 1];
       capturedInstruction = fs.readFileSync(instructionPath, "utf-8");
       return { status: 0, signal: null } as any;
     });
@@ -312,13 +329,15 @@ describe("carl CLI", () => {
 
   test("chat cancels when the editor prompt is blank", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-chat-cancel-"));
-    const childProcess = require("child_process") as typeof import("child_process");
+    const childProcess =
+      require("child_process") as typeof import("child_process");
     const mockSpawnSync = childProcess.spawnSync as jest.MockedFunction<
       typeof childProcess.spawnSync
     >;
     const editor = require("./editor") as typeof import("./editor");
-    const mockCollectPrompt =
-      editor.collectPrompt as jest.MockedFunction<typeof editor.collectPrompt>;
+    const mockCollectPrompt = editor.collectPrompt as jest.MockedFunction<
+      typeof editor.collectPrompt
+    >;
 
     mockCollectPrompt.mockReturnValueOnce(null);
 
@@ -634,7 +653,6 @@ describe("carl CLI", () => {
       );
       expect(mockOpenFileInEditor).toHaveBeenCalledTimes(2);
     });
-
   });
 
   describe("pending prompt", () => {
@@ -910,7 +928,11 @@ describe("carl CLI", () => {
     function appendComments(draftPath: string, blocks: string[]): void {
       const existing = fs.readFileSync(draftPath, "utf-8");
       const sep = existing.endsWith("\n") ? "" : "\n";
-      fs.writeFileSync(draftPath, existing + sep + blocks.join("\n") + "\n", "utf-8");
+      fs.writeFileSync(
+        draftPath,
+        existing + sep + blocks.join("\n") + "\n",
+        "utf-8",
+      );
     }
 
     function writeValidComment(draftPath: string): void {
@@ -924,8 +946,12 @@ describe("carl CLI", () => {
     test("rejects missing URL with a command-specific error", async () => {
       process.argv = ["node", "carl", "pr-review"];
       const cwdSpy = jest.spyOn(process, "cwd").mockReturnValue("/tmp/ws");
-      const exitSpy = jest.spyOn(process, "exit").mockImplementation((() => undefined) as never);
-      const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+      const exitSpy = jest
+        .spyOn(process, "exit")
+        .mockImplementation((() => undefined) as never);
+      const errorSpy = jest
+        .spyOn(console, "error")
+        .mockImplementation(() => {});
       const logSpy = jest.spyOn(console, "log").mockImplementation(() => {});
 
       try {
@@ -945,16 +971,26 @@ describe("carl CLI", () => {
     test("rejects an old-style branch-name argument with an actionable error", async () => {
       process.argv = ["node", "carl", "pr-review", "main"];
       const cwdSpy = jest.spyOn(process, "cwd").mockReturnValue("/tmp/ws");
-      const exitSpy = jest.spyOn(process, "exit").mockImplementation((() => undefined) as never);
-      const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+      const exitSpy = jest
+        .spyOn(process, "exit")
+        .mockImplementation((() => undefined) as never);
+      const errorSpy = jest
+        .spyOn(console, "error")
+        .mockImplementation(() => {});
       const logSpy = jest.spyOn(console, "log").mockImplementation(() => {});
 
       try {
         await runLoadedCli();
         expect(exitSpy).toHaveBeenCalledWith(1);
-        const allErrors = errorSpy.mock.calls.map((c) => String(c[0])).join("\n");
-        expect(allErrors).toMatch(/carl pr-review.*now requires a GitHub PR URL/);
-        expect(allErrors).toContain("https://github.com/owner/repo/pull/NUMBER");
+        const allErrors = errorSpy.mock.calls
+          .map((c) => String(c[0]))
+          .join("\n");
+        expect(allErrors).toMatch(
+          /carl pr-review.*now requires a GitHub PR URL/,
+        );
+        expect(allErrors).toContain(
+          "https://github.com/owner/repo/pull/NUMBER",
+        );
       } finally {
         cwdSpy.mockRestore();
         exitSpy.mockRestore();
@@ -968,17 +1004,23 @@ describe("carl CLI", () => {
       const phase = require("./phase") as typeof import("./phase");
       const draftPath = path.join(tmpWs, ".agent", "pr-review.md");
 
-      (phase.runPhase as jest.MockedFunction<any>).mockImplementationOnce(async () => {
-        writeValidComment(draftPath);
-        return { status: "success", response: "done" };
-      });
+      (phase.runPhase as jest.MockedFunction<any>).mockImplementationOnce(
+        async () => {
+          writeValidComment(draftPath);
+          return { status: "success", response: "done" };
+        },
+      );
 
       const github = require("./github") as typeof import("./github");
 
       process.argv = ["node", "carl", "pr-review", PR_URL];
       const cwdSpy = jest.spyOn(process, "cwd").mockReturnValue(tmpWs);
-      const exitSpy = jest.spyOn(process, "exit").mockImplementation((() => undefined) as never);
-      const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+      const exitSpy = jest
+        .spyOn(process, "exit")
+        .mockImplementation((() => undefined) as never);
+      const errorSpy = jest
+        .spyOn(console, "error")
+        .mockImplementation(() => {});
       const logSpy = jest.spyOn(console, "log").mockImplementation(() => {});
 
       try {
@@ -998,9 +1040,16 @@ describe("carl CLI", () => {
         expect(draft).toContain("+added line");
         expect(draft).toContain("PR: owner/repo#42");
         expect(github.createPendingReview).toHaveBeenCalledWith(
-          "owner", "repo", 42, "abc1234",
+          "owner",
+          "repo",
+          42,
+          "abc1234",
           expect.arrayContaining([
-            expect.objectContaining({ type: "inline", path: "src/f.ts", line: 2 }),
+            expect.objectContaining({
+              type: "inline",
+              path: "src/f.ts",
+              line: 2,
+            }),
           ]),
         );
       } finally {
@@ -1013,22 +1062,30 @@ describe("carl CLI", () => {
     });
 
     test("does not modify tracked workspace files — only .agent/pr-review.md changes", async () => {
-      const tmpWs = fs.mkdtempSync(path.join(os.tmpdir(), "carl-pr-rev-immutable-"));
+      const tmpWs = fs.mkdtempSync(
+        path.join(os.tmpdir(), "carl-pr-rev-immutable-"),
+      );
       const srcFile = path.join(tmpWs, "src", "f.ts");
       fs.mkdirSync(path.dirname(srcFile), { recursive: true });
       fs.writeFileSync(srcFile, "original\n", "utf-8");
       const draftPath = path.join(tmpWs, ".agent", "pr-review.md");
 
       const phase = require("./phase") as typeof import("./phase");
-      (phase.runPhase as jest.MockedFunction<any>).mockImplementationOnce(async () => {
-        writeValidComment(draftPath);
-        return { status: "success", response: "done" };
-      });
+      (phase.runPhase as jest.MockedFunction<any>).mockImplementationOnce(
+        async () => {
+          writeValidComment(draftPath);
+          return { status: "success", response: "done" };
+        },
+      );
 
       process.argv = ["node", "carl", "pr-review", PR_URL];
       const cwdSpy = jest.spyOn(process, "cwd").mockReturnValue(tmpWs);
-      const exitSpy = jest.spyOn(process, "exit").mockImplementation((() => undefined) as never);
-      const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+      const exitSpy = jest
+        .spyOn(process, "exit")
+        .mockImplementation((() => undefined) as never);
+      const errorSpy = jest
+        .spyOn(console, "error")
+        .mockImplementation(() => {});
       const logSpy = jest.spyOn(console, "log").mockImplementation(() => {});
 
       try {
@@ -1045,14 +1102,22 @@ describe("carl CLI", () => {
     });
 
     test("errors when local HEAD does not match PR head", async () => {
-      const tmpWs = fs.mkdtempSync(path.join(os.tmpdir(), "carl-pr-rev-drift-"));
+      const tmpWs = fs.mkdtempSync(
+        path.join(os.tmpdir(), "carl-pr-rev-drift-"),
+      );
       const git = require("./git") as typeof import("./git");
-      (git.getHeadSha as jest.MockedFunction<any>).mockReturnValueOnce("deadbeef00000000");
+      (git.getHeadSha as jest.MockedFunction<any>).mockReturnValueOnce(
+        "deadbeef00000000",
+      );
 
       process.argv = ["node", "carl", "pr-review", PR_URL];
       const cwdSpy = jest.spyOn(process, "cwd").mockReturnValue(tmpWs);
-      const exitSpy = jest.spyOn(process, "exit").mockImplementation((() => undefined) as never);
-      const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+      const exitSpy = jest
+        .spyOn(process, "exit")
+        .mockImplementation((() => undefined) as never);
+      const errorSpy = jest
+        .spyOn(console, "error")
+        .mockImplementation(() => {});
       const logSpy = jest.spyOn(console, "log").mockImplementation(() => {});
 
       try {
@@ -1071,7 +1136,9 @@ describe("carl CLI", () => {
     });
 
     test("errors when tracked files outside .agent have drifted", async () => {
-      const tmpWs = fs.mkdtempSync(path.join(os.tmpdir(), "carl-pr-rev-dirty-"));
+      const tmpWs = fs.mkdtempSync(
+        path.join(os.tmpdir(), "carl-pr-rev-dirty-"),
+      );
       const git = require("./git") as typeof import("./git");
       (git.getGitStatus as jest.MockedFunction<any>).mockReturnValueOnce({
         isRepo: true,
@@ -1081,8 +1148,12 @@ describe("carl CLI", () => {
 
       process.argv = ["node", "carl", "pr-review", PR_URL];
       const cwdSpy = jest.spyOn(process, "cwd").mockReturnValue(tmpWs);
-      const exitSpy = jest.spyOn(process, "exit").mockImplementation((() => undefined) as never);
-      const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+      const exitSpy = jest
+        .spyOn(process, "exit")
+        .mockImplementation((() => undefined) as never);
+      const errorSpy = jest
+        .spyOn(console, "error")
+        .mockImplementation(() => {});
       const logSpy = jest.spyOn(console, "log").mockImplementation(() => {});
 
       try {
@@ -1091,7 +1162,9 @@ describe("carl CLI", () => {
         expect(errorSpy).toHaveBeenCalledWith(
           expect.stringContaining("tracked changes outside .agent"),
         );
-        expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("src/f.ts"));
+        expect(errorSpy).toHaveBeenCalledWith(
+          expect.stringContaining("src/f.ts"),
+        );
       } finally {
         cwdSpy.mockRestore();
         exitSpy.mockRestore();
@@ -1102,7 +1175,9 @@ describe("carl CLI", () => {
     });
 
     test("errors when the draft has no ||| COMMENT blocks after skill run", async () => {
-      const tmpWs = fs.mkdtempSync(path.join(os.tmpdir(), "carl-pr-rev-nocomm-"));
+      const tmpWs = fs.mkdtempSync(
+        path.join(os.tmpdir(), "carl-pr-rev-nocomm-"),
+      );
       const phase = require("./phase") as typeof import("./phase");
       (phase.runPhase as jest.MockedFunction<any>).mockResolvedValue({
         status: "success",
@@ -1111,8 +1186,12 @@ describe("carl CLI", () => {
 
       process.argv = ["node", "carl", "pr-review", PR_URL];
       const cwdSpy = jest.spyOn(process, "cwd").mockReturnValue(tmpWs);
-      const exitSpy = jest.spyOn(process, "exit").mockImplementation((() => undefined) as never);
-      const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+      const exitSpy = jest
+        .spyOn(process, "exit")
+        .mockImplementation((() => undefined) as never);
+      const errorSpy = jest
+        .spyOn(console, "error")
+        .mockImplementation(() => {});
       const logSpy = jest.spyOn(console, "log").mockImplementation(() => {});
 
       try {
@@ -1131,18 +1210,26 @@ describe("carl CLI", () => {
     });
 
     test("errors when the draft disappears before validation", async () => {
-      const tmpWs = fs.mkdtempSync(path.join(os.tmpdir(), "carl-pr-rev-missing-draft-"));
+      const tmpWs = fs.mkdtempSync(
+        path.join(os.tmpdir(), "carl-pr-rev-missing-draft-"),
+      );
       const phase = require("./phase") as typeof import("./phase");
       const draftPath = path.join(tmpWs, ".agent", "pr-review.md");
-      (phase.runPhase as jest.MockedFunction<any>).mockImplementationOnce(async () => {
-        fs.rmSync(draftPath, { force: true });
-        return { status: "success", response: "done" };
-      });
+      (phase.runPhase as jest.MockedFunction<any>).mockImplementationOnce(
+        async () => {
+          fs.rmSync(draftPath, { force: true });
+          return { status: "success", response: "done" };
+        },
+      );
 
       process.argv = ["node", "carl", "pr-review", PR_URL];
       const cwdSpy = jest.spyOn(process, "cwd").mockReturnValue(tmpWs);
-      const exitSpy = jest.spyOn(process, "exit").mockImplementation((() => undefined) as never);
-      const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+      const exitSpy = jest
+        .spyOn(process, "exit")
+        .mockImplementation((() => undefined) as never);
+      const errorSpy = jest
+        .spyOn(console, "error")
+        .mockImplementation(() => {});
       const logSpy = jest.spyOn(console, "log").mockImplementation(() => {});
 
       try {
@@ -1163,14 +1250,20 @@ describe("carl CLI", () => {
     test("rejects a fork PR with a help message", async () => {
       const tmpWs = fs.mkdtempSync(path.join(os.tmpdir(), "carl-pr-rev-fork-"));
       const github = require("./github") as typeof import("./github");
-      (github.checkNotForkPr as jest.MockedFunction<any>).mockImplementationOnce(() => {
+      (
+        github.checkNotForkPr as jest.MockedFunction<any>
+      ).mockImplementationOnce(() => {
         throw new Error("Fork PRs are not supported.");
       });
 
       process.argv = ["node", "carl", "pr-review", PR_URL];
       const cwdSpy = jest.spyOn(process, "cwd").mockReturnValue(tmpWs);
-      const exitSpy = jest.spyOn(process, "exit").mockImplementation((() => undefined) as never);
-      const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+      const exitSpy = jest
+        .spyOn(process, "exit")
+        .mockImplementation((() => undefined) as never);
+      const errorSpy = jest
+        .spyOn(console, "error")
+        .mockImplementation(() => {});
       const logSpy = jest.spyOn(console, "log").mockImplementation(() => {});
 
       try {
@@ -1189,7 +1282,9 @@ describe("carl CLI", () => {
     });
 
     test("reruns the skill once when scope errors are found, then creates review", async () => {
-      const tmpWs = fs.mkdtempSync(path.join(os.tmpdir(), "carl-pr-rev-rerun-"));
+      const tmpWs = fs.mkdtempSync(
+        path.join(os.tmpdir(), "carl-pr-rev-rerun-"),
+      );
       const phase = require("./phase") as typeof import("./phase");
       const draftPath = path.join(tmpWs, ".agent", "pr-review.md");
 
@@ -1219,15 +1314,21 @@ describe("carl CLI", () => {
 
       process.argv = ["node", "carl", "pr-review", PR_URL];
       const cwdSpy = jest.spyOn(process, "cwd").mockReturnValue(tmpWs);
-      const exitSpy = jest.spyOn(process, "exit").mockImplementation((() => undefined) as never);
-      const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+      const exitSpy = jest
+        .spyOn(process, "exit")
+        .mockImplementation((() => undefined) as never);
+      const errorSpy = jest
+        .spyOn(console, "error")
+        .mockImplementation(() => {});
       const logSpy = jest.spyOn(console, "log").mockImplementation(() => {});
 
       try {
         await runLoadedCli();
         expect(exitSpy).not.toHaveBeenCalled();
         expect(phase.runPhase).toHaveBeenCalledTimes(2);
-        expect((phase.runPhase as jest.Mock).mock.calls[1][3]).toMatch(/Errors:/);
+        expect((phase.runPhase as jest.Mock).mock.calls[1][3]).toMatch(
+          /Errors:/,
+        );
       } finally {
         cwdSpy.mockRestore();
         exitSpy.mockRestore();
@@ -1238,7 +1339,9 @@ describe("carl CLI", () => {
     });
 
     test("reruns the skill once when draft blocks are malformed, then creates review", async () => {
-      const tmpWs = fs.mkdtempSync(path.join(os.tmpdir(), "carl-pr-rev-parse-rerun-"));
+      const tmpWs = fs.mkdtempSync(
+        path.join(os.tmpdir(), "carl-pr-rev-parse-rerun-"),
+      );
       const phase = require("./phase") as typeof import("./phase");
       const draftPath = path.join(tmpWs, ".agent", "pr-review.md");
 
@@ -1273,8 +1376,12 @@ describe("carl CLI", () => {
 
       process.argv = ["node", "carl", "pr-review", PR_URL];
       const cwdSpy = jest.spyOn(process, "cwd").mockReturnValue(tmpWs);
-      const exitSpy = jest.spyOn(process, "exit").mockImplementation((() => undefined) as never);
-      const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+      const exitSpy = jest
+        .spyOn(process, "exit")
+        .mockImplementation((() => undefined) as never);
+      const errorSpy = jest
+        .spyOn(console, "error")
+        .mockImplementation(() => {});
       const logSpy = jest.spyOn(console, "log").mockImplementation(() => {});
 
       try {
@@ -1294,7 +1401,9 @@ describe("carl CLI", () => {
     });
 
     test("fails hard when scope errors remain after a rerun", async () => {
-      const tmpWs = fs.mkdtempSync(path.join(os.tmpdir(), "carl-pr-rev-hardfail-"));
+      const tmpWs = fs.mkdtempSync(
+        path.join(os.tmpdir(), "carl-pr-rev-hardfail-"),
+      );
       const phase = require("./phase") as typeof import("./phase");
       const draftPath = path.join(tmpWs, ".agent", "pr-review.md");
 
@@ -1317,8 +1426,12 @@ describe("carl CLI", () => {
 
       process.argv = ["node", "carl", "pr-review", PR_URL];
       const cwdSpy = jest.spyOn(process, "cwd").mockReturnValue(tmpWs);
-      const exitSpy = jest.spyOn(process, "exit").mockImplementation((() => undefined) as never);
-      const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+      const exitSpy = jest
+        .spyOn(process, "exit")
+        .mockImplementation((() => undefined) as never);
+      const errorSpy = jest
+        .spyOn(console, "error")
+        .mockImplementation(() => {});
       const logSpy = jest.spyOn(console, "log").mockImplementation(() => {});
 
       try {
@@ -1338,4 +1451,3 @@ describe("carl CLI", () => {
     });
   });
 });
-
