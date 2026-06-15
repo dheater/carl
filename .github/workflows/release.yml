@@ -68,4 +68,4 @@ jobs:
             --title "v${VERSION}" \
             --generate-notes \
             --target main \
-            dist/carl.js
+            dist/carl.mjs
