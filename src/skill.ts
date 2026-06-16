@@ -1,5 +1,5 @@
 import { getGitStatus, getCurrentBranch } from "./git";
-import { getPhaseOutputPath } from "./editor";
+import { getSkillOutputPath } from "./editor";
 
 import { randomUUID } from "crypto";
 import * as path from "path";
@@ -15,10 +15,10 @@ const EVENTS_LOG_FILE = "events.jsonl";
 type TimingEvent = {
   timestamp: string;
   run_id: string;
-  event: "Auggie.create" | "prompt" | "phase";
+  event: "Auggie.create" | "prompt" | "skill";
   subject: string;
   duration_ms: number;
-  phase: string;
+  skill: string;
   model: string;
   command?: string;
   meta?: Record<string, any>;
@@ -26,31 +26,22 @@ type TimingEvent = {
 
 type CarlConfig = {
   models?: {
-    architect?: string;
-    developer?: string;
-    reviewer?: string;
-    verify?: string;
-    chat?: string;
-    "pr-reviewer"?: string;
+    duck?: string;
+    review?: string;
+    "pr-review"?: string;
   };
 };
 
 export const DEFAULT_MODELS: Record<string, string> = {
-  architect: "gpt5.4",
-  developer: "sonnet4.6",
-  reviewer: "gpt5.4",
-  verify: "gpt5.4",
-  chat: "gpt5.4",
-  "pr-reviewer": "gpt5.4",
+  duck: "gpt5.4",
+  review: "gpt5.4",
+  "pr-review": "gpt5.4",
 };
 
-const BASE_RULE_FILES = ["carl.md", "errors.md"] as const;
+const BASE_RULE_FILES = ["carl.md"] as const;
 
-const PHASE_RULE_FILES: Record<string, readonly string[]> = {
-  developer: ["git-policy.md"],
-  reviewer: ["git-policy.md", "review-code.md"],
-  verify: ["git-policy.md"],
-  chat: ["git-policy.md"],
+const SKILL_RULE_FILES: Record<string, readonly string[]> = {
+  review: ["git-policy.md"],
 };
 
 type GitStatusCounts = {
@@ -58,10 +49,6 @@ type GitStatusCounts = {
   tracked_changed: number;
   untracked: number;
 };
-
-export interface RunPhaseContext {
-  prdPhaseTitle?: string;
-}
 
 function loadCarlConfig(
   workspaceRoot: string,
@@ -91,22 +78,13 @@ function loadCarlConfig(
 
 type PromptResponse = string | { text: string; usage?: Record<string, any> };
 
-function isInteractiveReviewRequest(initialPrompt?: string): boolean {
-  if (!initialPrompt) return false;
-  return /\breview\s+(?:code|project)\b/i.test(initialPrompt);
+function getRuleFiles(skill: string): string[] {
+  return [...BASE_RULE_FILES, ...(SKILL_RULE_FILES[skill] ?? [])];
 }
 
-function getRuleFiles(phaseName: string, initialPrompt?: string): string[] {
-  const files = [...BASE_RULE_FILES, ...(PHASE_RULE_FILES[phaseName] ?? [])];
-  if (phaseName === "chat" && isInteractiveReviewRequest(initialPrompt)) {
-    files.push("review-code.md");
-  }
-  return files;
-}
-
-function loadRules(phaseName: string, initialPrompt?: string): string {
+function loadRules(skill: string): string {
   if (!fs.existsSync(CARL_RULES_DIR)) return "";
-  return getRuleFiles(phaseName, initialPrompt)
+  return getRuleFiles(skill)
     .filter((f) => fs.existsSync(path.join(CARL_RULES_DIR, f)))
     .map((fileName) => {
       const raw = fs.readFileSync(path.join(CARL_RULES_DIR, fileName), "utf-8");
@@ -127,18 +105,14 @@ function loadSkillFile(name: string): string {
   return "";
 }
 
-export function getPhaseModel(phase: string, workspaceRoot?: string): string {
+export function getSkillModel(skill: string, workspaceRoot?: string): string {
   if (workspaceRoot) {
-    const config = loadCarlConfig(workspaceRoot, phase !== "pr-reviewer");
+    const config = loadCarlConfig(workspaceRoot, skill !== "pr-review");
     const override =
-      config.models?.[phase as keyof NonNullable<CarlConfig["models"]>];
+      config.models?.[skill as keyof NonNullable<CarlConfig["models"]>];
     if (override) return override;
   }
-  return DEFAULT_MODELS[phase] ?? "haiku4.5";
-}
-
-function shouldAllowIndexing(phaseName: string): boolean {
-  return phaseName !== "chat";
+  return DEFAULT_MODELS[skill] ?? "haiku4.5";
 }
 
 function extractPromptResponseText(
@@ -173,19 +147,19 @@ function logTimingDuration(
   event: TimingEvent["event"],
   subject: string,
   durationMs: number,
-  phase: string,
+  skill: string,
   model: string,
   command: string | undefined,
   meta?: Record<string, any>,
 ): void {
-  if (phase !== "pr-reviewer") {
+  if (skill !== "pr-review") {
     writeTimingEvent(workspaceRoot, {
       timestamp: new Date().toISOString(),
       run_id: runId,
       event,
       subject,
       duration_ms: durationMs,
-      phase,
+      skill,
       model,
       command,
       meta,
@@ -195,41 +169,21 @@ function logTimingDuration(
 }
 
 export function buildSkillInstruction(
-  phaseName: string,
+  skill: string,
   workspaceRoot?: string,
-  initialPrompt?: string,
 ): string {
-  const rules = loadRules(phaseName, initialPrompt);
-  const skillContent = loadSkillFile(phaseName);
+  const rules = loadRules(skill);
+  const skillContent = loadSkillFile(skill);
   let instruction = "";
   if (rules) {
     instruction += `# Rules\n\n${rules}\n\n---\n\n`;
   }
-  instruction += skillContent
-    ? `# Your skill for this session\n\n${skillContent}`
-    : `Follow the ${phaseName} skill.`;
+  instruction += skillContent || `Follow the ${skill} skill.`;
 
-  if ((phaseName === "reviewer" || phaseName === "verify") && workspaceRoot) {
-    const branch =
-      phaseName === "reviewer" ? getCurrentBranch(workspaceRoot) : null;
+  if (skill === "review" && workspaceRoot) {
+    const branch = getCurrentBranch(workspaceRoot);
     if (branch) {
       instruction += `\n\n---\n\n# Current branch\n\n\`${branch}\`\n\n`;
-    }
-
-    const prdPath = path.join(workspaceRoot, ".agent", "prd.md");
-    if (fs.existsSync(prdPath)) {
-      const phaseLabel = phaseName === "reviewer" ? "review" : "verification";
-      const criteriaVerb = phaseName === "reviewer" ? "audit" : "validate";
-      const evidenceLine =
-        phaseName === "reviewer"
-          ? "Treat anything not clearly implemented and later proven by `verify` as `[gap]`."
-          : "Treat anything not clearly implemented and validated as `[gap]`.";
-      instruction += "\n\n---\n\n# PRD acceptance criteria\n\n";
-      instruction += `.agent/prd.md exists and is the source of truth for this ${phaseLabel}.\n\n`;
-      instruction += `Before you ${criteriaVerb} results, extract the acceptance criteria from that file and check the current workspace state against each one.\n\n`;
-      instruction +=
-        "In `## Acceptance criteria`, list every acceptance criterion with exactly one status: `[met]`, `[gap]`, or `[unknown]`. " +
-        `${evidenceLine} If .agent/prd.md has no acceptance criteria, say that explicitly.\n\n`;
     }
 
     const gitStatus = getGitStatus(workspaceRoot);
@@ -259,79 +213,35 @@ export function buildSkillInstruction(
       instruction +=
         "\n\n---\n\n# Files changed\n\nNot in a git repository.\n\n";
     }
+  }
 
-    if (phaseName === "reviewer") {
-      const isTicketBranch = branch && branch !== "main" && branch !== "master";
-      instruction += "\n\n---\n\n# Commit message\n\n";
-      if (isTicketBranch) {
-        instruction += `Add \`## Proposed commit message\`. Subject: ticket prefix from \`${branch}\` + summary. Optional body.\n`;
-      } else {
-        instruction +=
-          "Add `## Proposed commit message`. Subject: `fix:`/`feat:`/`chore:` + summary. Optional body.\n";
-      }
+  if (skill === "review") {
+    const branch = getCurrentBranch(workspaceRoot);
+    const isTicketBranch = branch && branch !== "main" && branch !== "master";
+    instruction += "\n\n---\n\n# Commit message\n\n";
+    if (isTicketBranch) {
+      instruction += `Add \`## Proposed commit message\`. Subject: ticket prefix from \`${branch}\` + summary. Optional body.\n`;
+    } else {
+      instruction +=
+        "Add `## Proposed commit message`. Subject: `fix:`/`feat:`/`chore:` + summary. Optional body.\n";
     }
   }
 
   return instruction;
 }
 
-function writePhaseOutput(
-  phaseName: string,
+function writeSkillOutput(
+  skill: string,
   status: "success" | "blocked",
-  phaseOutput: string,
+  output: string,
   workspaceRoot: string,
 ): void {
-  if (phaseName === "pr-reviewer") {
+  if (skill === "pr-review") {
     return;
   }
-  const outputPath = getPhaseOutputPath(workspaceRoot, phaseName, status);
+  const outputPath = getSkillOutputPath(workspaceRoot, skill, status);
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-  if (
-    phaseName === "architect" &&
-    status === "success" &&
-    fs.existsSync(outputPath)
-  ) {
-    return;
-  }
-  fs.writeFileSync(outputPath, phaseOutput, "utf-8");
-}
-
-export interface PrdPhase {
-  lineIndex: number;
-  title: string;
-  completed: boolean;
-}
-
-export function parsePrdPhases(prdContent: string): PrdPhase[] {
-  const lines = prdContent.split("\n");
-  const phases: PrdPhase[] = [];
-  let inPhasesSection = false;
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (/^##\s+Phases\s*$/i.test(line)) {
-      inPhasesSection = true;
-      continue;
-    }
-    if (inPhasesSection && /^##\s+/.test(line)) break;
-    if (inPhasesSection) {
-      const match = line.match(/^-\s+\[([ x])\]\s+(.+)$/i);
-      if (match) {
-        phases.push({
-          lineIndex: i,
-          title: match[2].trim(),
-          completed: match[1] === "x",
-        });
-      }
-    }
-  }
-  return phases;
-}
-
-export function markPhaseComplete(prdPath: string, lineIndex: number): void {
-  const content = fs.readFileSync(prdPath, "utf-8");
-  const lines = content.split("\n");
-  lines[lineIndex] = lines[lineIndex].replace(/^(-\s+\[) \]/, "$1x]");
-  fs.writeFileSync(prdPath, lines.join("\n"), "utf-8");
+  fs.writeFileSync(outputPath, output, "utf-8");
 }
 
 export class NetworkUnavailableError extends Error {
@@ -341,23 +251,21 @@ export class NetworkUnavailableError extends Error {
   }
 }
 
-export interface RunPhaseResult {
+export interface RunSkillResult {
   status: "success" | "blocked";
   response: string;
 }
 
-class PhaseTimeoutError extends Error {
+class SkillTimeoutError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "PhaseTimeoutError";
+    this.name = "SkillTimeoutError";
   }
 }
 
-const PHASE_TIMEOUT_MS: Record<string, number> = {
-  developer: 14 * 60 * 1000,
-  reviewer: 6 * 60 * 1000,
-  verify: 10 * 60 * 1000,
-  architect: 12 * 60 * 1000,
+const SKILL_TIMEOUT_MS: Record<string, number> = {
+  review: 6 * 60 * 1000,
+  duck: 12 * 60 * 1000,
 };
 
 function countGitStatus(workspaceRoot: string): GitStatusCounts {
@@ -369,37 +277,32 @@ function countGitStatus(workspaceRoot: string): GitStatusCounts {
   };
 }
 
-function getPhaseOutputRelativePath(
+function getSkillOutputRelativePath(
   workspaceRoot: string,
-  phaseName: string,
+  skill: string,
   status: "success" | "blocked" | "error",
 ): string | null {
-  if (phaseName === "pr-reviewer") {
+  if (skill === "pr-review") {
     return null;
   }
-  const outputPath = getPhaseOutputPath(
+  const outputPath = getSkillOutputPath(
     workspaceRoot,
-    phaseName,
+    skill,
     status === "blocked" ? "blocked" : "success",
   );
   return path.relative(workspaceRoot, outputPath) || path.basename(outputPath);
 }
 
-function buildPhaseEventMeta(
+function buildSkillEventMeta(
   workspaceRoot: string,
-  phaseName: string,
+  skill: string,
   status: "success" | "blocked" | "error",
   gitStatusBefore: GitStatusCounts,
   retryCount: number,
-  context?: RunPhaseContext,
   errorType?: "network" | "timeout" | "exception",
 ): Record<string, any> {
   const gitStatusAfter = countGitStatus(workspaceRoot);
-  const outputPath = getPhaseOutputRelativePath(
-    workspaceRoot,
-    phaseName,
-    status,
-  );
+  const outputPath = getSkillOutputRelativePath(workspaceRoot, skill, status);
   const absoluteOutputPath = outputPath
     ? path.join(workspaceRoot, outputPath)
     : null;
@@ -410,7 +313,6 @@ function buildPhaseEventMeta(
     error_type: status === "error" ? (errorType ?? "exception") : null,
     retry_count: retryCount,
     interview_triggered: status === "blocked",
-    prd_present: fs.existsSync(path.join(workspaceRoot, ".agent", "prd.md")),
     git_repo: gitStatusBefore.is_repo,
     tracked_changed_before: gitStatusBefore.tracked_changed,
     tracked_changed_after: gitStatusAfter.tracked_changed,
@@ -420,17 +322,14 @@ function buildPhaseEventMeta(
     output_exists: absoluteOutputPath
       ? fs.existsSync(absoluteOutputPath)
       : false,
-    ...(context?.prdPhaseTitle
-      ? { prd_phase_title: context.prdPhaseTitle }
-      : {}),
   };
 }
 
-function classifyPhaseError(err: unknown): "network" | "timeout" | "exception" {
+function classifySkillError(err: unknown): "network" | "timeout" | "exception" {
   if (err instanceof NetworkUnavailableError) {
     return "network";
   }
-  if (err instanceof PhaseTimeoutError) {
+  if (err instanceof SkillTimeoutError) {
     return "timeout";
   }
   return "exception";
@@ -438,22 +337,22 @@ function classifyPhaseError(err: unknown): "network" | "timeout" | "exception" {
 
 function writeTimeoutDiagnostic(
   workspaceRoot: string,
-  phaseName: string,
+  skill: string,
   command: string,
   runId: string,
   timeoutMs: number,
   elapsedMs: number,
   sessionLog: string[],
 ): void {
-  if (phaseName === "pr-reviewer") {
+  if (skill === "pr-review") {
     return;
   }
   try {
     const dir = path.join(workspaceRoot, ".agent", "notes");
     fs.mkdirSync(dir, { recursive: true });
-    const file = path.join(dir, `timeout-${phaseName}-${runId}.md`);
+    const file = path.join(dir, `timeout-${skill}-${runId}.md`);
     const header =
-      `# Timeout: ${phaseName} (${command})\n\n` +
+      `# Timeout: ${skill} (${command})\n\n` +
       `- run_id: ${runId}\n` +
       `- timeout: ${timeoutMs / 60000}m\n` +
       `- elapsed: ${(elapsedMs / 1000).toFixed(1)}s\n` +
@@ -468,31 +367,21 @@ function writeTimeoutDiagnostic(
   }
 }
 
-export async function runPhase(
+export async function runSkill(
   workspaceRoot: string,
-  phaseName: string,
-  command: string,
+  skill: string,
   initialPrompt?: string,
   modelOverride?: string,
-  context?: RunPhaseContext,
-): Promise<RunPhaseResult> {
+): Promise<RunSkillResult> {
+  const command = skill;
   const runId = randomUUID();
-  const model = modelOverride ?? getPhaseModel(phaseName, workspaceRoot);
-  const phaseStartTime = Date.now();
-  const allowIndexing = shouldAllowIndexing(phaseName);
+  const model = modelOverride ?? getSkillModel(skill, workspaceRoot);
+  const skillStartTime = Date.now();
   const gitStatusBefore = countGitStatus(workspaceRoot);
 
-  let instruction = buildSkillInstruction(
-    phaseName,
-    workspaceRoot,
-    initialPrompt,
-  );
+  let instruction = buildSkillInstruction(skill, workspaceRoot);
   if (initialPrompt) {
     instruction += `\n\n# User request\n\n${initialPrompt}`;
-    if (phaseName === "architect") {
-      instruction +=
-        "\n\nThe user has already stated their request above. Skip the menu — proceed directly with this request.";
-    }
   }
 
   const { Auggie } = await import("@augmentcode/auggie-sdk");
@@ -506,7 +395,7 @@ export async function runPhase(
 
   const MAX_FETCH_RETRIES = 2;
 
-  console.log(`Starting phase: ${phaseName}`);
+  console.log(`Starting skill: ${skill}`);
 
   let response = "";
   let usage: Record<string, any> | undefined;
@@ -522,20 +411,25 @@ export async function runPhase(
       }
 
       console.log(`  [System] Initializing agent...`);
-      console.log(`[Timing] Auggie.create entry ${phaseName}/${model}`);
+      console.log(`[Timing] Auggie.create entry ${skill}/${model}`);
       const auggleCreateStart = Date.now();
+      const excludedTools: string[] =
+        skill !== "pr-review"
+          ? ["remove-files", "save-file", "str-replace-editor"]
+          : [];
       const client = await Auggie.create({
         workspaceRoot,
         model: model as any,
-        allowIndexing,
+        allowIndexing: true,
+        excludedTools,
       });
       logTimingDuration(
         workspaceRoot,
         runId,
         "Auggie.create",
-        `${phaseName}/${model}`,
+        `${skill}/${model}`,
         Date.now() - auggleCreateStart,
-        phaseName,
+        skill,
         model,
         command,
       );
@@ -547,7 +441,7 @@ export async function runPhase(
         const ts = new Date().toISOString();
         if (update.sessionUpdate === "tool_call") {
           console.log(
-            `\n  [${phaseName}/${model}] Running tool: ${update.title || "unknown"}...`,
+            `\n  [${skill}/${model}] Running tool: ${update.title || "unknown"}...`,
           );
           sessionLog.push(`[${ts}] tool_call: ${update.title || "unknown"}`);
         } else if (update.sessionUpdate === "agent_thought_chunk") {
@@ -567,9 +461,9 @@ export async function runPhase(
         console.log(
           `  [System] Agent initialized. Sending prompt and awaiting response...`,
         );
-        console.log(`[Timing] prompt entry ${phaseName}/${model}`);
+        console.log(`[Timing] prompt entry ${skill}/${model}`);
         const promptStart = Date.now();
-        const timeoutMs = PHASE_TIMEOUT_MS[phaseName];
+        const timeoutMs = SKILL_TIMEOUT_MS[skill];
         let timeoutHandle: NodeJS.Timeout | undefined;
         const promptPromise = client.prompt(instruction, {
           isAnswerOnly: true,
@@ -579,10 +473,10 @@ export async function runPhase(
           if (timeoutMs) {
             const timeoutPromise = new Promise<never>((_, reject) => {
               timeoutHandle = setTimeout(() => {
-                const writesTimeoutDiagnostic = phaseName !== "pr-reviewer";
+                const writesTimeoutDiagnostic = skill !== "pr-review";
                 writeTimeoutDiagnostic(
                   workspaceRoot,
-                  phaseName,
+                  skill,
                   command,
                   runId,
                   timeoutMs,
@@ -591,10 +485,10 @@ export async function runPhase(
                 );
                 client.cancel().catch(() => {});
                 reject(
-                  new PhaseTimeoutError(
+                  new SkillTimeoutError(
                     writesTimeoutDiagnostic
-                      ? `${phaseName} exceeded ${timeoutMs / 60000}m timeout — cancelled. Diagnostic written to .agent/notes/timeout-${phaseName}-${runId}.md`
-                      : `${phaseName} exceeded ${timeoutMs / 60000}m timeout — cancelled. Re-run \`carl ${command}\` to retry.`,
+                      ? `${skill} exceeded ${timeoutMs / 60000}m timeout — cancelled. Diagnostic written to .agent/notes/timeout-${skill}-${runId}.md`
+                      : `${skill} exceeded ${timeoutMs / 60000}m timeout — cancelled. Re-run \`carl ${command}\` to retry.`,
                   ),
                 );
               }, timeoutMs);
@@ -612,9 +506,9 @@ export async function runPhase(
           workspaceRoot,
           runId,
           "prompt",
-          `${phaseName}/${model}`,
+          `${skill}/${model}`,
           promptDuration,
-          phaseName,
+          skill,
           model,
           command,
           {
@@ -646,47 +540,45 @@ export async function runPhase(
     const isBlocked = isBlockedResponse(response);
     const status: "success" | "blocked" = isBlocked ? "blocked" : "success";
 
-    writePhaseOutput(phaseName, status, response, workspaceRoot);
+    writeSkillOutput(skill, status, response, workspaceRoot);
 
     logTimingDuration(
       workspaceRoot,
       runId,
-      "phase",
-      phaseName,
-      Date.now() - phaseStartTime,
-      phaseName,
+      "skill",
+      skill,
+      Date.now() - skillStartTime,
+      skill,
       model,
       command,
-      buildPhaseEventMeta(
+      buildSkillEventMeta(
         workspaceRoot,
-        phaseName,
+        skill,
         status,
         gitStatusBefore,
         retryCount,
-        context,
       ),
     );
 
     return { status, response };
   } catch (err) {
-    if (phaseName !== "pr-reviewer") {
+    if (skill !== "pr-review") {
       logTimingDuration(
         workspaceRoot,
         runId,
-        "phase",
-        phaseName,
-        Date.now() - phaseStartTime,
-        phaseName,
+        "skill",
+        skill,
+        Date.now() - skillStartTime,
+        skill,
         model,
         command,
-        buildPhaseEventMeta(
+        buildSkillEventMeta(
           workspaceRoot,
-          phaseName,
+          skill,
           "error",
           gitStatusBefore,
           retryCount,
-          context,
-          classifyPhaseError(err),
+          classifySkillError(err),
         ),
       );
     }

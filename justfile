@@ -14,7 +14,6 @@ lint:
 	npx tsc --noEmit
 	npx prettier --check "src/**/*.ts"
 
-
 # Run tests
 test:
     npm test

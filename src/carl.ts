@@ -1,15 +1,7 @@
 #!/usr/bin/env node
 
-import {
-  runPhase,
-  DEFAULT_MODELS,
-  parsePrdPhases,
-  markPhaseComplete,
-  NetworkUnavailableError,
-  buildSkillInstruction,
-  getPhaseModel,
-} from "./phase";
-import { collectPrompt, openFileInEditor, getPhaseOutputPath } from "./editor";
+import { runSkill, DEFAULT_MODELS, NetworkUnavailableError } from "./skill";
+import { collectPrompt, openFileInEditor, getSkillOutputPath } from "./editor";
 import {
   parsePrUrl,
   checkGhCli,
@@ -27,14 +19,13 @@ import {
   validateCommentsInScope,
   validateNoDuplicateInlineComments,
   validateInlineCommentsHaveRationale,
+  parseAiScore,
   type ReviewComment,
 } from "./pr-review-draft";
 import { getGitStatus, getHeadSha } from "./git";
 import { red } from "./colors";
 import * as fs from "fs";
-import * as os from "os";
 import * as path from "path";
-import { spawnSync } from "child_process";
 
 function getPendingPromptPath(workspaceRoot: string, command: string): string {
   return path.join(workspaceRoot, ".agent", `pending-${command}-prompt.md`);
@@ -90,29 +81,29 @@ function clearPendingPrompt(workspaceRoot: string, command: string): void {
   } catch {}
 }
 
-type PhaseResult = Awaited<ReturnType<typeof runPhase>>;
+type SkillResult = Awaited<ReturnType<typeof runSkill>>;
 
-function buildPlanFollowUpPrompt(
+function buildDuckFollowUpPrompt(
   userInput: string,
-  interviewRounds: string[],
+  conversationRounds: string[],
 ): string {
   const transcript =
-    interviewRounds.length > 0
-      ? interviewRounds
+    conversationRounds.length > 0
+      ? conversationRounds
           .map((round, index) =>
             [`## Round ${index + 1}`, round.trim()].join("\n\n"),
           )
           .join("\n\n")
-      : "(no interview rounds)";
+      : "(no conversation rounds)";
 
   return [
-    "# Original planning request",
+    "# Original request",
     userInput.trim(),
-    "# Interview transcript",
+    "# Conversation transcript",
     transcript,
-    "Continue the planning workflow.",
-    "If any clarification still blocks a useful PRD, output another `# Interview` with only the remaining questions.",
-    "If the request is now clear enough, replace `.agent/prd.md` entirely with the complete PRD.",
+    "Continue the conversation.",
+    "If critical questions remain unanswered, output another `# Interview` with only those questions.",
+    "If the problem is now understood, output a `# Summary` with findings and the next concrete step.",
   ].join("\n\n");
 }
 
@@ -129,13 +120,13 @@ function readEditedFile(filePath: string): string | null {
 }
 
 async function rerunFromEditedOutput(
-  initialResult: PhaseResult,
+  initialResult: SkillResult,
   options: {
-    shouldContinue: (result: PhaseResult) => boolean;
+    shouldContinue: (result: SkillResult) => boolean;
     getOutputPath: () => string;
-    rerun: (editedOutput: string) => Promise<PhaseResult>;
+    rerun: (editedOutput: string) => Promise<SkillResult>;
   },
-): Promise<{ result: PhaseResult; noEdit: boolean }> {
+): Promise<{ result: SkillResult; noEdit: boolean }> {
   let result = initialResult;
 
   while (options.shouldContinue(result)) {
@@ -151,292 +142,73 @@ async function rerunFromEditedOutput(
   return { result, noEdit: false };
 }
 
-async function cmdPlan(
+async function cmdDuck(
   workspaceRoot: string,
   promptFile?: string,
   model?: string,
 ): Promise<void> {
-  const userInput = collectCommandPrompt(workspaceRoot, "plan", promptFile);
-  if (!userInput) {
-    console.log("No prompt provided. Cancelled.");
-    return;
-  }
-
-  const agentDir = path.join(workspaceRoot, ".agent");
-  if (fs.existsSync(agentDir)) {
-    fs.rmSync(agentDir, { recursive: true, force: true });
-    console.log("Cleared .agent/.");
-  }
-
-  const interviewRounds: string[] = [];
-  let result: PhaseResult;
-  try {
-    result = await runPhase(
-      workspaceRoot,
-      "architect",
-      "plan",
-      userInput,
-      model,
-    );
-  } catch (err) {
-    if (err instanceof NetworkUnavailableError)
-      savePendingPrompt(workspaceRoot, "plan", userInput);
-    throw err;
-  }
-
-  const interviewResult = await rerunFromEditedOutput(result, {
-    shouldContinue: (current) => current.status === "blocked",
-    getOutputPath: () =>
-      getPhaseOutputPath(workspaceRoot, "architect", "blocked"),
-    rerun: async (editedInterview) => {
-      interviewRounds.push(editedInterview);
-
-      try {
-        return await runPhase(
-          workspaceRoot,
-          "architect",
-          "plan",
-          buildPlanFollowUpPrompt(userInput, interviewRounds),
-          model,
-        );
-      } catch (err) {
-        if (err instanceof NetworkUnavailableError)
-          savePendingPrompt(workspaceRoot, "plan", userInput);
-        throw err;
-      }
-    },
-  });
-  result = interviewResult.result;
-
-  if (interviewResult.noEdit && result.status === "blocked") {
-    console.log("No answers provided. Cancelled.");
-    return;
-  }
-
-  clearPendingPrompt(workspaceRoot, "plan");
-  const prdPath = getPhaseOutputPath(workspaceRoot, "architect");
-  if (fs.existsSync(prdPath)) openFileInEditor(prdPath);
-}
-
-async function cmdCode(
-  workspaceRoot: string,
-  promptFile?: string,
-  model?: string,
-): Promise<void> {
-  const prdPath = path.join(workspaceRoot, ".agent", "prd.md");
-  if (fs.existsSync(prdPath)) {
-    const phases = parsePrdPhases(fs.readFileSync(prdPath, "utf-8"));
-    if (phases.length > 0) {
-      const nextIndex = phases.findIndex((phase) => !phase.completed);
-      const next = nextIndex === -1 ? null : phases[nextIndex];
-      if (!next) {
-        console.log(
-          "[System] All phases complete. Run `carl verify` to validate.",
-        );
-        return;
-      }
-      const phaseNumber = nextIndex + 1;
-      console.log(
-        `[System] Running phase ${phaseNumber} of ${phases.length}: ${next.title}`,
-      );
-      let result: PhaseResult;
-      try {
-        result = await runPhase(
-          workspaceRoot,
-          "developer",
-          "code",
-          `Implement this phase from .agent/prd.md: ${next.title}\n\nWork only on this phase. Stop when this phase is complete.`,
-          model,
-        );
-      } catch (err) {
-        if (err instanceof NetworkUnavailableError) {
-          console.log(
-            `[System] Phase "${next.title}" interrupted by network failure. Run \`carl code\` to retry this phase.`,
-          );
-        }
-        throw err;
-      }
-
-      const outputPath = getPhaseOutputPath(workspaceRoot, "developer");
-      const interviewResult = await rerunFromEditedOutput(result, {
-        shouldContinue: (current) => current.status === "blocked",
-        getOutputPath: () => outputPath,
-        rerun: async (editedOutput) => {
-          try {
-            return await runPhase(
-              workspaceRoot,
-              "developer",
-              "code",
-              editedOutput,
-              model,
-            );
-          } catch (err) {
-            if (err instanceof NetworkUnavailableError) {
-              console.log(
-                `[System] Phase "${next.title}" interrupted by network failure. Run \`carl code\` to retry this phase.`,
-              );
-            }
-            throw err;
-          }
-        },
-      });
-      result = interviewResult.result;
-
-      if (result.status !== "blocked") {
-        markPhaseComplete(prdPath, next.lineIndex);
-        const stillRemaining = phases.length - phaseNumber;
-        if (stillRemaining > 0) {
-          console.log(
-            `[System] Phase complete. ${stillRemaining} phase(s) remaining. Run \`carl code\` to continue.`,
-          );
-        } else {
-          console.log(
-            "[System] All phases complete. Run `carl verify` to validate.",
-          );
-        }
-      } else {
-        console.log(
-          "[System] Phase blocked — not marked complete. Fix the blocker then run `carl code` again.",
-        );
-      }
-      if (!interviewResult.noEdit && fs.existsSync(outputPath)) {
-        openFileInEditor(outputPath);
-      }
-      return;
-    }
-  }
-
   const userInput = collectCommandPrompt(
     workspaceRoot,
-    "code",
+    "duck",
     promptFile,
-    "# What should Carl implement?",
+    "# What do you want to think through?\n# Describe the problem, code path, or logs.",
   );
   if (!userInput) {
     console.log("No prompt provided. Cancelled.");
     return;
   }
 
-  let result: PhaseResult;
+  const conversationRounds: string[] = [];
+  let result: SkillResult;
   try {
-    result = await runPhase(
-      workspaceRoot,
-      "developer",
-      "code",
-      userInput,
-      model,
-    );
+    result = await runSkill(workspaceRoot, "duck", userInput, model);
   } catch (err) {
     if (err instanceof NetworkUnavailableError)
-      savePendingPrompt(workspaceRoot, "code", userInput);
+      savePendingPrompt(workspaceRoot, "duck", userInput);
     throw err;
   }
-  clearPendingPrompt(workspaceRoot, "code");
 
-  const outputPath = getPhaseOutputPath(workspaceRoot, "developer");
-  const interviewResult = await rerunFromEditedOutput(result, {
+  const conversationResult = await rerunFromEditedOutput(result, {
     shouldContinue: (current) => current.status === "blocked",
-    getOutputPath: () => outputPath,
-    rerun: async (editedOutput) => {
+    getOutputPath: () => getSkillOutputPath(workspaceRoot, "duck", "blocked"),
+    rerun: async (editedRound) => {
+      conversationRounds.push(editedRound);
+
       try {
-        return await runPhase(
+        return await runSkill(
           workspaceRoot,
-          "developer",
-          "code",
-          editedOutput,
+          "duck",
+          buildDuckFollowUpPrompt(userInput, conversationRounds),
           model,
         );
       } catch (err) {
         if (err instanceof NetworkUnavailableError)
-          savePendingPrompt(workspaceRoot, "code", userInput);
+          savePendingPrompt(workspaceRoot, "duck", userInput);
         throw err;
       }
     },
   });
-  result = interviewResult.result;
+  result = conversationResult.result;
 
-  if (!interviewResult.noEdit && fs.existsSync(outputPath))
-    openFileInEditor(outputPath);
+  if (conversationResult.noEdit && result.status === "blocked") {
+    console.log("No answers provided. Cancelled.");
+    return;
+  }
+
+  clearPendingPrompt(workspaceRoot, "duck");
+  const notesPath = getSkillOutputPath(workspaceRoot, "duck");
+  if (fs.existsSync(notesPath)) openFileInEditor(notesPath);
 }
 
 async function cmdReview(workspaceRoot: string, model?: string): Promise<void> {
-  await runPhase(workspaceRoot, "reviewer", "review", undefined, model);
-  const outputPath = getPhaseOutputPath(workspaceRoot, "reviewer");
+  await runSkill(
+    workspaceRoot,
+    "review",
+    "Review all staged and uncommitted local changes. Run `git diff HEAD` to see the full diff, then work through the review process. Make recomendations to the user.",
+    model,
+  );
+  const outputPath = getSkillOutputPath(workspaceRoot, "review");
   if (fs.existsSync(outputPath)) openFileInEditor(outputPath);
-}
-
-async function cmdVerify(workspaceRoot: string, model?: string): Promise<void> {
-  await runPhase(workspaceRoot, "verify", "verify", undefined, model);
-  const outputPath = getPhaseOutputPath(workspaceRoot, "verify");
-  if (fs.existsSync(outputPath)) openFileInEditor(outputPath);
-}
-
-async function cmdChat(
-  workspaceRoot: string,
-  promptFile?: string,
-  model?: string,
-): Promise<void> {
-  const initialPrompt = collectCommandPrompt(workspaceRoot, "chat", promptFile);
-  if (!initialPrompt) {
-    console.log("No prompt provided. Cancelled.");
-    return;
-  }
-  // Clear any stale pending prompt immediately — auggie is a synchronous interactive
-  // session with no network-retry path, so auto-resume would only replay stale input.
-  clearPendingPrompt(workspaceRoot, "chat");
-
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-chat-"));
-  const rulesPath = path.join(tempDir, "chat-rules.md");
-  try {
-    const instructionFile =
-      promptFile ?? path.join(tempDir, "initial-prompt.md");
-    if (!promptFile) {
-      fs.writeFileSync(instructionFile, `${initialPrompt}\n`, "utf-8");
-    }
-
-    fs.writeFileSync(
-      rulesPath,
-      `${buildSkillInstruction("chat", workspaceRoot, initialPrompt)}\n`,
-      "utf-8",
-    );
-
-    const result = spawnSync(
-      "auggie",
-      [
-        "--workspace-root",
-        workspaceRoot,
-        "--model",
-        model ?? getPhaseModel("chat", workspaceRoot),
-        "--rules",
-        rulesPath,
-        "--instruction-file",
-        instructionFile,
-      ],
-      {
-        cwd: workspaceRoot,
-        stdio: "inherit",
-      },
-    );
-
-    if (result.error) {
-      throw new Error(
-        `[WHAT] Could not start \`auggie\` for \`carl chat\`. [WHY] \`carl chat\` now shells out to the Auggie CLI directly, so chat cannot start without that binary. [HOW] Install Auggie or put it on PATH, then re-run \`carl chat\`. [CONTEXT] workspace=${workspaceRoot} cause=${result.error.message}`,
-      );
-    }
-
-    if (result.signal) {
-      throw new Error(
-        `[WHAT] \`auggie\` exited from signal ${result.signal}. [WHY] The interactive chat session did not finish normally. [HOW] Re-run \`carl chat\`; if this repeats, run \`auggie\` directly to isolate the failure. [CONTEXT] workspace=${workspaceRoot}`,
-      );
-    }
-
-    if ((result.status ?? 1) !== 0) {
-      process.exit(result.status ?? 1);
-      return;
-    }
-  } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
 }
 
 async function cmdPrReview(
@@ -490,7 +262,7 @@ async function cmdPrReview(
     );
   }
 
-  const agentDir = path.join(workspaceRoot, ".agent");
+  const agentDir = path.join(workspaceRoot, ".agent/notes");
   fs.mkdirSync(agentDir, { recursive: true });
   const draftPath = getPrReviewDraftPath(workspaceRoot);
   const draftRel = path.relative(workspaceRoot, draftPath);
@@ -513,20 +285,15 @@ async function cmdPrReview(
   const initialPrompt = [
     `Review GitHub PR ${prIdentity}.`,
     `The draft file is at \`${draftRel}\` and contains the full PR diff.`,
-    `Append \`||| COMMENT\` blocks under \`## Review comments\` per the pr-reviewer skill.`,
+    `Append \`||| COMMENT\` blocks under \`## Review comments\` per the pr-review skill.`,
     `Inline comments must reference a path + new-side line that appears in a diff hunk; multi-line ranges must lie within a single hunk.`,
     `Every inline comment must open with a sentence naming WHAT the problem is, then explain why it matters. Do not start with impact or importance — state the defect first.`,
     `Write prose comments only — do not write suggestion blocks.`,
     `Read any workspace file you need for context. Do not modify any file outside the draft.`,
+    `Also fill in the \`AI-generated:\` line under \`## AI Generation Assessment\` with your assessment of how likely this diff is to be AI-generated (low/medium/high) and a one-sentence reason. Use exactly this format: \`AI-generated: low|medium|high — <reason>\``,
   ].join("\n");
 
-  await runPhase(
-    workspaceRoot,
-    "pr-reviewer",
-    "pr-review",
-    initialPrompt,
-    model,
-  );
+  await runSkill(workspaceRoot, "pr-review", initialPrompt, model);
   assertDraftExists();
 
   const hunks = parseDiffHunks(prDiff);
@@ -568,13 +335,7 @@ async function cmdPrReview(
       ``,
       `Edit \`${draftRel}\`: remove or fix only the failing comments and keep the valid ones. Do not modify any other file.`,
     ].join("\n");
-    await runPhase(
-      workspaceRoot,
-      "pr-reviewer",
-      "pr-review",
-      rerunPrompt,
-      model,
-    );
+    await runSkill(workspaceRoot, "pr-review", rerunPrompt, model);
     assertDraftExists();
     ({ comments, errors } = loadCommentsAndErrors());
   }
@@ -590,6 +351,19 @@ async function cmdPrReview(
   if (comments.length === 0) {
     throw new Error(
       `No \`||| COMMENT\` blocks found in ${draftRel}. Add comments or delete the draft.`,
+    );
+  }
+
+  const aiScore = parseAiScore(fs.readFileSync(draftPath, "utf-8"));
+  if (aiScore) {
+    const indicator =
+      aiScore.level === "high"
+        ? "🔴"
+        : aiScore.level === "medium"
+          ? "🟡"
+          : "🟢";
+    console.log(
+      `AI-generated likelihood: ${indicator} ${aiScore.level.toUpperCase()} — ${aiScore.reason}`,
     );
   }
 
@@ -642,23 +416,14 @@ function usage(): void {
   console.error("");
   console.error("Commands:");
   console.error(
-    "  plan [<file>]  Read prompt from file or open editor; write .agent/prd.md for complex work",
-  );
-  console.error(
-    "  code [<file>]  Read prompt from file or open editor; run the implementation session",
+    "  duck [<file>]  Rubber duck: index code and ask critical questions to debug, design, trace, or analyze logs",
   );
   console.error(
     "  review        Run reviewer once (cleanup/refactor your own local changes)",
   );
-  console.error(
-    "  verify        Run verifier once (validation evidence for your local changes)",
-  );
-  console.error(
-    `  chat [<file>] Read prompt from file or open editor; start interactive auggie with Carl chat rules (default: ${DEFAULT_MODELS.chat})`,
-  );
   console.error("  reset         Clear .agent/");
   console.error(
-    "  pr-review <github-pr-url>  Fetch PR diff, draft review comments in .agent/pr-review.md, and upload as a pending GitHub review (requires gh CLI)",
+    "  pr-review <github-pr-url>  Fetch PR diff, draft review comments in .agent/notes/pr-review.md, and upload as a pending GitHub review (requires gh CLI)",
   );
   console.error("");
   console.error("Config: .carl/config.json (optional)");
@@ -692,36 +457,15 @@ async function main(): Promise<void> {
 
   try {
     switch (command) {
-      case "plan":
+      case "duck":
         if (args.length > 2) {
-          console.error("Usage: carl [--model <model>] plan [<prompt-file>]");
+          console.error("Usage: carl [--model <model>] duck [<prompt-file>]");
           process.exit(1);
         }
-        await cmdPlan(workspaceRoot, args[1], model);
-        break;
-      case "code":
-        if (args.length > 2) {
-          console.error("Usage: carl [--model <model>] code [<prompt-file>]");
-          process.exit(1);
-        }
-        await cmdCode(workspaceRoot, args[1], model);
+        await cmdDuck(workspaceRoot, args[1], model);
         break;
       case "review":
         await cmdReview(workspaceRoot, model);
-        break;
-      case "verify":
-        if (args.length > 1) {
-          console.error("Usage: carl [--model <model>] verify");
-          process.exit(1);
-        }
-        await cmdVerify(workspaceRoot, model);
-        break;
-      case "chat":
-        if (args.length > 2) {
-          console.error("Usage: carl [--model <model>] chat [<prompt-file>]");
-          process.exit(1);
-        }
-        await cmdChat(workspaceRoot, args[1], model);
         break;
       case "reset":
         cmdReset(workspaceRoot);

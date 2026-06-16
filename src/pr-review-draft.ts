@@ -117,11 +117,30 @@ export function buildPrReviewDraft(
     ``,
     `## Review comments`,
     ``,
+    `## AI Generation Assessment`,
+    ``,
+    `# Fill in the line below. Use exactly this format (em dash, one sentence):`,
+    `# AI-generated: low|medium|high — <one-sentence reason>`,
+    `AI-generated: `,
+    ``,
   ].join("\n");
 }
 
+export type AiScoreLevel = "low" | "medium" | "high";
+
+export interface AiScore {
+  level: AiScoreLevel;
+  reason: string;
+}
+
+export function parseAiScore(draft: string): AiScore | null {
+  const match = draft.match(/^AI-generated: (low|medium|high) — (.+)$/m);
+  if (!match) return null;
+  return { level: match[1] as AiScoreLevel, reason: match[2].trim() };
+}
+
 export function getPrReviewDraftPath(workspaceRoot: string): string {
-  return path.join(workspaceRoot, ".agent", "pr-review.md");
+  return path.join(workspaceRoot, ".agent/notes", "pr-review.md");
 }
 
 export function parseDiffHunks(diff: string): Map<string, DiffHunk[]> {

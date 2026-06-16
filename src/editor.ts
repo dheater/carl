@@ -115,14 +115,11 @@ export function openFileInEditor(filePath: string): void {
   }
 }
 
-export function getPhaseOutputPath(
+export function getSkillOutputPath(
   workspaceRoot: string,
-  phaseName: string,
-  status: "success" | "blocked" = "success",
+  skill: string,
+  _status: "success" | "blocked" = "success",
 ): string {
   const agentDir = path.join(workspaceRoot, ".agent");
-  if (phaseName === "architect" && status === "success") {
-    return path.join(agentDir, "prd.md");
-  }
-  return path.join(agentDir, "notes", `${phaseName}.md`);
+  return path.join(agentDir, "notes", `${skill}.md`);
 }

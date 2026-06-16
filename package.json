@@ -1,6 +1,6 @@
 {
   "name": "carl",
-  "version": "6.3.5",
+  "version": "7.0.0",
   "bin": {
     "carl": "./dist/carl.mjs"
   },
