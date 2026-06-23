@@ -26,19 +26,29 @@ type TimingEvent = {
 
 type CarlConfig = {
   models?: {
-    duck?: string;
+    code?: string;
+    chat?: string;
     review?: string;
     "pr-review"?: string;
   };
 };
 
 export const DEFAULT_MODELS: Record<string, string> = {
-  duck: "gpt5.4",
+  code: "sonnet4.6",
+  chat: "gpt5.4",
   review: "gpt5.4",
   "pr-review": "gpt5.4",
 };
 
 const BASE_RULE_FILES = ["carl.md"] as const;
+
+const READ_ONLY_WRITE_TOOL_EXCLUSIONS = [
+  "remove-files",
+  "save-file",
+  "str-replace-editor",
+] as const;
+
+const WRITABLE_SKILLS = new Set(["code", "pr-review"]);
 
 const SKILL_RULE_FILES: Record<string, readonly string[]> = {
   review: ["git-policy.md"],
@@ -105,6 +115,12 @@ function loadSkillFile(name: string): string {
   return "";
 }
 
+function getExcludedTools(skill: string): string[] {
+  return WRITABLE_SKILLS.has(skill)
+    ? []
+    : [...READ_ONLY_WRITE_TOOL_EXCLUSIONS];
+}
+
 export function getSkillModel(skill: string, workspaceRoot?: string): string {
   if (workspaceRoot) {
     const config = loadCarlConfig(workspaceRoot, skill !== "pr-review");
@@ -128,7 +144,7 @@ function extractPromptResponseText(
 }
 
 function isBlockedResponse(response: string): boolean {
-  return /^#\s+Interview\s*$/im.test(response);
+  return /^#\s+Interview\s*$/im.test(response) || /^BLOCKED:/m.test(response);
 }
 
 function writeTimingEvent(workspaceRoot: string, event: TimingEvent): void {
@@ -256,18 +272,6 @@ export interface RunSkillResult {
   response: string;
 }
 
-class SkillTimeoutError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "SkillTimeoutError";
-  }
-}
-
-const SKILL_TIMEOUT_MS: Record<string, number> = {
-  review: 6 * 60 * 1000,
-  duck: 12 * 60 * 1000,
-};
-
 function countGitStatus(workspaceRoot: string): GitStatusCounts {
   const status = getGitStatus(workspaceRoot);
   return {
@@ -299,7 +303,7 @@ function buildSkillEventMeta(
   status: "success" | "blocked" | "error",
   gitStatusBefore: GitStatusCounts,
   retryCount: number,
-  errorType?: "network" | "timeout" | "exception",
+  errorType?: "network" | "exception",
 ): Record<string, any> {
   const gitStatusAfter = countGitStatus(workspaceRoot);
   const outputPath = getSkillOutputRelativePath(workspaceRoot, skill, status);
@@ -325,46 +329,11 @@ function buildSkillEventMeta(
   };
 }
 
-function classifySkillError(err: unknown): "network" | "timeout" | "exception" {
+function classifySkillError(err: unknown): "network" | "exception" {
   if (err instanceof NetworkUnavailableError) {
     return "network";
   }
-  if (err instanceof SkillTimeoutError) {
-    return "timeout";
-  }
   return "exception";
-}
-
-function writeTimeoutDiagnostic(
-  workspaceRoot: string,
-  skill: string,
-  command: string,
-  runId: string,
-  timeoutMs: number,
-  elapsedMs: number,
-  sessionLog: string[],
-): void {
-  if (skill === "pr-review") {
-    return;
-  }
-  try {
-    const dir = path.join(workspaceRoot, ".agent", "notes");
-    fs.mkdirSync(dir, { recursive: true });
-    const file = path.join(dir, `timeout-${skill}-${runId}.md`);
-    const header =
-      `# Timeout: ${skill} (${command})\n\n` +
-      `- run_id: ${runId}\n` +
-      `- timeout: ${timeoutMs / 60000}m\n` +
-      `- elapsed: ${(elapsedMs / 1000).toFixed(1)}s\n` +
-      `- session_updates: ${sessionLog.length}\n\n` +
-      `## Session activity\n\n`;
-    const body = sessionLog.length
-      ? sessionLog.join("\n")
-      : "(no session updates received)";
-    fs.writeFileSync(file, header + body + "\n", "utf-8");
-  } catch {
-    // Best-effort; never throw from the timeout path.
-  }
 }
 
 export async function runSkill(
@@ -413,10 +382,7 @@ export async function runSkill(
       console.log(`  [System] Initializing agent...`);
       console.log(`[Timing] Auggie.create entry ${skill}/${model}`);
       const auggleCreateStart = Date.now();
-      const excludedTools: string[] =
-        skill !== "pr-review"
-          ? ["remove-files", "save-file", "str-replace-editor"]
-          : [];
+      const excludedTools = getExcludedTools(skill);
       const client = await Auggie.create({
         workspaceRoot,
         model: model as any,
@@ -434,24 +400,16 @@ export async function runSkill(
         command,
       );
 
-      const sessionLog: string[] = [];
       client.onSessionUpdate((notification: any) => {
         const update = notification.update;
         if (!update) return;
-        const ts = new Date().toISOString();
         if (update.sessionUpdate === "tool_call") {
           console.log(
             `\n  [${skill}/${model}] Running tool: ${update.title || "unknown"}...`,
           );
-          sessionLog.push(`[${ts}] tool_call: ${update.title || "unknown"}`);
         } else if (update.sessionUpdate === "agent_thought_chunk") {
           if (update.content && update.content.text) {
             process.stdout.write(`\x1b[90m${update.content.text}\x1b[0m`);
-            sessionLog.push(`[${ts}] thought: ${update.content.text}`);
-          }
-        } else if (update.sessionUpdate === "agent_message_chunk") {
-          if (update.content && update.content.text) {
-            sessionLog.push(`[${ts}] message: ${update.content.text}`);
           }
         }
       });
@@ -463,43 +421,7 @@ export async function runSkill(
         );
         console.log(`[Timing] prompt entry ${skill}/${model}`);
         const promptStart = Date.now();
-        const timeoutMs = SKILL_TIMEOUT_MS[skill];
-        let timeoutHandle: NodeJS.Timeout | undefined;
-        const promptPromise = client.prompt(instruction, {
-          isAnswerOnly: true,
-        });
-        let raw: string;
-        try {
-          if (timeoutMs) {
-            const timeoutPromise = new Promise<never>((_, reject) => {
-              timeoutHandle = setTimeout(() => {
-                const writesTimeoutDiagnostic = skill !== "pr-review";
-                writeTimeoutDiagnostic(
-                  workspaceRoot,
-                  skill,
-                  command,
-                  runId,
-                  timeoutMs,
-                  Date.now() - promptStart,
-                  sessionLog,
-                );
-                client.cancel().catch(() => {});
-                reject(
-                  new SkillTimeoutError(
-                    writesTimeoutDiagnostic
-                      ? `${skill} exceeded ${timeoutMs / 60000}m timeout — cancelled. Diagnostic written to .agent/notes/timeout-${skill}-${runId}.md`
-                      : `${skill} exceeded ${timeoutMs / 60000}m timeout — cancelled. Re-run \`carl ${command}\` to retry.`,
-                  ),
-                );
-              }, timeoutMs);
-            });
-            raw = await Promise.race([promptPromise, timeoutPromise]);
-          } else {
-            raw = await promptPromise;
-          }
-        } finally {
-          if (timeoutHandle) clearTimeout(timeoutHandle);
-        }
+        const raw = await client.prompt(instruction, { isAnswerOnly: true });
         [response, usage] = extractPromptResponseText(raw);
         const promptDuration = Date.now() - promptStart;
         logTimingDuration(
@@ -521,7 +443,6 @@ export async function runSkill(
         if (attempt < MAX_FETCH_RETRIES && isTransientFetchError(err)) {
           shouldRetry = true;
         } else if (isTransientFetchError(err)) {
-          // All retries exhausted — surface a clean message instead of the raw SDK error.
           throw new NetworkUnavailableError(
             `Network unavailable after ${MAX_FETCH_RETRIES + 1} attempts — run \`carl ${command}\` to retry.`,
           );

@@ -1,6 +1,11 @@
 #!/usr/bin/env node
 
-import { runSkill, DEFAULT_MODELS, NetworkUnavailableError } from "./skill";
+import {
+  runSkill,
+  DEFAULT_MODELS,
+  buildSkillInstruction,
+  getSkillModel,
+} from "./skill";
 import { collectPrompt, openFileInEditor, getSkillOutputPath } from "./editor";
 import {
   parsePrUrl,
@@ -25,190 +30,112 @@ import {
 import { getGitStatus, getHeadSha } from "./git";
 import { red } from "./colors";
 import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
-
-function getPendingPromptPath(workspaceRoot: string, command: string): string {
-  return path.join(workspaceRoot, ".agent", `pending-${command}-prompt.md`);
-}
+import { spawnSync } from "child_process";
 
 function collectCommandPrompt(
-  workspaceRoot: string,
-  command: string,
   promptFile?: string,
   header?: string,
 ): string | null {
-  const pendingPromptPath = getPendingPromptPath(workspaceRoot, command);
-
   let userInput: string | null;
   if (promptFile) {
-    // Explicit file always wins — don't auto-resume a pending prompt.
     if (!fs.existsSync(promptFile)) {
       throw new Error(`Prompt file not found: ${promptFile}`);
     }
     userInput = fs.readFileSync(promptFile, "utf-8").trim() || null;
-  } else if (fs.existsSync(pendingPromptPath)) {
-    userInput = fs.readFileSync(pendingPromptPath, "utf-8");
-    console.log(
-      `[System] Resuming saved prompt from previous network failure.`,
-    );
-    console.log(
-      `[System] Run \`carl reset\` then \`carl ${command}\` to start fresh.`,
-    );
   } else {
     userInput = collectPrompt(header);
   }
-
   return userInput || null;
-}
-
-function savePendingPrompt(
-  workspaceRoot: string,
-  command: string,
-  input: string,
-): void {
-  const agentDir = path.join(workspaceRoot, ".agent");
-  if (!fs.existsSync(agentDir)) fs.mkdirSync(agentDir, { recursive: true });
-  fs.writeFileSync(
-    getPendingPromptPath(workspaceRoot, command),
-    input,
-    "utf-8",
-  );
-}
-
-function clearPendingPrompt(workspaceRoot: string, command: string): void {
-  try {
-    fs.unlinkSync(getPendingPromptPath(workspaceRoot, command));
-  } catch {}
-}
-
-type SkillResult = Awaited<ReturnType<typeof runSkill>>;
-
-function buildDuckFollowUpPrompt(
-  userInput: string,
-  conversationRounds: string[],
-): string {
-  const transcript =
-    conversationRounds.length > 0
-      ? conversationRounds
-          .map((round, index) =>
-            [`## Round ${index + 1}`, round.trim()].join("\n\n"),
-          )
-          .join("\n\n")
-      : "(no conversation rounds)";
-
-  return [
-    "# Original request",
-    userInput.trim(),
-    "# Conversation transcript",
-    transcript,
-    "Continue the conversation.",
-    "If critical questions remain unanswered, output another `# Interview` with only those questions.",
-    "If the problem is now understood, output a `# Summary` with findings and the next concrete step.",
-  ].join("\n\n");
-}
-
-function readEditedFile(filePath: string): string | null {
-  if (!fs.existsSync(filePath)) return null;
-
-  const before = fs.readFileSync(filePath, "utf-8");
-  openFileInEditor(filePath);
-  const after = fs.existsSync(filePath)
-    ? fs.readFileSync(filePath, "utf-8")
-    : "";
-
-  return after.trimEnd() === before.trimEnd() ? null : after;
-}
-
-async function rerunFromEditedOutput(
-  initialResult: SkillResult,
-  options: {
-    shouldContinue: (result: SkillResult) => boolean;
-    getOutputPath: () => string;
-    rerun: (editedOutput: string) => Promise<SkillResult>;
-  },
-): Promise<{ result: SkillResult; noEdit: boolean }> {
-  let result = initialResult;
-
-  while (options.shouldContinue(result)) {
-    const outputPath = options.getOutputPath();
-    if (!fs.existsSync(outputPath)) break;
-
-    const editedOutput = readEditedFile(outputPath);
-    if (editedOutput === null) return { result, noEdit: true };
-
-    result = await options.rerun(editedOutput);
-  }
-
-  return { result, noEdit: false };
-}
-
-async function cmdDuck(
-  workspaceRoot: string,
-  promptFile?: string,
-  model?: string,
-): Promise<void> {
-  const userInput = collectCommandPrompt(
-    workspaceRoot,
-    "duck",
-    promptFile,
-    "# What do you want to think through?\n# Describe the problem, code path, or logs.",
-  );
-  if (!userInput) {
-    console.log("No prompt provided. Cancelled.");
-    return;
-  }
-
-  const conversationRounds: string[] = [];
-  let result: SkillResult;
-  try {
-    result = await runSkill(workspaceRoot, "duck", userInput, model);
-  } catch (err) {
-    if (err instanceof NetworkUnavailableError)
-      savePendingPrompt(workspaceRoot, "duck", userInput);
-    throw err;
-  }
-
-  const conversationResult = await rerunFromEditedOutput(result, {
-    shouldContinue: (current) => current.status === "blocked",
-    getOutputPath: () => getSkillOutputPath(workspaceRoot, "duck", "blocked"),
-    rerun: async (editedRound) => {
-      conversationRounds.push(editedRound);
-
-      try {
-        return await runSkill(
-          workspaceRoot,
-          "duck",
-          buildDuckFollowUpPrompt(userInput, conversationRounds),
-          model,
-        );
-      } catch (err) {
-        if (err instanceof NetworkUnavailableError)
-          savePendingPrompt(workspaceRoot, "duck", userInput);
-        throw err;
-      }
-    },
-  });
-  result = conversationResult.result;
-
-  if (conversationResult.noEdit && result.status === "blocked") {
-    console.log("No answers provided. Cancelled.");
-    return;
-  }
-
-  clearPendingPrompt(workspaceRoot, "duck");
-  const notesPath = getSkillOutputPath(workspaceRoot, "duck");
-  if (fs.existsSync(notesPath)) openFileInEditor(notesPath);
 }
 
 async function cmdReview(workspaceRoot: string, model?: string): Promise<void> {
   await runSkill(
     workspaceRoot,
     "review",
-    "Review all staged and uncommitted local changes. Run `git diff HEAD` to see the full diff, then work through the review process. Make recomendations to the user.",
+    "Review all staged and uncommitted local changes. Run `git diff HEAD` to see the full diff, then work through the review process. Make recommendations to the user.",
     model,
   );
   const outputPath = getSkillOutputPath(workspaceRoot, "review");
   if (fs.existsSync(outputPath)) openFileInEditor(outputPath);
+}
+
+async function cmdCode(
+  workspaceRoot: string,
+  promptFile?: string,
+  model?: string,
+): Promise<void> {
+  const initialPrompt = collectCommandPrompt(
+    promptFile,
+    "# What should Carl implement?",
+  );
+  if (!initialPrompt) {
+    console.log("No prompt provided. Cancelled.");
+    return;
+  }
+
+  await runSkill(workspaceRoot, "code", initialPrompt, model);
+  const outputPath = getSkillOutputPath(workspaceRoot, "code");
+  if (fs.existsSync(outputPath)) openFileInEditor(outputPath);
+}
+
+async function cmdChat(
+  workspaceRoot: string,
+  promptFile?: string,
+  model?: string,
+): Promise<void> {
+  const initialPrompt = collectCommandPrompt(promptFile);
+  if (!initialPrompt) {
+    console.log("No prompt provided. Cancelled.");
+    return;
+  }
+
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-chat-"));
+  try {
+    const rulesPath = path.join(tempDir, "chat-rules.md");
+    fs.writeFileSync(
+      rulesPath,
+      `${buildSkillInstruction("chat", workspaceRoot)}\n`,
+      "utf-8",
+    );
+
+    const instructionFile =
+      promptFile ?? path.join(tempDir, "initial-prompt.md");
+    if (!promptFile) {
+      fs.writeFileSync(instructionFile, `${initialPrompt}\n`, "utf-8");
+    }
+
+    const result = spawnSync(
+      "auggie",
+      [
+        "--workspace-root",
+        workspaceRoot,
+        "--model",
+        model ?? getSkillModel("chat", workspaceRoot),
+        "--ask",
+        "--rules",
+        rulesPath,
+        "--instruction-file",
+        instructionFile,
+      ],
+      { cwd: workspaceRoot, stdio: "inherit" },
+    );
+
+    if (result.error) {
+      throw new Error(
+        `Could not start \`auggie\` for \`carl chat\` — is auggie on PATH? cause=${result.error.message}`,
+      );
+    }
+    if (result.signal) {
+      throw new Error(`\`auggie\` exited from signal ${result.signal}`);
+    }
+    if ((result.status ?? 1) !== 0) {
+      throw new Error(`auggie exited with status ${result.status ?? 1}`);
+    }
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
 }
 
 async function cmdPrReview(
@@ -416,10 +343,13 @@ function usage(): void {
   console.error("");
   console.error("Commands:");
   console.error(
-    "  duck [<file>]  Rubber duck: index code and ask critical questions to debug, design, trace, or analyze logs",
+    `  code [<file>] Read prompt from file or open editor; run the implementation skill (default: ${DEFAULT_MODELS.code})`,
   );
   console.error(
     "  review        Run reviewer once (cleanup/refactor your own local changes)",
+  );
+  console.error(
+    `  chat [<file>] Read prompt from file or open editor; start interactive auggie with Carl chat rules (default: ${DEFAULT_MODELS.chat})`,
   );
   console.error("  reset         Clear .agent/");
   console.error(
@@ -457,15 +387,22 @@ async function main(): Promise<void> {
 
   try {
     switch (command) {
-      case "duck":
+      case "code":
         if (args.length > 2) {
-          console.error("Usage: carl [--model <model>] duck [<prompt-file>]");
+          console.error("Usage: carl [--model <model>] code [<prompt-file>]");
           process.exit(1);
         }
-        await cmdDuck(workspaceRoot, args[1], model);
+        await cmdCode(workspaceRoot, args[1], model);
         break;
       case "review":
         await cmdReview(workspaceRoot, model);
+        break;
+      case "chat":
+        if (args.length > 2) {
+          console.error("Usage: carl [--model <model>] chat [<prompt-file>]");
+          process.exit(1);
+        }
+        await cmdChat(workspaceRoot, args[1], model);
         break;
       case "reset":
         cmdReset(workspaceRoot);

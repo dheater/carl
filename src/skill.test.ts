@@ -23,7 +23,7 @@ describe("runSkill", () => {
     fs.rmSync(workspaceRoot, { recursive: true, force: true });
   });
 
-  test("excludes write tools for non-pr-review skills", async () => {
+  test("excludes write tools for review skill", async () => {
     const client = {
       onSessionUpdate: jest.fn(),
       prompt: jest.fn().mockResolvedValue("# Summary\n\nDone."),
@@ -43,6 +43,21 @@ describe("runSkill", () => {
         ]),
       }),
     );
+  });
+
+  test("does not exclude write tools for code skill", async () => {
+    const client = {
+      onSessionUpdate: jest.fn(),
+      prompt: jest.fn().mockResolvedValue("# Summary\n\nDone."),
+      close: jest.fn().mockResolvedValue(undefined),
+      cancel: jest.fn().mockResolvedValue(undefined),
+    };
+    mockCreate.mockResolvedValue(client as any);
+
+    await runSkill(workspaceRoot, "code", "implement this", "test-model");
+
+    const opts = mockCreate.mock.calls[0][0];
+    expect(opts.excludedTools ?? []).toEqual([]);
   });
 
   test("does not exclude write tools for pr-review skill", async () => {

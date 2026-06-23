@@ -66,7 +66,6 @@ describe("parseDiffHunks", () => {
     expect(fileHunks[0].newEnd).toBe(3);
     expect([...fileHunks[1].newSideLines]).toEqual([11, 12]);
   });
-
 });
 
 describe("validateCommentsInScope", () => {

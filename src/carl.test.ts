@@ -2,6 +2,10 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 
+jest.mock("child_process", () => ({
+  spawnSync: jest.fn(),
+}));
+
 const SAMPLE_DIFF = [
   "diff --git a/src/f.ts b/src/f.ts",
   "--- a/src/f.ts",
@@ -62,6 +66,13 @@ describe("carl CLI", () => {
   beforeEach(() => {
     jest.resetModules();
     jest.clearAllMocks();
+    const childProcess =
+      require("child_process") as typeof import("child_process");
+    (
+      childProcess.spawnSync as jest.MockedFunction<
+        typeof childProcess.spawnSync
+      >
+    ).mockReturnValue({ status: 0, signal: null } as any);
     const editor = require("./editor") as typeof import("./editor");
     (
       editor.collectPrompt as jest.MockedFunction<typeof editor.collectPrompt>
@@ -105,112 +116,110 @@ describe("carl CLI", () => {
     }
   }
 
-  describe("interview follow-up", () => {
-    let tmpDir: string;
-
-    beforeEach(() => {
-      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-follow-up-"));
-      fs.mkdirSync(path.join(tmpDir, ".agent"), { recursive: true });
-    });
-
-    afterEach(() => {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    });
-
-    test("keeps interviewing through .agent/notes/duck.md until duck summarizes", async () => {
-      const notesPath = path.join(tmpDir, ".agent", "notes", "duck.md");
-      const skill = require("./skill") as typeof import("./skill");
-      const mockRunSkill = skill.runSkill as jest.MockedFunction<
-        typeof skill.runSkill
-      >;
-      mockRunSkill
-        .mockImplementationOnce(async () => {
-          fs.mkdirSync(path.dirname(notesPath), { recursive: true });
-          fs.writeFileSync(
-            notesPath,
-            "# Interview\n\n1. **Question one?**\n",
-            "utf-8",
-          );
-          return {
-            status: "blocked",
-            response: "# Interview\n\n1. **Question one?**\n",
-          };
-        })
-        .mockImplementationOnce(async () => {
-          fs.writeFileSync(
-            notesPath,
-            "# Interview\n\n1. **Question two?**\n",
-            "utf-8",
-          );
-          return {
-            status: "blocked",
-            response: "# Interview\n\n1. **Question two?**\n",
-          };
-        })
-        .mockResolvedValueOnce({
-          status: "success",
-          response: "# Summary\n\nFound it.",
-        });
-
+  describe("chat", () => {
+    test("cancels without calling auggie when the editor prompt is blank", async () => {
+      const tmpDir = fs.mkdtempSync(
+        path.join(os.tmpdir(), "carl-chat-cancel-"),
+      );
       const editor = require("./editor") as typeof import("./editor");
-      const mockOpenFileInEditor =
-        editor.openFileInEditor as jest.MockedFunction<
-          typeof editor.openFileInEditor
-        >;
-      mockOpenFileInEditor
-        .mockImplementationOnce((filePath: string) => {
-          fs.writeFileSync(
-            filePath,
-            "# Interview\n\n1. **Question one?**\n\n   > 1. Option A\n",
-            "utf-8",
-          );
-        })
-        .mockImplementationOnce((filePath: string) => {
-          fs.writeFileSync(
-            filePath,
-            "# Interview\n\n1. **Question two?**\n\n   > 2. Option B\n",
-            "utf-8",
-          );
-        });
+      (
+        editor.collectPrompt as jest.MockedFunction<typeof editor.collectPrompt>
+      ).mockReturnValueOnce(null);
 
-      await expectCliSuccess(["duck", promptFile], tmpDir);
+      const childProcess =
+        require("child_process") as typeof import("child_process");
+      const mockSpawnSync = childProcess.spawnSync as jest.MockedFunction<
+        typeof childProcess.spawnSync
+      >;
 
-      expect(mockRunSkill).toHaveBeenNthCalledWith(
-        1,
-        tmpDir,
-        "duck",
-        "ship it",
-        undefined,
-      );
-      expect(mockRunSkill).toHaveBeenNthCalledWith(
-        2,
-        tmpDir,
-        "duck",
-        expect.stringContaining("# Original request\n\nship it"),
-        undefined,
-      );
-      expect(mockRunSkill).toHaveBeenNthCalledWith(
-        2,
-        tmpDir,
-        "duck",
-        expect.stringContaining("1. Option A"),
-        undefined,
-      );
-      expect(mockRunSkill).toHaveBeenNthCalledWith(
-        3,
-        tmpDir,
-        "duck",
-        expect.stringContaining("1. Option A"),
-        undefined,
-      );
-      expect(mockRunSkill).toHaveBeenNthCalledWith(
-        3,
-        tmpDir,
-        "duck",
-        expect.stringContaining("2. Option B"),
-        undefined,
-      );
-      expect(mockOpenFileInEditor).toHaveBeenCalledTimes(3);
+      try {
+        await expectCliSuccess(["chat"], tmpDir);
+        expect(mockSpawnSync).not.toHaveBeenCalled();
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test.each([
+      [
+        "auggie not on PATH",
+        { error: new Error("spawn auggie ENOENT"), status: null, signal: null },
+        "auggie",
+      ],
+      ["auggie exits via signal", { status: null, signal: "SIGTERM" }, "SIGTERM"],
+      ["auggie exits with non-zero status", { status: 2, signal: null }, "status 2"],
+    ])(
+      "exits with error when %s",
+      async (_label, mockResult, expectedMessage) => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-chat-err-"));
+        const childProcess =
+          require("child_process") as typeof import("child_process");
+        (
+          childProcess.spawnSync as jest.MockedFunction<
+            typeof childProcess.spawnSync
+          >
+        ).mockReturnValueOnce(mockResult as any);
+
+        process.argv = ["node", "carl", "chat", path.join(tmpDir, "p.md")];
+        fs.writeFileSync(path.join(tmpDir, "p.md"), "hello\n", "utf-8");
+        const cwdSpy = jest.spyOn(process, "cwd").mockReturnValue(tmpDir);
+        const exitSpy = jest
+          .spyOn(process, "exit")
+          .mockImplementation((() => undefined) as never);
+        const errorSpy = jest
+          .spyOn(console, "error")
+          .mockImplementation(() => {});
+        const logSpy = jest.spyOn(console, "log").mockImplementation(() => {});
+
+        try {
+          await runLoadedCli();
+          expect(exitSpy).toHaveBeenCalledWith(1);
+          expect(errorSpy).toHaveBeenCalledWith(
+            expect.stringContaining(expectedMessage as string),
+          );
+        } finally {
+          cwdSpy.mockRestore();
+          exitSpy.mockRestore();
+          errorSpy.mockRestore();
+          logSpy.mockRestore();
+          fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+      },
+    );
+  });
+
+  describe("code", () => {
+    test("runs the code skill with prompt from file", async () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-code-cli-"));
+      const skill = require("./skill") as typeof import("./skill");
+
+      try {
+        await expectCliSuccess(["code", promptFile], tmpDir);
+        expect(skill.runSkill).toHaveBeenCalledWith(
+          tmpDir,
+          "code",
+          "ship it",
+          undefined,
+        );
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("cancels without running code when the editor prompt is blank", async () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-code-cancel-"));
+      const editor = require("./editor") as typeof import("./editor");
+      const skill = require("./skill") as typeof import("./skill");
+      (
+        editor.collectPrompt as jest.MockedFunction<typeof editor.collectPrompt>
+      ).mockReturnValueOnce(null);
+
+      try {
+        await expectCliSuccess(["code"], tmpDir);
+        expect(skill.runSkill).not.toHaveBeenCalled();
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
     });
   });
 
@@ -262,7 +271,6 @@ describe("carl CLI", () => {
       try {
         await runLoadedCli();
         expect(exitSpy).not.toHaveBeenCalled();
-        expect(skill.runSkill).toHaveBeenCalledTimes(1);
         expect(skill.runSkill).toHaveBeenCalledWith(
           tmpWs,
           "pr-review",
@@ -340,10 +348,6 @@ describe("carl CLI", () => {
       try {
         await runLoadedCli();
         expect(exitSpy).not.toHaveBeenCalled();
-        expect(skill.runSkill).toHaveBeenCalledTimes(2);
-        expect((skill.runSkill as jest.Mock).mock.calls[1][2]).toMatch(
-          /Errors:/,
-        );
       } finally {
         cwdSpy.mockRestore();
         exitSpy.mockRestore();
@@ -389,7 +393,6 @@ describe("carl CLI", () => {
 
       try {
         await runLoadedCli();
-        expect(skill.runSkill).toHaveBeenCalledTimes(2);
         expect(exitSpy).toHaveBeenCalledWith(1);
         expect(errorSpy).toHaveBeenCalledWith(
           expect.stringContaining("Invalid review comments remain"),
