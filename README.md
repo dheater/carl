@@ -14,18 +14,44 @@ just install
 
 `just install` builds the TypeScript and installs a `carl` shim to `~/.local/bin/`.
 
+`carl chat` requires `auggie` on PATH (Augment CLI).
+
 ## Usage
 
 ```bash
-carl code          # Implement a request in the current workspace
-carl chat          # Index code and ask critical questions to debug, design, trace, or analyze logs
-carl review        # Run reviewer on your own local changes (cleanup / refactor)
-carl reset         # Clear .agent/
-
-carl pr-review <github-pr-url>  # Review another developer's PR (requires gh CLI)
+carl [--model <model>] <command>
+carl --version
 ```
 
-`code` and `review` write notes to `.agent/notes` (gitignored). `pr-review` writes `.agent/notes/pr-review.md` only. `chat` is interactive and ephemeral — no notes written. Diagnostics in `.carl/events.jsonl`.
+```bash
+carl code [<prompt-file>]        # Open editor (or read file) for a prompt; run implementation skill
+carl review                      # Review staged/uncommitted local changes; open notes in editor
+carl chat [<prompt-file>]        # Open editor (or read file) for a prompt; start interactive auggie session
+carl reset                       # Clear .agent/
+
+carl pr-review <github-pr-url>   # Review another developer's PR (requires gh CLI)
+```
+
+`code` writes `.agent/notes/code.md`; `review` writes `.agent/notes/review.md`. Both open in your editor when done. `pr-review` writes `.agent/notes/pr-review.md` and adds pending comments to the GitHub PR. `chat` is interactive and ephemeral — no notes written. Diagnostics in `.carl/events.jsonl`.
+
+### Model override
+
+`--model <model>` overrides the model for the run, ignoring config and defaults.
+
+Default models (written to `.carl/config.json` on first run):
+
+```json
+{
+  "models": {
+    "code": "sonnet4.6",
+    "chat": "gpt5.4",
+    "review": "gpt5.4",
+    "pr-review": "gpt5.4"
+  }
+}
+```
+
+Edit `.carl/config.json` to change defaults persistently.
 
 ### PR review
 
