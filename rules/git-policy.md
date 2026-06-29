@@ -1,6 +1,6 @@
 # Git Policy
 
-Never commit/push/rebase/merge/reset --hard/cherry-pick/delete-branch without explicit user permission.
+Never stage/commit/push/rebase/merge/reset --hard/cherry-pick/delete-branch without explicit user permission.
 
 Before any dangerous op: show modified files + proposed commit message, ask, wait for approval.
 

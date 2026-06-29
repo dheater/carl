@@ -146,8 +146,16 @@ describe("carl CLI", () => {
         { error: new Error("spawn auggie ENOENT"), status: null, signal: null },
         "auggie",
       ],
-      ["auggie exits via signal", { status: null, signal: "SIGTERM" }, "SIGTERM"],
-      ["auggie exits with non-zero status", { status: 2, signal: null }, "status 2"],
+      [
+        "auggie exits via signal",
+        { status: null, signal: "SIGTERM" },
+        "SIGTERM",
+      ],
+      [
+        "auggie exits with non-zero status",
+        { status: 2, signal: null },
+        "status 2",
+      ],
     ])(
       "exits with error when %s",
       async (_label, mockResult, expectedMessage) => {
@@ -207,7 +215,9 @@ describe("carl CLI", () => {
     });
 
     test("cancels without running code when the editor prompt is blank", async () => {
-      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-code-cancel-"));
+      const tmpDir = fs.mkdtempSync(
+        path.join(os.tmpdir(), "carl-code-cancel-"),
+      );
       const editor = require("./editor") as typeof import("./editor");
       const skill = require("./skill") as typeof import("./skill");
       (
