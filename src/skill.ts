@@ -116,9 +116,7 @@ function loadSkillFile(name: string): string {
 }
 
 function getExcludedTools(skill: string): string[] {
-  return WRITABLE_SKILLS.has(skill)
-    ? []
-    : [...READ_ONLY_WRITE_TOOL_EXCLUSIONS];
+  return WRITABLE_SKILLS.has(skill) ? [] : [...READ_ONLY_WRITE_TOOL_EXCLUSIONS];
 }
 
 export function getSkillModel(skill: string, workspaceRoot?: string): string {
