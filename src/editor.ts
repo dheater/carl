@@ -118,7 +118,6 @@ export function openFileInEditor(filePath: string): void {
 export function getSkillOutputPath(
   workspaceRoot: string,
   skill: string,
-  _status: "success" | "blocked" = "success",
 ): string {
   const agentDir = path.join(workspaceRoot, ".agent");
   return path.join(agentDir, "notes", `${skill}.md`);

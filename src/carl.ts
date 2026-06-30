@@ -1,11 +1,6 @@
 #!/usr/bin/env node
 
-import {
-  runSkill,
-  DEFAULT_MODELS,
-  buildSkillInstruction,
-  getSkillModel,
-} from "./skill";
+import { runSkill, DEFAULT_MODELS, buildSkillInstruction } from "./skill";
 import { collectPrompt, openFileInEditor, getSkillOutputPath } from "./editor";
 import {
   parsePrUrl,
@@ -78,64 +73,6 @@ async function cmdCode(
   await runSkill(workspaceRoot, "code", initialPrompt, model);
   const outputPath = getSkillOutputPath(workspaceRoot, "code");
   if (fs.existsSync(outputPath)) openFileInEditor(outputPath);
-}
-
-async function cmdChat(
-  workspaceRoot: string,
-  promptFile?: string,
-  model?: string,
-): Promise<void> {
-  const initialPrompt = collectCommandPrompt(promptFile);
-  if (!initialPrompt) {
-    console.log("No prompt provided. Cancelled.");
-    return;
-  }
-
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-chat-"));
-  try {
-    const rulesPath = path.join(tempDir, "chat-rules.md");
-    fs.writeFileSync(
-      rulesPath,
-      `${buildSkillInstruction("chat", workspaceRoot)}\n`,
-      "utf-8",
-    );
-
-    const instructionFile =
-      promptFile ?? path.join(tempDir, "initial-prompt.md");
-    if (!promptFile) {
-      fs.writeFileSync(instructionFile, `${initialPrompt}\n`, "utf-8");
-    }
-
-    const result = spawnSync(
-      "auggie",
-      [
-        "--workspace-root",
-        workspaceRoot,
-        "--model",
-        model ?? getSkillModel("chat", workspaceRoot),
-        "--ask",
-        "--rules",
-        rulesPath,
-        "--instruction-file",
-        instructionFile,
-      ],
-      { cwd: workspaceRoot, stdio: "inherit" },
-    );
-
-    if (result.error) {
-      throw new Error(
-        `Could not start \`auggie\` for \`carl chat\` — is auggie on PATH? cause=${result.error.message}`,
-      );
-    }
-    if (result.signal) {
-      throw new Error(`\`auggie\` exited from signal ${result.signal}`);
-    }
-    if ((result.status ?? 1) !== 0) {
-      throw new Error(`auggie exited with status ${result.status ?? 1}`);
-    }
-  } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
 }
 
 async function cmdPrReview(
@@ -348,9 +285,6 @@ function usage(): void {
   console.error(
     "  review        Run reviewer once (cleanup/refactor your own local changes)",
   );
-  console.error(
-    `  chat [<file>] Read prompt from file or open editor; start interactive auggie with Carl chat rules (default: ${DEFAULT_MODELS.chat})`,
-  );
   console.error("  reset         Clear .agent/");
   console.error(
     "  pr-review <github-pr-url>  Fetch PR diff, draft review comments in .agent/notes/pr-review.md, and upload as a pending GitHub review (requires gh CLI)",
@@ -396,13 +330,6 @@ async function main(): Promise<void> {
         break;
       case "review":
         await cmdReview(workspaceRoot, model);
-        break;
-      case "chat":
-        if (args.length > 2) {
-          console.error("Usage: carl [--model <model>] chat [<prompt-file>]");
-          process.exit(1);
-        }
-        await cmdChat(workspaceRoot, args[1], model);
         break;
       case "reset":
         cmdReset(workspaceRoot);

@@ -116,86 +116,6 @@ describe("carl CLI", () => {
     }
   }
 
-  describe("chat", () => {
-    test("cancels without calling auggie when the editor prompt is blank", async () => {
-      const tmpDir = fs.mkdtempSync(
-        path.join(os.tmpdir(), "carl-chat-cancel-"),
-      );
-      const editor = require("./editor") as typeof import("./editor");
-      (
-        editor.collectPrompt as jest.MockedFunction<typeof editor.collectPrompt>
-      ).mockReturnValueOnce(null);
-
-      const childProcess =
-        require("child_process") as typeof import("child_process");
-      const mockSpawnSync = childProcess.spawnSync as jest.MockedFunction<
-        typeof childProcess.spawnSync
-      >;
-
-      try {
-        await expectCliSuccess(["chat"], tmpDir);
-        expect(mockSpawnSync).not.toHaveBeenCalled();
-      } finally {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
-      }
-    });
-
-    test.each([
-      [
-        "auggie not on PATH",
-        { error: new Error("spawn auggie ENOENT"), status: null, signal: null },
-        "auggie",
-      ],
-      [
-        "auggie exits via signal",
-        { status: null, signal: "SIGTERM" },
-        "SIGTERM",
-      ],
-      [
-        "auggie exits with non-zero status",
-        { status: 2, signal: null },
-        "status 2",
-      ],
-    ])(
-      "exits with error when %s",
-      async (_label, mockResult, expectedMessage) => {
-        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-chat-err-"));
-        const childProcess =
-          require("child_process") as typeof import("child_process");
-        (
-          childProcess.spawnSync as jest.MockedFunction<
-            typeof childProcess.spawnSync
-          >
-        ).mockReturnValueOnce(mockResult as any);
-
-        process.argv = ["node", "carl", "chat", path.join(tmpDir, "p.md")];
-        fs.writeFileSync(path.join(tmpDir, "p.md"), "hello\n", "utf-8");
-        const cwdSpy = jest.spyOn(process, "cwd").mockReturnValue(tmpDir);
-        const exitSpy = jest
-          .spyOn(process, "exit")
-          .mockImplementation((() => undefined) as never);
-        const errorSpy = jest
-          .spyOn(console, "error")
-          .mockImplementation(() => {});
-        const logSpy = jest.spyOn(console, "log").mockImplementation(() => {});
-
-        try {
-          await runLoadedCli();
-          expect(exitSpy).toHaveBeenCalledWith(1);
-          expect(errorSpy).toHaveBeenCalledWith(
-            expect.stringContaining(expectedMessage as string),
-          );
-        } finally {
-          cwdSpy.mockRestore();
-          exitSpy.mockRestore();
-          errorSpy.mockRestore();
-          logSpy.mockRestore();
-          fs.rmSync(tmpDir, { recursive: true, force: true });
-        }
-      },
-    );
-  });
-
   describe("code", () => {
     test("runs the code skill with prompt from file", async () => {
       const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-code-cli-"));
@@ -262,7 +182,7 @@ describe("carl CLI", () => {
       (skill.runSkill as jest.MockedFunction<any>).mockImplementationOnce(
         async () => {
           writeValidComment(draftPath);
-          return { status: "success", response: "done" };
+          return { response: "done" };
         },
       );
 
@@ -328,7 +248,7 @@ describe("carl CLI", () => {
             "Out of scope.",
             "||| END",
           ]);
-          return { status: "success", response: "done" };
+          return { response: "done" };
         })
         .mockImplementationOnce(async () => {
           fs.writeFileSync(
@@ -342,7 +262,7 @@ describe("carl CLI", () => {
             ].join("\n"),
             "utf-8",
           );
-          return { status: "success", response: "done" };
+          return { response: "done" };
         });
 
       process.argv = ["node", "carl", "pr-review", PR_URL];
@@ -384,11 +304,11 @@ describe("carl CLI", () => {
       (skill.runSkill as jest.MockedFunction<any>)
         .mockImplementationOnce(async () => {
           writeBad();
-          return { status: "success", response: "done" };
+          return { response: "done" };
         })
         .mockImplementationOnce(async () => {
           writeBad();
-          return { status: "success", response: "done" };
+          return { response: "done" };
         });
 
       process.argv = ["node", "carl", "pr-review", PR_URL];
