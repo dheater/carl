@@ -1,4 +1,6 @@
-# Error Messages
+# Help (Error) Messages
+
+Instead of traditional error messages, provide messages that report not only what went wrong, but also, help the user solve the problem.
 
 Format: [WHAT] failed + [WHY] matters + [HOW] to fix + [CONTEXT] codes/values/paths
 

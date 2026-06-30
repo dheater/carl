@@ -1,6 +1,6 @@
 {
   "name": "carl",
-  "version": 7.0.0",
+  "version": "7.0.0",
   "bin": {
     "carl": "./dist/carl.mjs"
   },
@@ -22,6 +22,7 @@
     "yaml": "^2.8.3"
   },
   "dependencies": {
-    "@augmentcode/auggie-sdk": "^0.1.15"
+    "@augmentcode/auggie-sdk": "^0.1.15",
+    "@aws-sdk/client-bedrock-runtime": "^3.1075.0"
   }
 }

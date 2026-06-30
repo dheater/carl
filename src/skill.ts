@@ -1,5 +1,11 @@
 import { getGitStatus, getCurrentBranch } from "./git";
 import { getSkillOutputPath } from "./editor";
+import {
+  AgentRunner,
+  AuggieRunner,
+  BedrockRunner,
+  BEDROCK_MODEL_IDS,
+} from "./runner";
 
 import { randomUUID } from "crypto";
 import * as path from "path";
@@ -15,29 +21,37 @@ const EVENTS_LOG_FILE = "events.jsonl";
 type TimingEvent = {
   timestamp: string;
   run_id: string;
-  event: "Auggie.create" | "prompt" | "skill";
+  event: "prompt" | "skill";
   subject: string;
   duration_ms: number;
   skill: string;
   model: string;
-  command?: string;
   meta?: Record<string, any>;
 };
 
 type CarlConfig = {
+  backend?: string;
   models?: {
     code?: string;
-    chat?: string;
     review?: string;
     "pr-review"?: string;
+  };
+  backends?: {
+    code?: string;
+    review?: string;
+    "pr-review"?: string;
+  };
+  providers?: {
+    bedrock?: {
+      region?: string;
+    };
   };
 };
 
 export const DEFAULT_MODELS: Record<string, string> = {
   code: "sonnet4.6",
-  chat: "gpt5.4",
-  review: "gpt5.4",
-  "pr-review": "gpt5.4",
+  review: "sonnet4.6",
+  "pr-review": "sonnet4.6",
 };
 
 const BASE_RULE_FILES = ["carl.md"] as const;
@@ -70,7 +84,10 @@ function loadCarlConfig(
     if (!createIfMissing) {
       return {};
     }
-    const defaults: CarlConfig = { models: { ...DEFAULT_MODELS } };
+    const defaults: CarlConfig = {
+      backend: "bedrock",
+      models: { ...DEFAULT_MODELS },
+    };
     fs.mkdirSync(carlDir, { recursive: true });
     fs.writeFileSync(
       configPath,
@@ -81,12 +98,13 @@ function loadCarlConfig(
   }
   try {
     return JSON.parse(fs.readFileSync(configPath, "utf-8")) as CarlConfig;
-  } catch {
-    return {};
+  } catch (err: any) {
+    throw new Error(
+      `Failed to parse ${configPath}: ${err.message}\n` +
+        `Fix or delete the file and try again.`,
+    );
   }
 }
-
-type PromptResponse = string | { text: string; usage?: Record<string, any> };
 
 function getRuleFiles(skill: string): string[] {
   return [...BASE_RULE_FILES, ...(SKILL_RULE_FILES[skill] ?? [])];
@@ -119,30 +137,50 @@ function getExcludedTools(skill: string): string[] {
   return WRITABLE_SKILLS.has(skill) ? [] : [...READ_ONLY_WRITE_TOOL_EXCLUSIONS];
 }
 
-export function getSkillModel(skill: string, workspaceRoot?: string): string {
+function getSkillModel(
+  skill: string,
+  workspaceRoot?: string,
+  config?: CarlConfig,
+): string {
   if (workspaceRoot) {
-    const config = loadCarlConfig(workspaceRoot, skill !== "pr-review");
+    const resolved =
+      config ?? loadCarlConfig(workspaceRoot, skill !== "pr-review");
     const override =
-      config.models?.[skill as keyof NonNullable<CarlConfig["models"]>];
+      resolved.models?.[skill as keyof NonNullable<CarlConfig["models"]>];
     if (override) return override;
   }
-  return DEFAULT_MODELS[skill] ?? "haiku4.5";
+  return DEFAULT_MODELS[skill] ?? "sonnet4.6";
 }
 
-function extractPromptResponseText(
-  response: PromptResponse,
-): [string, Record<string, any> | undefined] {
-  if (typeof response === "string") {
-    return [response, undefined];
+const VALID_BACKENDS = ["auggie", "bedrock"] as const;
+
+function getBackend(
+  workspaceRoot?: string,
+  skill?: string,
+  config?: CarlConfig,
+): string {
+  if (workspaceRoot) {
+    const resolved = config ?? loadCarlConfig(workspaceRoot, false);
+    const backend =
+      (skill &&
+        resolved.backends?.[
+          skill as keyof NonNullable<CarlConfig["backends"]>
+        ]) ||
+      resolved.backend;
+    if (backend) {
+      if (!(VALID_BACKENDS as readonly string[]).includes(backend)) {
+        throw new Error(
+          `Invalid backend "${backend}" in .carl/config.json.\n` +
+            `Valid options: ${VALID_BACKENDS.join(", ")}.`,
+        );
+      }
+      return backend;
+    }
   }
-  const usage = response.usage
-    ? { source: "auggie", ...response.usage }
-    : undefined;
-  return [response.text, usage];
-}
-
-function isBlockedResponse(response: string): boolean {
-  return /^#\s+Interview\s*$/im.test(response) || /^BLOCKED:/m.test(response);
+  throw new Error(
+    `No backend configured. Set "backend" in .carl/config.json.\n` +
+      `Valid options: ${VALID_BACKENDS.join(", ")}.`,
+  );
 }
 
 function writeTimingEvent(workspaceRoot: string, event: TimingEvent): void {
@@ -163,7 +201,6 @@ function logTimingDuration(
   durationMs: number,
   skill: string,
   model: string,
-  command: string | undefined,
   meta?: Record<string, any>,
 ): void {
   if (skill !== "pr-review") {
@@ -175,7 +212,6 @@ function logTimingDuration(
       duration_ms: durationMs,
       skill,
       model,
-      command,
       meta,
     });
   }
@@ -246,14 +282,13 @@ export function buildSkillInstruction(
 
 function writeSkillOutput(
   skill: string,
-  status: "success" | "blocked",
   output: string,
   workspaceRoot: string,
 ): void {
   if (skill === "pr-review") {
     return;
   }
-  const outputPath = getSkillOutputPath(workspaceRoot, skill, status);
+  const outputPath = getSkillOutputPath(workspaceRoot, skill);
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
   fs.writeFileSync(outputPath, output, "utf-8");
 }
@@ -266,7 +301,6 @@ export class NetworkUnavailableError extends Error {
 }
 
 export interface RunSkillResult {
-  status: "success" | "blocked";
   response: string;
 }
 
@@ -282,47 +316,36 @@ function countGitStatus(workspaceRoot: string): GitStatusCounts {
 function getSkillOutputRelativePath(
   workspaceRoot: string,
   skill: string,
-  status: "success" | "blocked" | "error",
 ): string | null {
   if (skill === "pr-review") {
     return null;
   }
-  const outputPath = getSkillOutputPath(
-    workspaceRoot,
-    skill,
-    status === "blocked" ? "blocked" : "success",
-  );
+  const outputPath = getSkillOutputPath(workspaceRoot, skill);
   return path.relative(workspaceRoot, outputPath) || path.basename(outputPath);
 }
 
 function buildSkillEventMeta(
   workspaceRoot: string,
   skill: string,
-  status: "success" | "blocked" | "error",
+  status: "success" | "error",
   gitStatusBefore: GitStatusCounts,
   retryCount: number,
   errorType?: "network" | "exception",
 ): Record<string, any> {
   const gitStatusAfter = countGitStatus(workspaceRoot);
-  const outputPath = getSkillOutputRelativePath(workspaceRoot, skill, status);
-  const absoluteOutputPath = outputPath
-    ? path.join(workspaceRoot, outputPath)
-    : null;
-
+  const outputPath = getSkillOutputRelativePath(workspaceRoot, skill);
   return {
     status,
-    blocked_reason: status === "blocked" ? "interview" : null,
     error_type: status === "error" ? (errorType ?? "exception") : null,
     retry_count: retryCount,
-    interview_triggered: status === "blocked",
     git_repo: gitStatusBefore.is_repo,
     tracked_changed_before: gitStatusBefore.tracked_changed,
     tracked_changed_after: gitStatusAfter.tracked_changed,
     untracked_before: gitStatusBefore.untracked,
     untracked_after: gitStatusAfter.untracked,
     output_path: outputPath,
-    output_exists: absoluteOutputPath
-      ? fs.existsSync(absoluteOutputPath)
+    output_exists: outputPath
+      ? fs.existsSync(path.join(workspaceRoot, outputPath))
       : false,
   };
 }
@@ -334,30 +357,65 @@ function classifySkillError(err: unknown): "network" | "exception" {
   return "exception";
 }
 
+function isTransientFetchError(err: unknown): boolean {
+  return ((err as any)?.message ?? "").includes("fetch failed");
+}
+
+function createRunner(
+  workspaceRoot: string,
+  skill: string,
+  model: string,
+  region: string | undefined,
+  config: CarlConfig,
+): AgentRunner {
+  const backend = getBackend(workspaceRoot, skill, config);
+
+  if (backend === "auggie") {
+    return new AuggieRunner();
+  }
+
+  if (!BEDROCK_MODEL_IDS[model]) {
+    const supportedModels = Object.keys(BEDROCK_MODEL_IDS).join(", ");
+    throw new Error(
+      `Model "${model}" is not supported by Bedrock backend.\n` +
+        `Supported Bedrock models: ${supportedModels}\n` +
+        `Either:\n` +
+        `  1. Change model to a supported Bedrock model in .carl/config.json\n` +
+        `  2. Set "backends": {"${skill}": "auggie"} to use auggie for ${skill} skill\n` +
+        `  3. Change global "backend" to "auggie" or remove it`,
+    );
+  }
+  return new BedrockRunner(region ?? process.env.AWS_REGION ?? "us-east-1");
+}
+
 export async function runSkill(
   workspaceRoot: string,
   skill: string,
   initialPrompt?: string,
   modelOverride?: string,
+  runner?: AgentRunner,
 ): Promise<RunSkillResult> {
-  const command = skill;
   const runId = randomUUID();
-  const model = modelOverride ?? getSkillModel(skill, workspaceRoot);
+  const carlConfig = loadCarlConfig(workspaceRoot);
+  const model =
+    modelOverride ?? getSkillModel(skill, workspaceRoot, carlConfig);
   const skillStartTime = Date.now();
   const gitStatusBefore = countGitStatus(workspaceRoot);
+  const excludedTools = getExcludedTools(skill);
+
+  const activeRunner =
+    runner ??
+    createRunner(
+      workspaceRoot,
+      skill,
+      model,
+      carlConfig.providers?.bedrock?.region,
+      carlConfig,
+    );
 
   let instruction = buildSkillInstruction(skill, workspaceRoot);
   if (initialPrompt) {
     instruction += `\n\n# User request\n\n${initialPrompt}`;
-  }
-
-  const { Auggie } = await import("@augmentcode/auggie-sdk");
-
-  // UND_ERR_HEADERS_TIMEOUT and similar transient network errors surface as
-  // "fetch failed" in the error message. The session is dead after such a
-  // failure, so we recreate the client and retry.
-  function isTransientFetchError(err: unknown): boolean {
-    return ((err as any)?.message ?? "").includes("fetch failed");
   }
 
   const MAX_FETCH_RETRIES = 2;
@@ -377,50 +435,18 @@ export async function runSkill(
         await new Promise((r) => setTimeout(r, 5000));
       }
 
-      console.log(`  [System] Initializing agent...`);
-      console.log(`[Timing] Auggie.create entry ${skill}/${model}`);
-      const auggleCreateStart = Date.now();
-      const excludedTools = getExcludedTools(skill);
-      const client = await Auggie.create({
-        workspaceRoot,
-        model: model as any,
-        allowIndexing: true,
-        excludedTools,
-      });
-      logTimingDuration(
-        workspaceRoot,
-        runId,
-        "Auggie.create",
-        `${skill}/${model}`,
-        Date.now() - auggleCreateStart,
-        skill,
-        model,
-        command,
-      );
-
-      client.onSessionUpdate((notification: any) => {
-        const update = notification.update;
-        if (!update) return;
-        if (update.sessionUpdate === "tool_call") {
-          console.log(
-            `\n  [${skill}/${model}] Running tool: ${update.title || "unknown"}...`,
-          );
-        } else if (update.sessionUpdate === "agent_thought_chunk") {
-          if (update.content && update.content.text) {
-            process.stdout.write(`\x1b[90m${update.content.text}\x1b[0m`);
-          }
-        }
-      });
-
       let shouldRetry = false;
       try {
-        console.log(
-          `  [System] Agent initialized. Sending prompt and awaiting response...`,
-        );
-        console.log(`[Timing] prompt entry ${skill}/${model}`);
         const promptStart = Date.now();
-        const raw = await client.prompt(instruction, { isAnswerOnly: true });
-        [response, usage] = extractPromptResponseText(raw);
+        const result = await activeRunner.run({
+          workspaceRoot,
+          skill,
+          model,
+          instruction,
+          excludedTools,
+        });
+        response = result.text;
+        usage = result.usage as Record<string, any> | undefined;
         const promptDuration = Date.now() - promptStart;
         logTimingDuration(
           workspaceRoot,
@@ -430,7 +456,6 @@ export async function runSkill(
           promptDuration,
           skill,
           model,
-          command,
           {
             prompt_chars: instruction.length,
             response_chars: response.length,
@@ -442,24 +467,17 @@ export async function runSkill(
           shouldRetry = true;
         } else if (isTransientFetchError(err)) {
           throw new NetworkUnavailableError(
-            `Network unavailable after ${MAX_FETCH_RETRIES + 1} attempts — run \`carl ${command}\` to retry.`,
+            `Network unavailable after ${MAX_FETCH_RETRIES + 1} attempts — run \`carl ${skill}\` to retry.`,
           );
         } else {
           throw err;
         }
-      } finally {
-        try {
-          await client.close();
-        } catch {}
       }
 
       if (!shouldRetry) break;
     }
 
-    const isBlocked = isBlockedResponse(response);
-    const status: "success" | "blocked" = isBlocked ? "blocked" : "success";
-
-    writeSkillOutput(skill, status, response, workspaceRoot);
+    writeSkillOutput(skill, response, workspaceRoot);
 
     logTimingDuration(
       workspaceRoot,
@@ -469,17 +487,16 @@ export async function runSkill(
       Date.now() - skillStartTime,
       skill,
       model,
-      command,
       buildSkillEventMeta(
         workspaceRoot,
         skill,
-        status,
+        "success",
         gitStatusBefore,
         retryCount,
       ),
     );
 
-    return { status, response };
+    return { response };
   } catch (err) {
     if (skill !== "pr-review") {
       logTimingDuration(
@@ -490,7 +507,6 @@ export async function runSkill(
         Date.now() - skillStartTime,
         skill,
         model,
-        command,
         buildSkillEventMeta(
           workspaceRoot,
           skill,
