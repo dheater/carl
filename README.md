@@ -7,11 +7,11 @@ Opinionated AI development workflow CLI. Three commands: write code, review your
 I have tried spec-driven development with sopisticated AI orchastration. I prefer being the orcharstrator and using
 AI as an assistance tool. I've found that being to far from the implementation means I can't effectively answer questions
 about, debug, and maintain the code. Carl is my effort to find a good balance between human and AI coding.
-Carl's commands are intentionally single-shot. I find this helps me keep iterations small and keeps me in the loop.'
+Carl's commands are intentionally single-shot. I find this helps me keep iterations small and keeps me in the loop.
 
-I prefer my text editor over the small prompt boxes. That is why Carl uses $EDITOR as a "Tom Riddle's Diary" interface.
-When Carl is run, you enter your prompt in your editor. When Carl responds, its ownput is also written into your editor.
-This allows you to edit the output, save it, and feed the file back as the next prompt. This works very we for
+I prefer my text editor over small prompt boxes. That is why Carl uses $EDITOR as a "Tom Riddle's Diary" interface.
+When Carl is run, you enter your prompt in your editor. When Carl responds, its output is also written into your editor.
+This allows you to edit the output, save it, and feed the file back as the next prompt. This works very well for
 iterating between `carl review` and `carl code`.
 
 ## Prerequisites

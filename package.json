@@ -1,12 +1,12 @@
 {
   "name": "carl",
-  "version": "7.0.0",
+  "version": "7.0.1",
   "bin": {
     "carl": "./dist/carl.mjs"
   },
   "scripts": {
     "prepare": "npm run build",
-    "build": "esbuild src/carl.ts --bundle --platform=node --format=esm --banner:js='import {fileURLToPath as _fup} from \"url\"; import {dirname as _dn} from \"path\"; import {createRequire as _cr} from \"module\"; const __dirname=_dn(_fup(import.meta.url)); const require=_cr(import.meta.url);' --outfile=dist/carl.mjs",
+    "build": "node build.mjs",
     "test": "jest",
     "start": "node dist/carl.mjs"
   },

@@ -19,7 +19,6 @@ import {
   validateCommentsInScope,
   validateNoDuplicateInlineComments,
   validateInlineCommentsHaveRationale,
-  parseAiScore,
   type ReviewComment,
 } from "./pr-review-draft";
 import { getGitStatus, getHeadSha } from "./git";
@@ -154,7 +153,6 @@ async function cmdPrReview(
     `Every inline comment must open with a sentence naming WHAT the problem is, then explain why it matters. Do not start with impact or importance — state the defect first.`,
     `Write prose comments only — do not write suggestion blocks.`,
     `Read any workspace file you need for context. Do not modify any file outside the draft.`,
-    `Also fill in the \`AI-generated:\` line under \`## AI Generation Assessment\` with your assessment of how likely this diff is to be AI-generated (low/medium/high) and a one-sentence reason. Use exactly this format: \`AI-generated: low|medium|high — <reason>\``,
   ].join("\n");
 
   await runSkill(workspaceRoot, "pr-review", initialPrompt, model);
@@ -218,19 +216,6 @@ async function cmdPrReview(
     );
   }
 
-  const aiScore = parseAiScore(fs.readFileSync(draftPath, "utf-8"));
-  if (aiScore) {
-    const indicator =
-      aiScore.level === "high"
-        ? "🔴"
-        : aiScore.level === "medium"
-          ? "🟡"
-          : "🟢";
-    console.log(
-      `AI-generated likelihood: ${indicator} ${aiScore.level.toUpperCase()} — ${aiScore.reason}`,
-    );
-  }
-
   console.log(
     `Creating pending review on ${prIdentity} (${comments.length} comment(s))...`,
   );
@@ -257,15 +242,25 @@ function cmdReset(workspaceRoot: string): void {
   }
 }
 
+// esbuild --define replaces CARL_VERSION with the actual version string at
+// bundle time. The declare satisfies the TypeScript compiler; the try/catch
+// is only reached during local TS execution (ts-node / jest) where no
+// bundler has substituted the identifier.
+declare const CARL_VERSION: string;
+
 function getVersion(): string {
   try {
-    const pkgPath = path.join(__dirname, "..", "package.json");
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8")) as {
-      version: string;
-    };
-    return pkg.version;
+    return CARL_VERSION;
   } catch {
-    return "unknown";
+    try {
+      const pkgPath = path.join(__dirname, "..", "package.json");
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8")) as {
+        version: string;
+      };
+      return pkg.version;
+    } catch {
+      return "unknown";
+    }
   }
 }
 

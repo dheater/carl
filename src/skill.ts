@@ -60,6 +60,9 @@ const READ_ONLY_WRITE_TOOL_EXCLUSIONS = [
   "remove-files",
   "save-file",
   "str-replace-editor",
+  "write_file",
+  "str_replace",
+  "create_directory",
 ] as const;
 
 const WRITABLE_SKILLS = new Set(["code", "pr-review"]);
