@@ -266,6 +266,22 @@ function parseGitignoreDirs(workspaceRoot: string): Set<string> {
   return dirs;
 }
 
+const LIST_FILES_MAX_BYTES = 200 * 1024; // 200 KB — ~50K tokens, enough for any real project
+const TOOL_OUTPUT_MAX_BYTES = 50 * 1024; // 50 KB — ~12K tokens per tool result
+
+function truncateToolOutput(output: string, label: string): string {
+  if (output.length <= TOOL_OUTPUT_MAX_BYTES) return output;
+  // Keep 20% head (context / command echo) and 80% tail (errors / results).
+  const headBytes = Math.floor(TOOL_OUTPUT_MAX_BYTES * 0.2);
+  const tailBytes = TOOL_OUTPUT_MAX_BYTES - headBytes;
+  const dropped = output.length - headBytes - tailBytes;
+  return (
+    output.slice(0, headBytes) +
+    `\n[... ${dropped} bytes omitted. ${label}]\n` +
+    output.slice(output.length - tailBytes)
+  );
+}
+
 function executeListFiles(
   toolInput: { directory?: string; pattern?: string; recursive?: boolean },
   workspaceRoot: string,
@@ -299,7 +315,7 @@ function executeListFiles(
       const rel = path.relative(resolved, path.join(e.parentPath, e.name));
       const parts = rel.split(path.sep);
       if (parts.some((p) => excludeDirs.has(p))) return false;
-      if (pattern && !path.matchesGlob(e.name, pattern)) return false;
+      if (pattern && !path.matchesGlob(rel, pattern)) return false;
       return true;
     })
     .map((e) => {
@@ -309,7 +325,21 @@ function executeListFiles(
     .sort();
 
   if (files.length === 0) return "No files found.";
-  return files.join("\n");
+
+  let output = "";
+  let truncated = false;
+  for (const f of files) {
+    const line = f + "\n";
+    if (output.length + line.length > LIST_FILES_MAX_BYTES) {
+      truncated = true;
+      break;
+    }
+    output += line;
+  }
+  if (truncated) {
+    output += `\n[Output truncated: too many files. Use a subdirectory or pattern to narrow results.]`;
+  }
+  return output.trimEnd();
 }
 
 function executeWriteFile(
@@ -396,14 +426,20 @@ export class BedrockRunner implements AgentRunner {
           maxBuffer: 10 * 1024 * 1024, // 10MB
           timeout: 30000, // 30s
         });
-        return result;
+        return truncateToolOutput(
+          result,
+          "Pipe through head/tail/grep to reduce output.",
+        );
       } else if (toolName === "read_file") {
         const { path: filePath } = toolInput;
         const fullPath = resolveInsideWorkspace(filePath, workspaceRoot);
         if (!fullPath) return "Error: path is outside the workspace root.";
         if (!fs.existsSync(fullPath))
           return `Error: file not found: ${filePath}`;
-        return fs.readFileSync(fullPath, "utf-8");
+        return truncateToolOutput(
+          fs.readFileSync(fullPath, "utf-8"),
+          "Use bash with grep/sed to read specific sections.",
+        );
       } else if (toolName === "write_file") {
         return executeWriteFile(toolInput, workspaceRoot);
       } else if (toolName === "str_replace") {

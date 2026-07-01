@@ -214,6 +214,21 @@ describe("BedrockRunner.executeTool", () => {
     expect(result).not.toContain("b.md");
   });
 
+  test("list_files pattern matches on relative path not just basename", () => {
+    const sub = path.join(workspaceRoot, "src");
+    fs.mkdirSync(sub);
+    fs.writeFileSync(path.join(sub, "foo.ts"), "");
+    fs.writeFileSync(path.join(workspaceRoot, "root.ts"), "");
+    // Pattern that qualifies by directory — should match src/foo.ts only
+    const result = runner.exec(
+      "list_files",
+      { pattern: "src/**/*.ts", recursive: true },
+      workspaceRoot,
+    );
+    expect(result).toContain("src/foo.ts");
+    expect(result).not.toContain("root.ts");
+  });
+
   test("list_files recursive finds nested files", () => {
     const sub = path.join(workspaceRoot, "src");
     fs.mkdirSync(sub);
@@ -275,6 +290,25 @@ describe("BedrockRunner.executeTool", () => {
     expect(result).toBe("No files found.");
   });
 
+  test("list_files truncates output when it exceeds the size limit", () => {
+    // Create enough files to exceed LIST_FILES_MAX_BYTES (200KB).
+    // Each filename is "file-NNNNN.ts\n" = ~16 chars; need ~12500 files.
+    // Use 15000 to be safely over the limit.
+    for (let i = 0; i < 15000; i++) {
+      fs.writeFileSync(
+        path.join(workspaceRoot, `file-${String(i).padStart(5, "0")}.ts`),
+        "",
+      );
+    }
+    const result = runner.exec(
+      "list_files",
+      { recursive: false },
+      workspaceRoot,
+    );
+    expect(result).toContain("[Output truncated");
+    expect(result.length).toBeLessThanOrEqual(200 * 1024 + 200); // at most cap + truncation message
+  });
+
   test("read_file returns file contents", () => {
     fs.writeFileSync(path.join(workspaceRoot, "hello.txt"), "world");
     const result = runner.exec(
@@ -283,6 +317,36 @@ describe("BedrockRunner.executeTool", () => {
       workspaceRoot,
     );
     expect(result).toBe("world");
+  });
+
+  test("read_file truncates oversized output with head+tail elision", () => {
+    // Write 60KB where the first 10KB is 'a', the last 10KB is 'b', middle is 'x'.
+    const head = "a".repeat(10 * 1024);
+    const mid = "x".repeat(40 * 1024);
+    const tail = "b".repeat(10 * 1024);
+    fs.writeFileSync(path.join(workspaceRoot, "big.txt"), head + mid + tail);
+    const result = runner.exec("read_file", { path: "big.txt" }, workspaceRoot);
+    expect(result).toContain("bytes omitted");
+    // Head bytes kept (first 20% of 50KB = 10KB)
+    expect(result.startsWith("a")).toBe(true);
+    // Tail bytes kept (last 80% of 50KB = 40KB) — our tail starts with 'b'
+    // but tail region also overlaps mid 'x'; just confirm 'b' chars are present
+    expect(result.endsWith("b")).toBe(true);
+    expect(result.length).toBeLessThan(60 * 1024);
+  });
+
+  test("bash truncates oversized output with head+tail elision", () => {
+    // Generate 60KB: first 10KB 'a', last 10KB 'b', middle 'x'
+    const cmd = [
+      `printf '%0.sa' {1..10240}`,
+      `printf '%0.sx' {1..40960}`,
+      `printf '%0.sb' {1..10240}`,
+    ].join("; ");
+    const result = runner.exec("bash", { command: cmd }, workspaceRoot);
+    expect(result).toContain("bytes omitted");
+    expect(result.startsWith("a")).toBe(true);
+    expect(result.endsWith("b")).toBe(true);
+    expect(result.length).toBeLessThan(60 * 1024);
   });
 
   test("read_file returns error for missing file", () => {
