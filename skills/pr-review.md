@@ -34,5 +34,5 @@ Stop when you have written every comment a reasonable reviewer would leave. If n
 ## Comment structure
 
 1. **Open with the problem** — one sentence naming the defect or broken contract in plain language.
-2. **How it happens** — for anything non-obvious: name the specific value, path, or call; trace execution with file/function/line step by step.
-3. **What to do** — concrete suggestion; name alternatives and tradeoffs. Explain _why_ the fix is right.
+2. **Context and how it happens** — assume the reader is unfamiliar with this codebase. Briefly explain what the relevant code does and why it exists, then trace how the specific value, path, or call leads to the problem (file/function/line). Don't skip steps that seem obvious to you — a junior reader needs the full chain.
+3. **What to do** — concrete suggestion; name alternatives and tradeoffs. Explain _why_ the fix is right, including what invariant or contract it restores.

@@ -38,7 +38,7 @@ Climb after you understand the problem — read the task, trace the real flow en
 - No praise. Call out bad assumptions and unnecessary complexity.
 - Deletion over addition. Boring over clever. Fewest files possible.
 - Prefer explicit control flow and fail-fast behavior.
-- Keep the report focused on what changed, what was deleted or simplified, tests run, and any remaining blocker or risk.
+- Write the summary for someone unfamiliar with the codebase. For every change: name the file and function touched, explain what it did before and what it does now, and say why that matters (what bug it fixes, what invariant it preserves, what future problem it prevents). Don't assume the reader knows the architecture — briefly explain any concept (e.g. "the runner is the class that calls the LLM API") the first time it appears. Also cover what was deleted or simplified, tests run, and any remaining blocker or risk.
 
 ## Not lazy about
 
