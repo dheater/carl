@@ -18,6 +18,25 @@ const GLOBAL_SKILLS_DIR = path.join(os.homedir(), ".augment", "skills");
 const EVENTS_LOG_DIR = ".carl";
 const EVENTS_LOG_FILE = "events.jsonl";
 
+type PromptMeta = {
+  prompt_chars: number;
+  response_chars: number;
+  usage?: Record<string, unknown>;
+};
+
+type SkillMeta = {
+  status: "success" | "error";
+  error_type: "network" | "exception" | null;
+  retry_count: number;
+  git_repo: boolean;
+  tracked_changed_before: number;
+  tracked_changed_after: number;
+  untracked_before: number;
+  untracked_after: number;
+  output_path: string | null;
+  output_exists: boolean;
+};
+
 type TimingEvent = {
   timestamp: string;
   run_id: string;
@@ -26,7 +45,7 @@ type TimingEvent = {
   duration_ms: number;
   skill: string;
   model: string;
-  meta?: Record<string, any>;
+  meta?: PromptMeta | SkillMeta;
 };
 
 type CarlConfig = {
@@ -204,7 +223,7 @@ function logTimingDuration(
   durationMs: number,
   skill: string,
   model: string,
-  meta?: Record<string, any>,
+  meta?: PromptMeta | SkillMeta,
 ): void {
   if (skill !== "pr-review") {
     writeTimingEvent(workspaceRoot, {
@@ -286,17 +305,41 @@ export function buildSkillInstruction(
   return instruction;
 }
 
+function buildUsageSummary(
+  usage: Record<string, unknown> | undefined,
+  durationMs: number,
+): string {
+  const secs = (durationMs / 1000).toFixed(1);
+  const parts: string[] = [`${secs}s`];
+  if (
+    typeof usage?.inputTokens === "number" &&
+    typeof usage?.outputTokens === "number"
+  ) {
+    parts.push(
+      `${usage.inputTokens.toLocaleString()}in / ${usage.outputTokens.toLocaleString()}out tokens`,
+    );
+  }
+  return `Completed in ${parts.join(" · ")}`;
+}
+
 function writeSkillOutput(
   skill: string,
   output: string,
   workspaceRoot: string,
+  usage: Record<string, unknown> | undefined,
+  durationMs: number,
 ): void {
   if (skill === "pr-review") {
     return;
   }
   const outputPath = getSkillOutputPath(workspaceRoot, skill);
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-  fs.writeFileSync(outputPath, output, "utf-8");
+  const summary = buildUsageSummary(usage, durationMs);
+  fs.writeFileSync(
+    outputPath,
+    output + "\n\n---\n\n" + summary + "\n",
+    "utf-8",
+  );
 }
 
 export class NetworkUnavailableError extends Error {
@@ -337,7 +380,7 @@ function buildSkillEventMeta(
   gitStatusBefore: GitStatusCounts,
   retryCount: number,
   errorType?: "network" | "exception",
-): Record<string, any> {
+): SkillMeta {
   const gitStatusAfter = countGitStatus(workspaceRoot);
   const outputPath = getSkillOutputRelativePath(workspaceRoot, skill);
   return {
@@ -429,7 +472,7 @@ export async function runSkill(
   console.log(`Starting skill: ${skill}`);
 
   let response = "";
-  let usage: Record<string, any> | undefined;
+  let usage: Record<string, unknown> | undefined;
   let retryCount = 0;
   try {
     for (let attempt = 0; attempt <= MAX_FETCH_RETRIES; attempt++) {
@@ -452,7 +495,7 @@ export async function runSkill(
           excludedTools,
         });
         response = result.text;
-        usage = result.usage as Record<string, any> | undefined;
+        usage = result.usage;
         const promptDuration = Date.now() - promptStart;
         logTimingDuration(
           workspaceRoot,
@@ -483,7 +526,13 @@ export async function runSkill(
       if (!shouldRetry) break;
     }
 
-    writeSkillOutput(skill, response, workspaceRoot);
+    writeSkillOutput(
+      skill,
+      response,
+      workspaceRoot,
+      usage,
+      Date.now() - skillStartTime,
+    );
 
     logTimingDuration(
       workspaceRoot,

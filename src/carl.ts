@@ -347,11 +347,7 @@ async function main(): Promise<void> {
   }
 }
 
-export const cliPromise = main()
-  .then(() => {
-    process.exit(0);
-  })
-  .catch((error) => {
-    console.error(error);
-    process.exit(1);
-  });
+export const cliPromise = main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

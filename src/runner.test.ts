@@ -17,8 +17,6 @@ describe("isBlockedBashCommand", () => {
     "ls -R",
     "ls -lR",
     "ls -R .",
-    // Compound commands where the bare recursive listing is the final token
-    // are still blocked — the $ anchor fires after the last arg.
     "echo 1 && find . -type f",
     "cat foo; find ./ -type f",
   ])("blocks: %s", (cmd) => {
@@ -32,8 +30,6 @@ describe("isBlockedBashCommand", () => {
     "ls -la",
     "grep -r foo .",
     "cat package.json",
-    // Piped find — the recursive listing is not at the end of the string,
-    // so the $ anchor does not fire; the pipe limits output anyway.
     "find . -type f | head -50",
   ])("allows: %s", (cmd) => {
     expect(isBlockedBashCommand(cmd)).toBe(false);
@@ -305,7 +301,6 @@ describe("BedrockRunner.executeTool", () => {
       workspaceRoot,
     );
     expect(result).toContain("Error");
-    // Must not have read the real file
     expect(result).not.toContain("root:");
   });
 });

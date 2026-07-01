@@ -25,21 +25,6 @@ export const BEDROCK_MODEL_IDS: Record<string, string> = {
   fable5: "us.anthropic.claude-fable-5",
 };
 
-// Models not listed here will have estimatedCostUsd omitted from usage.
-const BEDROCK_PRICING: Record<
-  string,
-  { inputPerMillion: number; outputPerMillion: number }
-> = {
-  "sonnet4.6": { inputPerMillion: 3.6, outputPerMillion: 18.0 },
-  "sonnet4.5": { inputPerMillion: 3.0, outputPerMillion: 15.0 },
-  sonnet4: { inputPerMillion: 3.0, outputPerMillion: 15.0 },
-  "haiku4.5": { inputPerMillion: 1.2, outputPerMillion: 6.0 },
-  "opus4.7": { inputPerMillion: 5.0, outputPerMillion: 25.0 },
-  "opus4.6": { inputPerMillion: 6.0, outputPerMillion: 30.0 },
-  "opus4.5": { inputPerMillion: 15.0, outputPerMillion: 75.0 },
-  "opus4.1": { inputPerMillion: 15.0, outputPerMillion: 75.0 },
-};
-
 export interface AgentRunRequest {
   workspaceRoot: string;
   skill: string;
@@ -437,9 +422,7 @@ export class BedrockRunner implements AgentRunner {
   async run(request: AgentRunRequest): Promise<AgentRunResponse> {
     const { workspaceRoot, skill, model, instruction, excludedTools } = request;
     const modelId = BEDROCK_MODEL_IDS[model] ?? model;
-
     const start = Date.now();
-    const pricing = BEDROCK_PRICING[model];
 
     let messages: Message[] = [
       { role: "user", content: [{ text: instruction }] },
@@ -481,11 +464,6 @@ export class BedrockRunner implements AgentRunner {
           .map((block) => block.text)
           .join("");
 
-        const estimatedCostUsd = pricing
-          ? (totalInputTokens / 1_000_000) * pricing.inputPerMillion +
-            (totalOutputTokens / 1_000_000) * pricing.outputPerMillion
-          : undefined;
-
         return {
           text,
           usage: {
@@ -494,7 +472,6 @@ export class BedrockRunner implements AgentRunner {
             inputTokens: totalInputTokens,
             outputTokens: totalOutputTokens,
             totalTokens: totalInputTokens + totalOutputTokens,
-            estimatedCostUsd,
             latencyMs: Date.now() - start,
             turns: turn + 1,
           },
