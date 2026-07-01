@@ -225,7 +225,7 @@ export const BEDROCK_TOOLS: Tool[] = [
     toolSpec: {
       name: "list_files",
       description:
-        "List files in a directory of the workspace, optionally filtered by glob pattern. Excludes node_modules, .git, and dist by default. Use this instead of `find` or `ls -R`.",
+        "List files in a directory of the workspace, optionally filtered by glob pattern. Excludes node_modules, .git, dist, and directories listed in .gitignore. Use this instead of `find` or `ls -R`.",
       inputSchema: {
         json: {
           type: "object",
@@ -253,7 +253,7 @@ export const BEDROCK_TOOLS: Tool[] = [
   },
 ];
 
-const DEFAULT_EXCLUDE_DIRS = ["node_modules", ".git", "dist"];
+const DEFAULT_EXCLUDE_DIRS = new Set(["node_modules", ".git", "dist"]);
 
 function resolveInsideWorkspace(
   relPath: string,
@@ -261,6 +261,24 @@ function resolveInsideWorkspace(
 ): string | null {
   const full = path.resolve(path.join(workspaceRoot, relPath));
   return full.startsWith(path.resolve(workspaceRoot)) ? full : null;
+}
+
+// Returns directory names from .gitignore lines ending in "/".
+// Only handles the simple "dirname/" form — sufficient for the tool-level
+// directories (node_modules, .devbox, .agent, etc.) that inflate file counts.
+function parseGitignoreDirs(workspaceRoot: string): Set<string> {
+  const gitignorePath = path.join(workspaceRoot, ".gitignore");
+  if (!fs.existsSync(gitignorePath)) return new Set();
+  const lines = fs.readFileSync(gitignorePath, "utf-8").split("\n");
+  const dirs = new Set<string>();
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    if (line.endsWith("/")) {
+      dirs.add(line.replace(/^\/|\/$/g, ""));
+    }
+  }
+  return dirs;
 }
 
 function executeListFiles(
@@ -280,6 +298,11 @@ function executeListFiles(
     return `Error: directory not found: ${toolInput.directory ?? "."}`;
   }
 
+  const excludeDirs = new Set([
+    ...DEFAULT_EXCLUDE_DIRS,
+    ...parseGitignoreDirs(workspaceRoot),
+  ]);
+
   const entries = fs.readdirSync(resolved, {
     recursive,
     withFileTypes: true,
@@ -290,7 +313,7 @@ function executeListFiles(
       if (!e.isFile()) return false;
       const rel = path.relative(resolved, path.join(e.parentPath, e.name));
       const parts = rel.split(path.sep);
-      if (parts.some((p) => DEFAULT_EXCLUDE_DIRS.includes(p))) return false;
+      if (parts.some((p) => excludeDirs.has(p))) return false;
       if (pattern && !path.matchesGlob(e.name, pattern)) return false;
       return true;
     })

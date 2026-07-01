@@ -230,6 +230,25 @@ describe("BedrockRunner.executeTool", () => {
     expect(result).toContain("src/deep.ts");
   });
 
+  test("list_files excludes directories listed in .gitignore", () => {
+    const devbox = path.join(workspaceRoot, ".devbox", "nix");
+    fs.mkdirSync(devbox, { recursive: true });
+    fs.writeFileSync(path.join(devbox, "heavy.json"), "{}");
+    fs.writeFileSync(
+      path.join(workspaceRoot, ".gitignore"),
+      ".devbox/\n.agent/\n",
+    );
+    fs.writeFileSync(path.join(workspaceRoot, "keep.ts"), "");
+    const result = runner.exec(
+      "list_files",
+      { recursive: true },
+      workspaceRoot,
+    );
+    expect(result).toContain("keep.ts");
+    expect(result).not.toContain(".devbox");
+    expect(result).not.toContain("heavy.json");
+  });
+
   test("list_files excludes node_modules", () => {
     const nm = path.join(workspaceRoot, "node_modules", "pkg");
     fs.mkdirSync(nm, { recursive: true });

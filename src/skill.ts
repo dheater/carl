@@ -228,6 +228,9 @@ export function buildSkillInstruction(
   const rules = loadRules(skill);
   const skillContent = loadSkillFile(skill);
   let instruction = "";
+  if (workspaceRoot) {
+    instruction += `# Workspace\n\nThe workspace root is \`${workspaceRoot}\`. The bash tool already runs with this as the working directory — never prefix commands with \`cd ${workspaceRoot} &&\` or \`cd /workspace &&\`.\n\n---\n\n`;
+  }
   if (rules) {
     instruction += `# Rules\n\n${rules}\n\n---\n\n`;
   }

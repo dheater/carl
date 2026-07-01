@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { runSkill } from "./skill";
+import { runSkill, buildSkillInstruction } from "./skill";
 import type { AgentRunner, AgentRunRequest, AgentRunResponse } from "./runner";
 
 class MockRunner implements AgentRunner {
@@ -17,6 +17,21 @@ class MockRunner implements AgentRunner {
     return { text: this.response };
   }
 }
+
+describe("buildSkillInstruction", () => {
+  test("includes workspace root path and discourages cd prefix", () => {
+    const instruction = buildSkillInstruction("code", "/my/project");
+    expect(instruction).toContain("# Workspace");
+    expect(instruction).toContain("/my/project");
+    expect(instruction).toContain("never prefix commands with");
+    expect(instruction).toContain("cd /workspace &&");
+  });
+
+  test("omits workspace section when workspaceRoot is not provided", () => {
+    const instruction = buildSkillInstruction("code");
+    expect(instruction).not.toContain("# Workspace");
+  });
+});
 
 describe("runSkill", () => {
   let workspaceRoot: string;
