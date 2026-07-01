@@ -466,7 +466,7 @@ export class BedrockRunner implements AgentRunner {
 
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
-    const maxTurns = 50;
+    const maxTurns = 120;
 
     for (let turn = 0; turn < maxTurns; turn++) {
       const response = await this.client.send(
