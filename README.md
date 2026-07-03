@@ -127,16 +127,6 @@ vim.keymap.set("n", "<leader>cr", function()
   })
   vim.cmd("startinsert")
 end, { desc = "Carl: run review skill" })
-
--- Copy visual selection into a scratch buffer (for prompt))
-vim.keymap.set("v", "<leader>s", function()
-	local lines = vim.fn.getline("'<", "'>")
-	vim.cmd("enew")
-	vim.bo.buftype = "nofile"
-	vim.bo.bufhidden = "hide"
-	vim.bo.swapfile = false
-	vim.api.nvim_buf_set_lines(0, 0, -1, false, lines)
-end, { desc = "Open selection in scratch buffer" })
 ```
 
 ## License

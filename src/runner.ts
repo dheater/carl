@@ -7,7 +7,7 @@ import {
   ToolUseBlock,
   ToolResultBlock,
 } from "@aws-sdk/client-bedrock-runtime";
-import { execSync } from "child_process";
+import { execSync, spawnSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -237,6 +237,36 @@ export const BEDROCK_TOOLS: Tool[] = [
       },
     },
   },
+  {
+    toolSpec: {
+      name: "find_symbol",
+      description:
+        "Search for all usages or callers of a symbol (function, class, variable, import) across the workspace using grep. Returns file:line matches. Use this to answer 'who calls/imports/uses X' in one tool call instead of multiple exploratory reads.",
+      inputSchema: {
+        json: {
+          type: "object",
+          properties: {
+            symbol: {
+              type: "string",
+              description:
+                "The symbol name or pattern to search for (passed as a fixed-string grep pattern).",
+            },
+            include_pattern: {
+              type: "string",
+              description:
+                "Optional glob pattern to restrict which files are searched, e.g. '*.ts' or '*.py'. Defaults to all files.",
+            },
+            path: {
+              type: "string",
+              description:
+                "Optional subdirectory to search within, relative to workspace root. Defaults to '.' (entire workspace).",
+            },
+          },
+          required: ["symbol"],
+        },
+      },
+    },
+  },
 ];
 
 const DEFAULT_EXCLUDE_DIRS = new Set(["node_modules", ".git", "dist"]);
@@ -269,6 +299,7 @@ function parseGitignoreDirs(workspaceRoot: string): Set<string> {
 
 const LIST_FILES_MAX_BYTES = 200 * 1024; // 200 KB — ~50K tokens, enough for any real project
 const TOOL_OUTPUT_MAX_BYTES = 50 * 1024; // 50 KB — ~12K tokens per tool result
+const SPAWN_MAX_BUFFER = 10 * 1024 * 1024; // 10 MB
 
 function truncateToolOutput(output: string, label: string): string {
   if (output.length <= TOOL_OUTPUT_MAX_BYTES) return output;
@@ -386,6 +417,58 @@ function executeCreateDirectory(
   return `Created: ${toolInput.path}`;
 }
 
+function executeFindSymbol(
+  toolInput: { symbol: string; include_pattern?: string; path?: string },
+  workspaceRoot: string,
+): string {
+  const { symbol, include_pattern, path: subPath } = toolInput;
+  if (!symbol || !symbol.trim()) return "Error: symbol is required.";
+
+  const searchDir = subPath ? subPath.trim() : ".";
+  const resolvedDir = resolveInsideWorkspace(searchDir, workspaceRoot);
+  if (!resolvedDir) return "Error: path is outside the workspace root.";
+  if (!fs.existsSync(resolvedDir)) {
+    return `Error: directory not found: ${searchDir}`;
+  }
+
+  const grepArgs = [
+    "-rn",
+    "--exclude-dir=node_modules",
+    "--exclude-dir=.git",
+    "--exclude-dir=dist",
+    "-F", // fixed string — no regex surprises
+    symbol,
+  ];
+  if (include_pattern) grepArgs.push(`--include=${include_pattern}`);
+  grepArgs.push(resolvedDir);
+
+  const result = spawnSync("grep", grepArgs, {
+    cwd: workspaceRoot,
+    encoding: "utf-8",
+    maxBuffer: SPAWN_MAX_BUFFER,
+    timeout: 30000,
+  });
+  if (result.error)
+    return `Error executing find_symbol: ${result.error.message}`;
+  // grep exits 1 when no matches found — that's not an error.
+  if (result.status !== 0 && result.status !== 1)
+    return `Error executing find_symbol: exited ${result.status}`;
+  if (!result.stdout.trim()) return "No matches found.";
+
+  const relResult = result.stdout
+    .split("\n")
+    .map((line) =>
+      line.startsWith(workspaceRoot + "/")
+        ? line.slice(workspaceRoot.length + 1)
+        : line,
+    )
+    .join("\n");
+  return truncateToolOutput(
+    relResult.trimEnd() || "No matches found.",
+    "Narrow the search with include_pattern or path.",
+  );
+}
+
 export class BedrockRunner implements AgentRunner {
   private readonly client: BedrockRuntimeClient;
 
@@ -400,17 +483,19 @@ export class BedrockRunner implements AgentRunner {
     skill: string,
     model: string,
   ): string {
-    const toolDetail =
-      toolName === "bash"
-        ? (toolInput.command ?? "")
-        : toolName === "read_file" ||
-            toolName === "write_file" ||
-            toolName === "str_replace" ||
-            toolName === "create_directory"
-          ? (toolInput.path ?? "")
-          : toolName === "list_files"
-            ? (toolInput.directory ?? ".")
-            : "";
+    const toolDetailField: Record<string, string> = {
+      bash: "command",
+      read_file: "path",
+      write_file: "path",
+      str_replace: "path",
+      create_directory: "path",
+      list_files: "directory",
+      find_symbol: "symbol",
+    };
+    const field = toolDetailField[toolName];
+    const toolDetail = field
+      ? (toolInput[field] ?? (field === "directory" ? "." : ""))
+      : "";
     console.log(
       `\n  [${skill}/${model}] Running tool: ${toolName}${toolDetail ? `: ${toolDetail}` : ""}...`,
     );
@@ -424,7 +509,7 @@ export class BedrockRunner implements AgentRunner {
         const result = execSync(command, {
           cwd: workspaceRoot,
           encoding: "utf-8",
-          maxBuffer: 10 * 1024 * 1024, // 10MB
+          maxBuffer: SPAWN_MAX_BUFFER,
           timeout: 30000, // 30s
         });
         return truncateToolOutput(
@@ -449,6 +534,8 @@ export class BedrockRunner implements AgentRunner {
         return executeCreateDirectory(toolInput, workspaceRoot);
       } else if (toolName === "list_files") {
         return executeListFiles(toolInput, workspaceRoot);
+      } else if (toolName === "find_symbol") {
+        return executeFindSymbol(toolInput, workspaceRoot);
       }
       return `Unknown tool: ${toolName}`;
     } catch (err: any) {

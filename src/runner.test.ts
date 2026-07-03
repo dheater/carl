@@ -368,4 +368,83 @@ describe("BedrockRunner.executeTool", () => {
     expect(result).toContain("Error");
     expect(result).not.toContain("root:");
   });
+
+  test("find_symbol returns 'No matches found.' for unknown symbol", () => {
+    const result = runner.exec(
+      "find_symbol",
+      { symbol: "neverExistsAnywhere" },
+      workspaceRoot,
+    );
+    expect(result).toBe("No matches found.");
+  });
+
+  test("find_symbol filters by include_pattern", () => {
+    fs.writeFileSync(path.join(workspaceRoot, "a.ts"), "function bar() {}\n");
+    fs.writeFileSync(
+      path.join(workspaceRoot, "notes.md"),
+      "bar is documented here\n",
+    );
+    const result = runner.exec(
+      "find_symbol",
+      { symbol: "bar", include_pattern: "*.ts" },
+      workspaceRoot,
+    );
+    expect(result).toContain("a.ts");
+    expect(result).not.toContain("notes.md");
+  });
+
+  test("find_symbol restricts search to given path", () => {
+    const sub = path.join(workspaceRoot, "sub");
+    fs.mkdirSync(sub);
+    fs.writeFileSync(path.join(sub, "in.ts"), "baz();\n");
+    fs.writeFileSync(path.join(workspaceRoot, "out.ts"), "baz();\n");
+    const result = runner.exec(
+      "find_symbol",
+      { symbol: "baz", path: "sub" },
+      workspaceRoot,
+    );
+    expect(result).toContain("sub/in.ts");
+    expect(result).not.toContain("out.ts");
+  });
+
+  test("find_symbol excludes node_modules", () => {
+    const nm = path.join(workspaceRoot, "node_modules", "pkg");
+    fs.mkdirSync(nm, { recursive: true });
+    fs.writeFileSync(path.join(nm, "index.js"), "function qux() {}\n");
+    fs.writeFileSync(
+      path.join(workspaceRoot, "main.ts"),
+      "function qux() {}\n",
+    );
+    const result = runner.exec("find_symbol", { symbol: "qux" }, workspaceRoot);
+    expect(result).toContain("main.ts");
+    expect(result).not.toContain("node_modules");
+  });
+
+  test("find_symbol rejects path outside workspace", () => {
+    const result = runner.exec(
+      "find_symbol",
+      { symbol: "root", path: "../../../etc" },
+      workspaceRoot,
+    );
+    expect(result).toContain("Error");
+  });
+
+  test("find_symbol returns error for missing symbol", () => {
+    const result = runner.exec("find_symbol", { symbol: "" }, workspaceRoot);
+    expect(result).toContain("Error");
+  });
+
+  test("find_symbol treats symbol as fixed string, not regex", () => {
+    // A regex metachar like '.*' should match literally, not as a pattern.
+    fs.writeFileSync(
+      path.join(workspaceRoot, "literal.ts"),
+      "const re = /a.*b/;\n",
+    );
+    const result = runner.exec(
+      "find_symbol",
+      { symbol: "a.*b" },
+      workspaceRoot,
+    );
+    expect(result).toContain("literal.ts");
+  });
 });
