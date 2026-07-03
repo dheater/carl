@@ -13,6 +13,7 @@ import * as path from "path";
 
 // Using US region inference profiles for lower latency.
 export const BEDROCK_MODEL_IDS: Record<string, string> = {
+  sonnet5: "us.anthropic.claude-sonnet-5",
   "sonnet4.6": "us.anthropic.claude-sonnet-4-6",
   "sonnet4.5": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
   sonnet4: "us.anthropic.claude-sonnet-4-20250514-v1:0",
