@@ -2,6 +2,10 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import {
+  BedrockRuntimeClient,
+  ConverseCommand,
+} from "@aws-sdk/client-bedrock-runtime";
+import {
   isBlockedBashCommand,
   BLOCKED_COMMAND_ERROR,
   BedrockRunner,
@@ -54,16 +58,15 @@ class TestableBedrockRunner extends BedrockRunner {
 describe("BedrockRunner.executeTool", () => {
   let workspaceRoot: string;
   let runner: TestableBedrockRunner;
-  let logSpy: jest.SpyInstance;
 
   beforeEach(() => {
     workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "carl-runner-"));
     runner = new TestableBedrockRunner("us-east-1");
-    logSpy = jest.spyOn(console, "log").mockImplementation(() => {});
+    jest.spyOn(console, "log").mockImplementation(() => {});
   });
 
   afterEach(() => {
-    logSpy.mockRestore();
+    jest.restoreAllMocks();
     fs.rmSync(workspaceRoot, { recursive: true, force: true });
   });
 
@@ -446,5 +449,137 @@ describe("BedrockRunner.executeTool", () => {
       workspaceRoot,
     );
     expect(result).toContain("literal.ts");
+  });
+});
+
+// ── withTrailingCachePoint (via BedrockRunner.run mock) ───────────────────────
+describe("BedrockRunner.run — trailing cachePoint on every ConverseCommand", () => {
+  let workspaceRoot: string;
+
+  beforeEach(() => {
+    workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "carl-cache-"));
+    jest.spyOn(console, "log").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    fs.rmSync(workspaceRoot, { recursive: true, force: true });
+  });
+
+  test("every ConverseCommand has a trailing cachePoint and stored messages never accumulate them", async () => {
+    // Captured inputs from each ConverseCommand send() call.
+    const capturedMessages: any[][] = [];
+
+    // Two-turn conversation: turn 1 → tool_use (bash), turn 2 → end_turn.
+    const mockSend = jest
+      .fn()
+      // Turn 1: model requests a bash tool call.
+      .mockResolvedValueOnce({
+        stopReason: "tool_use",
+        output: {
+          message: {
+            content: [
+              {
+                toolUse: {
+                  toolUseId: "tool-1",
+                  name: "bash",
+                  input: { command: "echo hello" },
+                },
+              },
+            ],
+          },
+        },
+        usage: {
+          inputTokens: 100,
+          outputTokens: 20,
+          cacheReadInputTokens: 0,
+          cacheWriteInputTokens: 50,
+        },
+      })
+      // Turn 2: model returns a final answer.
+      .mockResolvedValueOnce({
+        stopReason: "end_turn",
+        output: {
+          message: {
+            content: [{ text: "done" }],
+          },
+        },
+        usage: {
+          inputTokens: 200,
+          outputTokens: 10,
+          cacheReadInputTokens: 80,
+          cacheWriteInputTokens: 30,
+        },
+      });
+
+    // Intercept BedrockRuntimeClient.send to capture the ConverseCommand input.
+    jest
+      .spyOn(BedrockRuntimeClient.prototype, "send")
+      .mockImplementation(async (cmd: any) => {
+        capturedMessages.push(cmd.input.messages);
+        return mockSend();
+      });
+
+    const runner = new BedrockRunner("us-east-1");
+    const result = await runner.run({
+      workspaceRoot,
+      skill: "code",
+      model: "sonnet4",
+      instruction: "do the thing",
+    });
+
+    // Sanity: we got two ConverseCommand calls.
+    expect(capturedMessages).toHaveLength(2);
+
+    // ── Assertion 1: every outbound messages array ends with a cachePoint ──
+    for (const msgs of capturedMessages) {
+      const lastMsg = msgs[msgs.length - 1];
+      const lastBlock = lastMsg.content[lastMsg.content.length - 1];
+      expect(lastBlock).toHaveProperty(
+        "cachePoint",
+        expect.objectContaining({ type: "default" }),
+      );
+    }
+
+    // ── Assertion 2: no stale cachePoints accumulate across turns ──
+    // Turn 2's outbound messages has 3 entries: initial user, assistant,
+    // tool-result user. Only the very last content block of the last message
+    // should be a cachePoint; all earlier messages must be clean.
+    const turn2 = capturedMessages[1];
+    expect(turn2).toHaveLength(3); // user + assistant + tool-result
+    for (const msg of turn2.slice(0, -1)) {
+      const hasCachePoint = (msg.content ?? []).some(
+        (b: any) => "cachePoint" in b,
+      );
+      expect(hasCachePoint).toBe(false);
+    }
+
+    // ── Assertion 3: non-cachePoint content is intact ──
+    // Turn 1 outbound: single user message with instruction text.
+    const turn1UserContent = capturedMessages[0][0].content.filter(
+      (b: any) => !("cachePoint" in b),
+    );
+    expect(turn1UserContent).toEqual([{ text: "do the thing" }]);
+
+    // Turn 2 outbound: assistant message must contain the toolUse block.
+    const turn2Assistant = turn2[1];
+    const toolUseBlocks = (turn2Assistant.content ?? []).filter(
+      (b: any) => "toolUse" in b,
+    );
+    expect(toolUseBlocks).toHaveLength(1);
+    expect(toolUseBlocks[0].toolUse.name).toBe("bash");
+
+    // Turn 2 outbound: tool-result message must contain the bash output.
+    const turn2ToolResult = turn2[2];
+    const toolResultBlocks = (turn2ToolResult.content ?? []).filter(
+      (b: any) => !("cachePoint" in b),
+    );
+    expect(toolResultBlocks).toHaveLength(1);
+    expect(toolResultBlocks[0]).toHaveProperty("toolResult");
+
+    // Final response text is correctly extracted from the end_turn message.
+    expect(result.text).toBe("done");
+    expect(result.usage?.cacheReadTokens).toBe(80);
+    expect(result.usage?.cacheWriteTokens).toBe(80); // 50 + 30
   });
 });

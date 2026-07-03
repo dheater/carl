@@ -6,6 +6,7 @@ import {
   ContentBlock,
   ToolUseBlock,
   ToolResultBlock,
+  CachePointType,
 } from "@aws-sdk/client-bedrock-runtime";
 import { execSync, spawnSync } from "child_process";
 import * as fs from "fs";
@@ -34,9 +35,20 @@ export interface AgentRunRequest {
   excludedTools?: string[];
 }
 
+export interface UsageSummary {
+  source: string;
+  modelId: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  latencyMs?: number;
+  turns?: number;
+}
+
 export interface AgentRunResponse {
   text: string;
-  usage?: Record<string, unknown>;
+  usage?: UsageSummary;
 }
 
 export interface AgentRunner {
@@ -469,6 +481,22 @@ function executeFindSymbol(
   );
 }
 
+// Returns a shallow copy of messages with a cachePoint appended to the last
+// message's content. Never mutates the input array — callers pass this only
+// to ConverseCommand and continue appending to the original messages.
+function withTrailingCachePoint(messages: Message[]): Message[] {
+  if (messages.length === 0) return messages;
+  const last = messages[messages.length - 1];
+  const content = last.content ?? [];
+  return [
+    ...messages.slice(0, -1),
+    {
+      ...last,
+      content: [...content, { cachePoint: { type: CachePointType.DEFAULT } }],
+    },
+  ];
+}
+
 export class BedrockRunner implements AgentRunner {
   private readonly client: BedrockRuntimeClient;
 
@@ -549,30 +577,47 @@ export class BedrockRunner implements AgentRunner {
     const start = Date.now();
 
     let messages: Message[] = [
-      { role: "user", content: [{ text: instruction }] },
+      {
+        role: "user",
+        content: [{ text: instruction }],
+      },
     ];
 
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
+    let totalCacheReadTokens = 0;
+    let totalCacheWriteTokens = 0;
     const maxTurns = 120;
+
+    const filteredTools = excludedTools?.length
+      ? BEDROCK_TOOLS.filter(
+          (t) => !excludedTools.includes(t.toolSpec?.name ?? ""),
+        )
+      : BEDROCK_TOOLS;
 
     for (let turn = 0; turn < maxTurns; turn++) {
       const response = await this.client.send(
         new ConverseCommand({
           modelId,
-          messages,
-          toolConfig: {
-            tools: excludedTools?.length
-              ? BEDROCK_TOOLS.filter(
-                  (t) => !excludedTools.includes(t.toolSpec?.name ?? ""),
-                )
-              : BEDROCK_TOOLS,
-          },
+          messages: withTrailingCachePoint(messages),
+          // Omit toolConfig entirely when no tools remain after filtering,
+          // rather than sending a tools array with only a cachePoint entry.
+          ...(filteredTools.length > 0 && {
+            toolConfig: {
+              // static tools array; same prefix each turn
+              tools: [
+                ...filteredTools,
+                { cachePoint: { type: CachePointType.DEFAULT } },
+              ],
+            },
+          }),
         }),
       );
 
       totalInputTokens += response.usage?.inputTokens ?? 0;
       totalOutputTokens += response.usage?.outputTokens ?? 0;
+      totalCacheReadTokens += response.usage?.cacheReadInputTokens ?? 0;
+      totalCacheWriteTokens += response.usage?.cacheWriteInputTokens ?? 0;
 
       const stopReason = response.stopReason;
       const assistantContent = response.output?.message?.content ?? [];
@@ -595,7 +640,8 @@ export class BedrockRunner implements AgentRunner {
             modelId,
             inputTokens: totalInputTokens,
             outputTokens: totalOutputTokens,
-            totalTokens: totalInputTokens + totalOutputTokens,
+            cacheReadTokens: totalCacheReadTokens,
+            cacheWriteTokens: totalCacheWriteTokens,
             latencyMs: Date.now() - start,
             turns: turn + 1,
           },

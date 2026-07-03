@@ -5,6 +5,7 @@ import {
   AuggieRunner,
   BedrockRunner,
   BEDROCK_MODEL_IDS,
+  UsageSummary,
 } from "./runner";
 
 import { randomUUID } from "crypto";
@@ -21,7 +22,7 @@ const EVENTS_LOG_FILE = "events.jsonl";
 type PromptMeta = {
   prompt_chars: number;
   response_chars: number;
-  usage?: Record<string, unknown>;
+  usage?: UsageSummary;
 };
 
 type SkillMeta = {
@@ -306,18 +307,20 @@ export function buildSkillInstruction(
 }
 
 function buildUsageSummary(
-  usage: Record<string, unknown> | undefined,
+  usage: UsageSummary | undefined,
   durationMs: number,
 ): string {
   const secs = (durationMs / 1000).toFixed(1);
   const parts: string[] = [`${secs}s`];
-  if (
-    typeof usage?.inputTokens === "number" &&
-    typeof usage?.outputTokens === "number"
-  ) {
+  if (usage?.inputTokens != null && usage?.outputTokens != null) {
     parts.push(
-      `${usage.inputTokens.toLocaleString()}in / ${usage.outputTokens.toLocaleString()}out tokens`,
+      `${usage.inputTokens.toLocaleString()} in / ${usage.outputTokens.toLocaleString()} out tokens`,
     );
+  }
+  if (usage?.cacheReadTokens != null || usage?.cacheWriteTokens != null) {
+    const cacheRead = (usage.cacheReadTokens ?? 0).toLocaleString();
+    const cacheWrite = (usage.cacheWriteTokens ?? 0).toLocaleString();
+    parts.push(`${cacheRead} cache read / ${cacheWrite} cache write tokens`);
   }
   return `Completed in ${parts.join(" · ")}`;
 }
@@ -326,7 +329,7 @@ function writeSkillOutput(
   skill: string,
   output: string,
   workspaceRoot: string,
-  usage: Record<string, unknown> | undefined,
+  usage: UsageSummary | undefined,
   durationMs: number,
 ): void {
   if (skill === "pr-review") {
@@ -472,7 +475,7 @@ export async function runSkill(
   console.log(`Starting skill: ${skill}`);
 
   let response = "";
-  let usage: Record<string, unknown> | undefined;
+  let usage: UsageSummary | undefined;
   let retryCount = 0;
   try {
     for (let attempt = 0; attempt <= MAX_FETCH_RETRIES; attempt++) {

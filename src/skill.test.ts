@@ -2,17 +2,19 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { runSkill, buildSkillInstruction } from "./skill";
-import type { AgentRunner, AgentRunRequest, AgentRunResponse } from "./runner";
+import type {
+  AgentRunner,
+  AgentRunRequest,
+  AgentRunResponse,
+  UsageSummary,
+} from "./runner";
 
 class MockRunner implements AgentRunner {
   requests: AgentRunRequest[] = [];
   response: string;
-  usage?: Record<string, unknown>;
+  usage?: UsageSummary;
 
-  constructor(
-    response = "# Summary\n\nDone.",
-    usage?: Record<string, unknown>,
-  ) {
+  constructor(response = "# Summary\n\nDone.", usage?: UsageSummary) {
     this.response = response;
     this.usage = usage;
   }
@@ -104,19 +106,26 @@ describe("runSkill", () => {
 
   test("appends usage summary with token counts to output file", async () => {
     const runner = new MockRunner("# Summary\n\nDone.", {
+      source: "bedrock",
+      modelId: "test-model-id",
       inputTokens: 1000,
       outputTokens: 500,
+      cacheReadTokens: 800,
+      cacheWriteTokens: 200,
     });
     await runSkill(workspaceRoot, "review", undefined, "test-model", runner);
 
     const outputPath = path.join(workspaceRoot, ".agent/notes/review.md");
     const content = fs.readFileSync(outputPath, "utf-8");
     expect(content).toContain("Completed in");
-    expect(content).toContain("1,000in / 500out tokens");
+    expect(content).toContain("1,000 in / 500 out tokens");
+    expect(content).toContain("800 cache read / 200 cache write tokens");
   });
 
-  test("omits token line in output file when outputTokens is missing", async () => {
+  test("omits token lines when outputTokens and cache fields are absent", async () => {
     const runner = new MockRunner("# Summary\n\nDone.", {
+      source: "bedrock",
+      modelId: "test-model-id",
       inputTokens: 1000,
     });
     await runSkill(workspaceRoot, "review", undefined, "test-model", runner);
@@ -124,6 +133,7 @@ describe("runSkill", () => {
     const outputPath = path.join(workspaceRoot, ".agent/notes/review.md");
     const content = fs.readFileSync(outputPath, "utf-8");
     expect(content).toContain("Completed in");
-    expect(content).not.toContain("tokens");
+    expect(content).not.toContain("in / ");
+    expect(content).not.toContain("cache read");
   });
 });
