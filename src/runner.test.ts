@@ -337,10 +337,11 @@ describe("BedrockRunner.executeTool", () => {
 
   test("bash truncates oversized output with head+tail elision", () => {
     // Generate 60KB: first 10KB 'a', last 10KB 'b', middle 'x'
+    // Use POSIX-portable commands (brace expansion is bash-only; /bin/sh on Linux is dash)
     const cmd = [
-      `printf '%0.sa' {1..10240}`,
-      `printf '%0.sx' {1..40960}`,
-      `printf '%0.sb' {1..10240}`,
+      `head -c 10240 /dev/zero | tr '\\0' 'a'`,
+      `head -c 40960 /dev/zero | tr '\\0' 'x'`,
+      `head -c 10240 /dev/zero | tr '\\0' 'b'`,
     ].join("; ");
     const result = runner.exec("bash", { command: cmd }, workspaceRoot);
     expect(result).toContain("bytes omitted");
