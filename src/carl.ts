@@ -48,7 +48,7 @@ async function cmdReview(workspaceRoot: string, model?: string): Promise<void> {
   await runSkill(
     workspaceRoot,
     "review",
-    "Review all staged and uncommitted local changes. Run `git diff HEAD` to see the full diff, then work through the review process. Make recommendations to the user.",
+    "Review all staged and uncommitted local changes. Make recommendations to the user.",
     model,
   );
   const outputPath = getSkillOutputPath(workspaceRoot, "review");

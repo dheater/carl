@@ -45,6 +45,18 @@ export function getHeadSha(workspaceRoot: string): string {
   }
 }
 
+export function getGitDiff(workspaceRoot: string): string | null {
+  try {
+    return execSync("git diff HEAD", {
+      cwd: workspaceRoot,
+      stdio: "pipe",
+      encoding: "utf-8",
+    }).trim();
+  } catch {
+    return null;
+  }
+}
+
 export function getGitStatus(workspaceRoot: string): GitStatus {
   try {
     const isRepo = detectGit();

@@ -1,4 +1,4 @@
-import { getGitStatus, getCurrentBranch } from "./git";
+import { getGitStatus, getCurrentBranch, getGitDiff } from "./git";
 import { getSkillOutputPath } from "./editor";
 import {
   AgentRunner,
@@ -38,15 +38,22 @@ type SkillMeta = {
   output_exists: boolean;
 };
 
+type ToolCallMeta = {
+  tool: string;
+  input_summary: string;
+  output_bytes: number;
+  error: boolean;
+};
+
 type TimingEvent = {
   timestamp: string;
   run_id: string;
-  event: "prompt" | "skill";
+  event: "prompt" | "skill" | "tool_call";
   subject: string;
   duration_ms: number;
   skill: string;
   model: string;
-  meta?: PromptMeta | SkillMeta;
+  meta?: PromptMeta | SkillMeta | ToolCallMeta;
 };
 
 type CarlConfig = {
@@ -258,42 +265,8 @@ export function buildSkillInstruction(
 
   if (skill === "review" && workspaceRoot) {
     const branch = getCurrentBranch(workspaceRoot);
-    if (branch) {
-      instruction += `\n\n---\n\n# Current branch\n\n\`${branch}\`\n\n`;
-    }
-
-    const gitStatus = getGitStatus(workspaceRoot);
-    if (gitStatus.isRepo) {
-      let filesSection = "\n\n---\n\n# Files changed\n\n";
-      if (gitStatus.trackedChanged.length > 0) {
-        filesSection += "## Tracked changes\n\n";
-        filesSection += gitStatus.trackedChanged
-          .map((f) => `- ${f}`)
-          .join("\n");
-        filesSection += "\n\n";
-      }
-      if (gitStatus.untracked.length > 0) {
-        filesSection +=
-          "## Untracked files (not staged for commit)\n\n" +
-          gitStatus.untracked.map((f) => `- ${f}`).join("\n");
-        filesSection += "\n\n";
-      }
-      if (
-        gitStatus.trackedChanged.length === 0 &&
-        gitStatus.untracked.length === 0
-      ) {
-        filesSection += "No files changed.\n\n";
-      }
-      instruction += filesSection;
-    } else {
-      instruction +=
-        "\n\n---\n\n# Files changed\n\nNot in a git repository.\n\n";
-    }
-  }
-
-  if (skill === "review") {
-    const branch = getCurrentBranch(workspaceRoot);
     const isTicketBranch = branch && branch !== "main" && branch !== "master";
+
     instruction += "\n\n---\n\n# Commit message\n\n";
     if (isTicketBranch) {
       instruction += `Add \`## Proposed commit message\`. Subject: ticket prefix from \`${branch}\` + summary. Optional body.\n`;
@@ -301,9 +274,66 @@ export function buildSkillInstruction(
       instruction +=
         "Add `## Proposed commit message`. Subject: `fix:`/`feat:`/`chore:` + summary. Optional body.\n";
     }
+
+    const diff = getGitDiff(workspaceRoot);
+    instruction += "\n\n---\n\n# Diff\n\n";
+    if (diff === null) {
+      instruction += "git diff HEAD failed — check repository state.\n";
+    } else if (diff === "") {
+      instruction += "No diff (nothing staged or modified against HEAD).\n";
+    } else {
+      instruction += "```diff\n" + diff + "\n```\n";
+    }
   }
 
   return instruction;
+}
+
+// Per-million-token prices (USD) for each model family.
+// Cache write is charged at 1.25× the input rate; cache read at 0.1× the input rate.
+// Source: Anthropic pricing page (Sonnet/Haiku/Opus tiers).
+const MODEL_RATES: Array<{
+  pattern: RegExp;
+  input: number;
+  output: number;
+  cacheWrite: number;
+  cacheRead: number;
+}> = [
+  {
+    pattern: /opus/i,
+    input: 15.0,
+    output: 75.0,
+    cacheWrite: 18.75,
+    cacheRead: 1.5,
+  },
+  {
+    pattern: /sonnet/i,
+    input: 3.0,
+    output: 15.0,
+    cacheWrite: 3.75,
+    cacheRead: 0.3,
+  },
+  {
+    pattern: /haiku/i,
+    input: 0.8,
+    output: 4.0,
+    cacheWrite: 1.0,
+    cacheRead: 0.08,
+  },
+];
+
+export function computeCost(usage: UsageSummary): number | null {
+  const { modelId } = usage;
+  if (!modelId) return null;
+  const rates = MODEL_RATES.find((r) => r.pattern.test(modelId));
+  if (!rates) return null;
+  const cost =
+    ((usage.inputTokens ?? 0) * rates.input +
+      (usage.outputTokens ?? 0) * rates.output +
+      (usage.cacheWriteTokens ?? 0) * rates.cacheWrite +
+      (usage.cacheReadTokens ?? 0) * rates.cacheRead) /
+    1_000_000;
+  return cost;
 }
 
 function buildUsageSummary(
@@ -312,6 +342,9 @@ function buildUsageSummary(
 ): string {
   const secs = (durationMs / 1000).toFixed(1);
   const parts: string[] = [`${secs}s`];
+  if (usage?.turns != null) {
+    parts.push(`${usage.turns} turn${usage.turns === 1 ? "" : "s"}`);
+  }
   if (usage?.inputTokens != null && usage?.outputTokens != null) {
     parts.push(
       `${usage.inputTokens.toLocaleString()} in / ${usage.outputTokens.toLocaleString()} out tokens`,
@@ -322,6 +355,8 @@ function buildUsageSummary(
     const cacheWrite = (usage.cacheWriteTokens ?? 0).toLocaleString();
     parts.push(`${cacheRead} cache read / ${cacheWrite} cache write tokens`);
   }
+  const cost = usage ? computeCost(usage) : null;
+  if (cost != null) parts.push(`$${cost.toFixed(4)}`);
   return `Completed in ${parts.join(" · ")}`;
 }
 
@@ -496,6 +531,23 @@ export async function runSkill(
           model,
           instruction,
           excludedTools,
+          onToolCall: (event) => {
+            writeTimingEvent(workspaceRoot, {
+              timestamp: new Date().toISOString(),
+              run_id: runId,
+              event: "tool_call",
+              subject: event.tool,
+              duration_ms: event.durationMs ?? 0,
+              skill,
+              model,
+              meta: {
+                tool: event.tool,
+                input_summary: event.inputSummary ?? "",
+                output_bytes: event.outputBytes ?? 0,
+                error: event.error,
+              },
+            });
+          },
         });
         response = result.text;
         usage = result.usage;

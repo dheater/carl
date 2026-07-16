@@ -27,17 +27,26 @@ export const BEDROCK_MODEL_IDS: Record<string, string> = {
   fable5: "us.anthropic.claude-fable-5",
 };
 
+export interface ToolCallEvent {
+  tool: string;
+  inputSummary?: string;
+  outputBytes?: number;
+  durationMs?: number;
+  error: boolean;
+}
+
 export interface AgentRunRequest {
   workspaceRoot: string;
   skill: string;
   model: string;
   instruction: string;
   excludedTools?: string[];
+  onToolCall?: (event: ToolCallEvent) => void;
 }
 
 export interface UsageSummary {
   source: string;
-  modelId: string;
+  modelId?: string;
   inputTokens?: number;
   outputTokens?: number;
   cacheReadTokens?: number;
@@ -72,9 +81,9 @@ export class AuggieRunner implements AgentRunner {
       const update = notification.update;
       if (!update) return;
       if (update.sessionUpdate === "tool_call") {
-        console.log(
-          `\n  [${skill}/${model}] Running tool: ${update.title || "unknown"}...`,
-        );
+        const toolName: string = update.title || "unknown";
+        console.log(`\n  [${skill}/${model}] Running tool: ${toolName}...`);
+        request.onToolCall?.({ tool: toolName, error: false });
       } else if (update.sessionUpdate === "agent_thought_chunk") {
         if (update.content?.text) {
           process.stdout.write(`\x1b[90m${update.content.text}\x1b[0m`);
@@ -348,42 +357,47 @@ function executeListFiles(
     ...parseGitignoreDirs(workspaceRoot),
   ]);
 
-  const entries = fs.readdirSync(resolved, {
-    recursive,
-    withFileTypes: true,
-  }) as fs.Dirent[];
-
-  const files = entries
-    .filter((e) => {
-      if (!e.isFile()) return false;
-      const rel = path.relative(resolved, path.join(e.parentPath, e.name));
-      const parts = rel.split(path.sep);
-      if (parts.some((p) => excludeDirs.has(p))) return false;
-      if (pattern && !path.matchesGlob(rel, pattern)) return false;
-      return true;
-    })
-    .map((e) => {
-      const abs = path.join(e.parentPath, e.name);
-      return path.relative(workspaceRoot, abs);
-    })
-    .sort();
-
-  if (files.length === 0) return "No files found.";
-
-  let output = "";
+  // Walk the tree with a queue, pruning excluded dirs before descending.
+  // This keeps memory proportional to tree width, not total file count.
+  // Contrast: fs.readdirSync({recursive:true}) materialises the entire tree
+  // into one array before we can filter anything — fatal on large workspaces.
+  const files: string[] = [];
   let truncated = false;
-  for (const f of files) {
-    const line = f + "\n";
-    if (output.length + line.length > LIST_FILES_MAX_BYTES) {
-      truncated = true;
-      break;
+  let outputBytes = 0;
+  const queue: string[] = [resolved];
+
+  outer: while (queue.length > 0) {
+    const currentDir = queue.shift()!;
+    const entries = fs.readdirSync(currentDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        if (recursive && !excludeDirs.has(entry.name)) {
+          queue.push(path.join(currentDir, entry.name));
+        }
+      } else if (entry.isFile()) {
+        const abs = path.join(currentDir, entry.name);
+        const rel = path.relative(workspaceRoot, abs);
+        const relFromDir = path.relative(resolved, abs);
+        if (pattern && !path.matchesGlob(relFromDir, pattern)) continue;
+        const line = rel + "\n";
+        if (outputBytes + line.length > LIST_FILES_MAX_BYTES) {
+          truncated = true;
+          break outer;
+        }
+        files.push(rel);
+        outputBytes += line.length;
+      }
     }
-    output += line;
   }
+
+  if (files.length === 0 && !truncated) return "No files found.";
+
+  files.sort();
+  let output = files.join("\n");
   if (truncated) {
     output += `\n[Output truncated: too many files. Use a subdirectory or pattern to narrow results.]`;
   }
-  return output.trimEnd();
+  return output;
 }
 
 function executeWriteFile(
@@ -510,7 +524,7 @@ export class BedrockRunner implements AgentRunner {
     workspaceRoot: string,
     skill: string,
     model: string,
-  ): string {
+  ): { result: string; error: boolean; inputSummary: string } {
     const toolDetailField: Record<string, string> = {
       bash: "command",
       read_file: "path",
@@ -521,53 +535,84 @@ export class BedrockRunner implements AgentRunner {
       find_symbol: "symbol",
     };
     const field = toolDetailField[toolName];
-    const toolDetail = field
+    const inputSummary = field
       ? (toolInput[field] ?? (field === "directory" ? "." : ""))
       : "";
     console.log(
-      `\n  [${skill}/${model}] Running tool: ${toolName}${toolDetail ? `: ${toolDetail}` : ""}...`,
+      `\n  [${skill}/${model}] Running tool: ${toolName}${inputSummary ? `: ${inputSummary}` : ""}...`,
     );
 
     try {
       if (toolName === "bash") {
         const { command } = toolInput;
         if (isBlockedBashCommand(command)) {
-          return BLOCKED_COMMAND_ERROR;
+          return { result: BLOCKED_COMMAND_ERROR, error: true, inputSummary };
         }
-        const result = execSync(command, {
+        const raw = execSync(command, {
           cwd: workspaceRoot,
           encoding: "utf-8",
           maxBuffer: SPAWN_MAX_BUFFER,
           timeout: 30000, // 30s
         });
-        return truncateToolOutput(
-          result,
-          "Pipe through head/tail/grep to reduce output.",
-        );
+        return {
+          result: truncateToolOutput(
+            raw,
+            "Pipe through head/tail/grep to reduce output.",
+          ),
+          error: false,
+          inputSummary,
+        };
       } else if (toolName === "read_file") {
         const { path: filePath } = toolInput;
         const fullPath = resolveInsideWorkspace(filePath, workspaceRoot);
-        if (!fullPath) return "Error: path is outside the workspace root.";
+        if (!fullPath)
+          return {
+            result: "Error: path is outside the workspace root.",
+            error: true,
+            inputSummary,
+          };
         if (!fs.existsSync(fullPath))
-          return `Error: file not found: ${filePath}`;
-        return truncateToolOutput(
-          fs.readFileSync(fullPath, "utf-8"),
-          "Use bash with grep/sed to read specific sections.",
-        );
+          return {
+            result: `Error: file not found: ${filePath}`,
+            error: true,
+            inputSummary,
+          };
+        return {
+          result: truncateToolOutput(
+            fs.readFileSync(fullPath, "utf-8"),
+            "Use bash with grep/sed to read specific sections.",
+          ),
+          error: false,
+          inputSummary,
+        };
       } else if (toolName === "write_file") {
-        return executeWriteFile(toolInput, workspaceRoot);
+        const result = executeWriteFile(toolInput, workspaceRoot);
+        return { result, error: result.startsWith("Error:"), inputSummary };
       } else if (toolName === "str_replace") {
-        return executeStrReplace(toolInput, workspaceRoot);
+        const result = executeStrReplace(toolInput, workspaceRoot);
+        return { result, error: result.startsWith("Error:"), inputSummary };
       } else if (toolName === "create_directory") {
-        return executeCreateDirectory(toolInput, workspaceRoot);
+        const result = executeCreateDirectory(toolInput, workspaceRoot);
+        return { result, error: result.startsWith("Error:"), inputSummary };
       } else if (toolName === "list_files") {
-        return executeListFiles(toolInput, workspaceRoot);
+        const result = executeListFiles(toolInput, workspaceRoot);
+        return { result, error: result.startsWith("Error:"), inputSummary };
       } else if (toolName === "find_symbol") {
-        return executeFindSymbol(toolInput, workspaceRoot);
+        const result = executeFindSymbol(toolInput, workspaceRoot);
+        return { result, error: result.startsWith("Error:"), inputSummary };
+      } else {
+        return {
+          result: `Unknown tool: ${toolName}`,
+          error: true,
+          inputSummary,
+        };
       }
-      return `Unknown tool: ${toolName}`;
     } catch (err: any) {
-      return `Error executing ${toolName}: ${err.message}`;
+      return {
+        result: `Error executing ${toolName}: ${err.message}`,
+        error: true,
+        inputSummary,
+      };
     }
   }
 
@@ -587,7 +632,7 @@ export class BedrockRunner implements AgentRunner {
     let totalOutputTokens = 0;
     let totalCacheReadTokens = 0;
     let totalCacheWriteTokens = 0;
-    const maxTurns = 120;
+    const maxTurns = 80;
 
     const filteredTools = excludedTools?.length
       ? BEDROCK_TOOLS.filter(
@@ -656,13 +701,21 @@ export class BedrockRunner implements AgentRunner {
             const toolInput = toolUse.input ?? {};
             const toolUseId = toolUse.toolUseId ?? "";
 
-            const result = this.executeTool(
+            const toolStart = Date.now();
+            const { result, error, inputSummary } = this.executeTool(
               toolName,
               toolInput,
               workspaceRoot,
               skill,
               model,
             );
+            request.onToolCall?.({
+              tool: toolName,
+              inputSummary,
+              outputBytes: Buffer.byteLength(result, "utf-8"),
+              durationMs: Date.now() - toolStart,
+              error,
+            });
 
             toolResults.push({
               toolResult: {
@@ -682,6 +735,8 @@ export class BedrockRunner implements AgentRunner {
       }
     }
 
-    throw new Error(`Exceeded maximum conversation turns (${maxTurns})`);
+    throw new Error(
+      `Exceeded maximum conversation turns (${maxTurns}). Break the task into smaller steps or use --model to select a larger model.`,
+    );
   }
 }

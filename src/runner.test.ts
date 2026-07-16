@@ -51,7 +51,7 @@ class TestableBedrockRunner extends BedrockRunner {
       workspaceRoot,
       "code",
       "sonnet4",
-    );
+    ).result;
   }
 }
 
@@ -581,5 +581,138 @@ describe("BedrockRunner.run — trailing cachePoint on every ConverseCommand", (
     expect(result.text).toBe("done");
     expect(result.usage?.cacheReadTokens).toBe(80);
     expect(result.usage?.cacheWriteTokens).toBe(80); // 50 + 30
+  });
+});
+
+// ── BedrockRunner.run — onToolCall callback ───────────────────────────────────
+describe("BedrockRunner.run — onToolCall callback", () => {
+  let workspaceRoot: string;
+
+  beforeEach(() => {
+    workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "carl-toolcb-"));
+    jest.spyOn(console, "log").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    fs.rmSync(workspaceRoot, { recursive: true, force: true });
+  });
+
+  test("onToolCall fires once per tool use with correct fields", async () => {
+    const toolCallEvents: any[] = [];
+
+    jest
+      .spyOn(BedrockRuntimeClient.prototype, "send")
+      .mockImplementation(async (cmd: any) => {
+        void cmd;
+        if (toolCallEvents.length === 0) {
+          return {
+            stopReason: "tool_use",
+            output: {
+              message: {
+                content: [
+                  {
+                    toolUse: {
+                      toolUseId: "t1",
+                      name: "bash",
+                      input: { command: "echo hi" },
+                    },
+                  },
+                ],
+              },
+            },
+            usage: {
+              inputTokens: 10,
+              outputTokens: 5,
+              cacheReadInputTokens: 0,
+              cacheWriteInputTokens: 0,
+            },
+          };
+        }
+        return {
+          stopReason: "end_turn",
+          output: { message: { content: [{ text: "done" }] } },
+          usage: {
+            inputTokens: 10,
+            outputTokens: 5,
+            cacheReadInputTokens: 0,
+            cacheWriteInputTokens: 0,
+          },
+        };
+      });
+
+    const runner = new BedrockRunner("us-east-1");
+    await runner.run({
+      workspaceRoot,
+      skill: "code",
+      model: "sonnet4",
+      instruction: "test",
+      onToolCall: (event) => toolCallEvents.push(event),
+    });
+
+    expect(toolCallEvents).toHaveLength(1);
+    expect(toolCallEvents[0].tool).toBe("bash");
+    expect(toolCallEvents[0].inputSummary).toBe("echo hi");
+    expect(typeof toolCallEvents[0].outputBytes).toBe("number");
+    expect(toolCallEvents[0].outputBytes).toBeGreaterThan(0);
+    expect(typeof toolCallEvents[0].durationMs).toBe("number");
+    expect(toolCallEvents[0].error).toBe(false);
+  });
+
+  test("onToolCall sets error=true for blocked commands", async () => {
+    const toolCallEvents: any[] = [];
+
+    jest
+      .spyOn(BedrockRuntimeClient.prototype, "send")
+      .mockImplementation(async (cmd: any) => {
+        void cmd;
+        if (toolCallEvents.length === 0) {
+          return {
+            stopReason: "tool_use",
+            output: {
+              message: {
+                content: [
+                  {
+                    toolUse: {
+                      toolUseId: "t2",
+                      name: "bash",
+                      input: { command: "find . -type f" },
+                    },
+                  },
+                ],
+              },
+            },
+            usage: {
+              inputTokens: 10,
+              outputTokens: 5,
+              cacheReadInputTokens: 0,
+              cacheWriteInputTokens: 0,
+            },
+          };
+        }
+        return {
+          stopReason: "end_turn",
+          output: { message: { content: [{ text: "done" }] } },
+          usage: {
+            inputTokens: 10,
+            outputTokens: 5,
+            cacheReadInputTokens: 0,
+            cacheWriteInputTokens: 0,
+          },
+        };
+      });
+
+    const runner = new BedrockRunner("us-east-1");
+    await runner.run({
+      workspaceRoot,
+      skill: "code",
+      model: "sonnet4",
+      instruction: "test",
+      onToolCall: (event) => toolCallEvents.push(event),
+    });
+
+    expect(toolCallEvents).toHaveLength(1);
+    expect(toolCallEvents[0].tool).toBe("bash");
+    expect(toolCallEvents[0].error).toBe(true);
   });
 });
