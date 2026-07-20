@@ -488,6 +488,10 @@ function effortBudget(effort: "medium" | "high"): number {
   return effort === "high" ? 16000 : 8192;
 }
 
+export const BEDROCK_SYSTEM_PROMPT =
+  "Issue all independent tool calls in the same turn — never wait for one result before requesting the next.\n\n" +
+  "Prefer write_file over repeated str_replace when making many edits to a file.";
+
 export class BedrockRunner implements AgentRunner {
   private readonly client: BedrockRuntimeClient;
 
@@ -636,6 +640,7 @@ export class BedrockRunner implements AgentRunner {
         response = await this.client.send(
           new ConverseCommand({
             modelId,
+            system: [{ text: BEDROCK_SYSTEM_PROMPT }],
             messages: withTrailingCachePoint(messages),
             ...(effort !== "low" && {
               additionalModelRequestFields: {

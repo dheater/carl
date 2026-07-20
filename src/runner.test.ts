@@ -9,6 +9,7 @@ import {
   isBlockedBashCommand,
   BLOCKED_COMMAND_ERROR,
   BedrockRunner,
+  BEDROCK_SYSTEM_PROMPT,
 } from "./runner";
 
 // ── isBlockedBashCommand ──────────────────────────────────────────────────────
@@ -468,7 +469,7 @@ describe("BedrockRunner.run — trailing cachePoint on every ConverseCommand", (
 
   test("every ConverseCommand has a trailing cachePoint and stored messages never accumulate them", async () => {
     // Captured inputs from each ConverseCommand send() call.
-    const capturedMessages: any[][] = [];
+    const capturedInputs: any[] = [];
 
     // Two-turn conversation: turn 1 → tool_use (bash), turn 2 → end_turn.
     const mockSend = jest
@@ -516,7 +517,7 @@ describe("BedrockRunner.run — trailing cachePoint on every ConverseCommand", (
     jest
       .spyOn(BedrockRuntimeClient.prototype, "send")
       .mockImplementation(async (cmd: any) => {
-        capturedMessages.push(cmd.input.messages);
+        capturedInputs.push(cmd.input);
         return mockSend();
       });
 
@@ -530,10 +531,11 @@ describe("BedrockRunner.run — trailing cachePoint on every ConverseCommand", (
     });
 
     // Sanity: we got two ConverseCommand calls.
-    expect(capturedMessages).toHaveLength(2);
+    expect(capturedInputs).toHaveLength(2);
 
     // ── Assertion 1: every outbound messages array ends with a cachePoint ──
-    for (const msgs of capturedMessages) {
+    for (const input of capturedInputs) {
+      const msgs = input.messages;
       const lastMsg = msgs[msgs.length - 1];
       const lastBlock = lastMsg.content[lastMsg.content.length - 1];
       expect(lastBlock).toHaveProperty(
@@ -546,7 +548,7 @@ describe("BedrockRunner.run — trailing cachePoint on every ConverseCommand", (
     // Turn 2's outbound messages has 3 entries: initial user, assistant,
     // tool-result user. Only the very last content block of the last message
     // should be a cachePoint; all earlier messages must be clean.
-    const turn2 = capturedMessages[1];
+    const turn2 = capturedInputs[1].messages;
     expect(turn2).toHaveLength(3); // user + assistant + tool-result
     for (const msg of turn2.slice(0, -1)) {
       const hasCachePoint = (msg.content ?? []).some(
@@ -557,7 +559,7 @@ describe("BedrockRunner.run — trailing cachePoint on every ConverseCommand", (
 
     // ── Assertion 3: non-cachePoint content is intact ──
     // Turn 1 outbound: single user message with instruction text.
-    const turn1UserContent = capturedMessages[0][0].content.filter(
+    const turn1UserContent = capturedInputs[0].messages[0].content.filter(
       (b: any) => !("cachePoint" in b),
     );
     expect(turn1UserContent).toEqual([{ text: "do the thing" }]);
@@ -582,10 +584,14 @@ describe("BedrockRunner.run — trailing cachePoint on every ConverseCommand", (
     expect(result.text).toBe("done");
     expect(result.usage?.cacheReadTokens).toBe(80);
     expect(result.usage?.cacheWriteTokens).toBe(80); // 50 + 30
+
+    // ── Assertion 4: every outbound command carries the system prompt ──
+    for (const input of capturedInputs) {
+      expect(input.system).toEqual([{ text: BEDROCK_SYSTEM_PROMPT }]);
+    }
   });
 });
 
-// ── BedrockRunner.run — onToolCall callback ───────────────────────────────────
 describe("BedrockRunner.run — onToolCall callback", () => {
   let workspaceRoot: string;
 
