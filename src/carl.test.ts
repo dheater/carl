@@ -62,6 +62,7 @@ describe("carl CLI", () => {
   const originalArgv = process.argv;
   let promptDir: string;
   let promptFile: string;
+  let configDir: string;
 
   beforeEach(() => {
     jest.resetModules();
@@ -80,13 +81,24 @@ describe("carl CLI", () => {
     promptDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-prompt-"));
     promptFile = path.join(promptDir, "prompt.md");
     fs.writeFileSync(promptFile, "ship it\n", "utf-8");
+    configDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-cli-config-"));
+    process.env.CARL_CONFIG_DIR = configDir;
+    fs.writeFileSync(
+      path.join(configDir, "config.json"),
+      JSON.stringify({ backend: "bedrock" }),
+      "utf-8",
+    );
   });
 
   afterEach(() => {
     process.argv = originalArgv;
     jest.restoreAllMocks();
+    delete process.env.CARL_CONFIG_DIR;
     if (fs.existsSync(promptDir)) {
       fs.rmSync(promptDir, { recursive: true, force: true });
+    }
+    if (fs.existsSync(configDir)) {
+      fs.rmSync(configDir, { recursive: true, force: true });
     }
   });
 
@@ -127,7 +139,9 @@ describe("carl CLI", () => {
           tmpDir,
           "code",
           "ship it",
-          undefined,
+          skill.DEFAULT_MODELS.code,
+          skill.DEFAULT_EFFORTS.code,
+          expect.any(Object),
         );
       } finally {
         fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -205,7 +219,9 @@ describe("carl CLI", () => {
           tmpWs,
           "pr-review",
           expect.stringContaining("||| COMMENT"),
-          undefined,
+          skill.DEFAULT_MODELS["pr-review"],
+          skill.DEFAULT_EFFORTS["pr-review"],
+          expect.any(Object),
         );
         const draft = fs.readFileSync(draftPath, "utf-8");
         expect(draft).toContain("## PR Diff");

@@ -27,42 +27,14 @@ export const BEDROCK_MODEL_IDS: Record<string, string> = {
   fable5: "us.anthropic.claude-fable-5",
 };
 
-export interface ToolCallEvent {
-  tool: string;
-  inputSummary?: string;
-  outputBytes?: number;
-  durationMs?: number;
-  error: boolean;
-}
-
-export interface AgentRunRequest {
-  workspaceRoot: string;
-  skill: string;
-  model: string;
-  instruction: string;
-  excludedTools?: string[];
-  onToolCall?: (event: ToolCallEvent) => void;
-}
-
-export interface UsageSummary {
-  source: string;
-  modelId?: string;
-  inputTokens?: number;
-  outputTokens?: number;
-  cacheReadTokens?: number;
-  cacheWriteTokens?: number;
-  latencyMs?: number;
-  turns?: number;
-}
-
-export interface AgentRunResponse {
-  text: string;
-  usage?: UsageSummary;
-}
-
-export interface AgentRunner {
-  run(request: AgentRunRequest): Promise<AgentRunResponse>;
-}
+import type {
+  EffortLevel,
+  ToolCallEvent,
+  AgentRunRequest,
+  UsageSummary,
+  AgentRunResponse,
+  AgentRunner,
+} from "./types";
 
 export class AuggieRunner implements AgentRunner {
   async run(request: AgentRunRequest): Promise<AgentRunResponse> {
@@ -511,6 +483,10 @@ function withTrailingCachePoint(messages: Message[]): Message[] {
   ];
 }
 
+function effortBudget(effort: "medium" | "high"): number {
+  return effort === "high" ? 16000 : 8192;
+}
+
 export class BedrockRunner implements AgentRunner {
   private readonly client: BedrockRuntimeClient;
 
@@ -617,7 +593,8 @@ export class BedrockRunner implements AgentRunner {
   }
 
   async run(request: AgentRunRequest): Promise<AgentRunResponse> {
-    const { workspaceRoot, skill, model, instruction, excludedTools } = request;
+    const { workspaceRoot, skill, model, instruction, excludedTools, effort } =
+      request;
     const modelId = BEDROCK_MODEL_IDS[model] ?? model;
     const start = Date.now();
 
@@ -645,6 +622,14 @@ export class BedrockRunner implements AgentRunner {
         new ConverseCommand({
           modelId,
           messages: withTrailingCachePoint(messages),
+          ...(effort !== "low" && {
+            additionalModelRequestFields: {
+              thinking: {
+                type: "enabled",
+                budget_tokens: effortBudget(effort),
+              },
+            },
+          }),
           // Omit toolConfig entirely when no tools remain after filtering,
           // rather than sending a tools array with only a cachePoint entry.
           ...(filteredTools.length > 0 && {

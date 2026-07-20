@@ -1,6 +1,16 @@
 #!/usr/bin/env node
 
-import { runSkill, DEFAULT_MODELS, buildSkillInstruction } from "./skill";
+import {
+  runSkill,
+  DEFAULT_MODELS,
+  DEFAULT_EFFORTS,
+  getSkillModel,
+  getSkillEffort,
+  loadCarlConfig,
+} from "./skill";
+import type { EffortLevel } from "./types";
+import { AuggieRunner, BedrockRunner, BEDROCK_MODEL_IDS } from "./runner";
+import type { AgentRunner } from "./types";
 import { collectPrompt, openFileInEditor, getSkillOutputPath } from "./editor";
 import {
   parsePrUrl,
@@ -28,6 +38,59 @@ import * as os from "os";
 import * as path from "path";
 import { spawnSync } from "child_process";
 
+const VALID_BACKENDS = ["auggie", "bedrock"] as const;
+
+function getBackend(
+  skill: string,
+  config: ReturnType<typeof loadCarlConfig>,
+): string {
+  const backend =
+    config.backends?.[skill as keyof NonNullable<typeof config.backends>] ||
+    config.backend;
+  if (backend) {
+    if (!(VALID_BACKENDS as readonly string[]).includes(backend)) {
+      throw new Error(
+        `Invalid backend "${backend}" in config.json.\n` +
+          `Valid options: ${VALID_BACKENDS.join(", ")}.`,
+      );
+    }
+    return backend;
+  }
+  throw new Error(
+    `No backend configured. Set "backend" in ~/.config/carl/config.json.\n` +
+      `Valid options: ${VALID_BACKENDS.join(", ")}.`,
+  );
+}
+
+function createRunner(
+  skill: string,
+  model: string,
+  carlConfig: ReturnType<typeof loadCarlConfig>,
+): AgentRunner {
+  const backend = getBackend(skill, carlConfig);
+
+  if (backend === "auggie") {
+    return new AuggieRunner();
+  }
+
+  if (!BEDROCK_MODEL_IDS[model]) {
+    const supportedModels = Object.keys(BEDROCK_MODEL_IDS).join(", ");
+    throw new Error(
+      `Model "${model}" is not supported by Bedrock backend.\n` +
+        `Supported Bedrock models: ${supportedModels}\n` +
+        `Either:\n` +
+        `  1. Change model to a supported Bedrock model in ~/.config/carl/config.json\n` +
+        `  2. Set "backends": {"${skill}": "auggie"} to use auggie for ${skill} skill\n` +
+        `  3. Change global "backend" to "auggie" or remove it`,
+    );
+  }
+  const region =
+    carlConfig.providers?.bedrock?.region ??
+    process.env.AWS_REGION ??
+    "us-east-1";
+  return new BedrockRunner(region);
+}
+
 function collectCommandPrompt(
   promptFile?: string,
   header?: string,
@@ -44,12 +107,20 @@ function collectCommandPrompt(
   return userInput || null;
 }
 
-async function cmdReview(workspaceRoot: string, model?: string): Promise<void> {
+async function cmdReview(
+  workspaceRoot: string,
+  model: string,
+  effort: EffortLevel,
+  carlConfig: ReturnType<typeof loadCarlConfig>,
+): Promise<void> {
+  const runner = createRunner("review", model, carlConfig);
   await runSkill(
     workspaceRoot,
     "review",
     "Review all staged and uncommitted local changes. Make recommendations to the user.",
     model,
+    effort,
+    runner,
   );
   const outputPath = getSkillOutputPath(workspaceRoot, "review");
   if (fs.existsSync(outputPath)) openFileInEditor(outputPath);
@@ -57,8 +128,10 @@ async function cmdReview(workspaceRoot: string, model?: string): Promise<void> {
 
 async function cmdCode(
   workspaceRoot: string,
+  model: string,
+  effort: EffortLevel,
+  carlConfig: ReturnType<typeof loadCarlConfig>,
   promptFile?: string,
-  model?: string,
 ): Promise<void> {
   const initialPrompt = collectCommandPrompt(
     promptFile,
@@ -69,7 +142,14 @@ async function cmdCode(
     return;
   }
 
-  await runSkill(workspaceRoot, "code", initialPrompt, model);
+  await runSkill(
+    workspaceRoot,
+    "code",
+    initialPrompt,
+    model,
+    effort,
+    createRunner("code", model, carlConfig),
+  );
   const outputPath = getSkillOutputPath(workspaceRoot, "code");
   if (fs.existsSync(outputPath)) openFileInEditor(outputPath);
 }
@@ -77,7 +157,9 @@ async function cmdCode(
 async function cmdPrReview(
   workspaceRoot: string,
   url: string,
-  model?: string,
+  model: string,
+  effort: EffortLevel,
+  carlConfig: ReturnType<typeof loadCarlConfig>,
 ): Promise<void> {
   if (!url.startsWith("http://") && !url.startsWith("https://")) {
     throw new Error(
@@ -145,6 +227,8 @@ async function cmdPrReview(
     }
   }
 
+  const runner = createRunner("pr-review", model, carlConfig);
+
   const initialPrompt = [
     `Review GitHub PR ${prIdentity}.`,
     `The draft file is at \`${draftRel}\` and contains the full PR diff.`,
@@ -155,7 +239,14 @@ async function cmdPrReview(
     `Read any workspace file you need for context. Do not modify any file outside the draft.`,
   ].join("\n");
 
-  await runSkill(workspaceRoot, "pr-review", initialPrompt, model);
+  await runSkill(
+    workspaceRoot,
+    "pr-review",
+    initialPrompt,
+    model,
+    effort,
+    runner,
+  );
   assertDraftExists();
 
   const hunks = parseDiffHunks(prDiff);
@@ -197,7 +288,14 @@ async function cmdPrReview(
       ``,
       `Edit \`${draftRel}\`: remove or fix only the failing comments and keep the valid ones. Do not modify any other file.`,
     ].join("\n");
-    await runSkill(workspaceRoot, "pr-review", rerunPrompt, model);
+    await runSkill(
+      workspaceRoot,
+      "pr-review",
+      rerunPrompt,
+      model,
+      effort,
+      runner,
+    );
     assertDraftExists();
     ({ comments, errors } = loadCommentsAndErrors());
   }
@@ -242,10 +340,6 @@ function cmdReset(workspaceRoot: string): void {
   }
 }
 
-// esbuild --define replaces CARL_VERSION with the actual version string at
-// bundle time. The declare satisfies the TypeScript compiler; the try/catch
-// is only reached during local TS execution (ts-node / jest) where no
-// bundler has substituted the identifier.
 declare const CARL_VERSION: string;
 
 function getVersion(): string {
@@ -265,28 +359,47 @@ function getVersion(): string {
 }
 
 function usage(): void {
-  console.error("Usage: carl [--model <model>] <command>");
+  console.error("Usage: carl [--model <model>] [--effort <level>] <command>");
   console.error("");
   console.error("Options:");
-  console.error("  --version        Print version and exit");
+  console.error("  --version              Print version and exit");
   console.error(
-    "  --model <model>  Override the model for this run (ignores config and defaults)",
+    "  --model <model>        Override the model for this run (ignores config and defaults)",
+  );
+  console.error(
+    "  --effort <level>       Override effort for this run: low, medium, high (ignores config and defaults)",
   );
   console.error("");
   console.error("Commands:");
   console.error(
-    `  code [<file>] Read prompt from file or open editor; run the implementation skill (default: ${DEFAULT_MODELS.code})`,
+    `  code [<file>] Read prompt from file or open editor; run the implementation skill (default model: ${DEFAULT_MODELS.code}, default effort: ${DEFAULT_EFFORTS.code})`,
   );
   console.error(
-    "  review        Run reviewer once (cleanup/refactor your own local changes)",
+    `  review        Run reviewer once (cleanup/refactor your own local changes) (default effort: ${DEFAULT_EFFORTS.review})`,
   );
   console.error("  reset         Clear .agent/");
   console.error(
-    "  pr-review <github-pr-url>  Fetch PR diff, draft review comments in .agent/notes/pr-review.md, and upload as a pending GitHub review (requires gh CLI)",
+    `  pr-review <github-pr-url>  Fetch PR diff, draft review comments in .agent/notes/pr-review.md, and upload as a pending GitHub review (requires gh CLI) (default effort: ${DEFAULT_EFFORTS["pr-review"]})`,
   );
   console.error("");
-  console.error("Config: .carl/config.json (optional)");
-  console.error(`  { "models": ${JSON.stringify(DEFAULT_MODELS, null, 2)} }`);
+  console.error(
+    "Config: ~/.config/carl/config.json (global default), .carl/config.json (local override, optional)",
+  );
+  console.error(
+    `  { "backend": "bedrock", "models": ${JSON.stringify(DEFAULT_MODELS, null, 2)}, "effort": "high", "efforts": { "code": "medium", "review": "high", "pr-review": "high" } }`,
+  );
+}
+
+function resolveSkillArgs(
+  skill: string,
+  model: string | undefined,
+  effort: EffortLevel | undefined,
+  carlConfig: ReturnType<typeof loadCarlConfig>,
+): { model: string; effort: EffortLevel } {
+  return {
+    model: model ?? getSkillModel(skill, carlConfig),
+    effort: effort ?? getSkillEffort(skill, carlConfig),
+  };
 }
 
 async function main(): Promise<void> {
@@ -298,6 +411,7 @@ async function main(): Promise<void> {
   }
 
   let model: string | undefined;
+  let effort: "low" | "medium" | "high" | undefined;
   const args: string[] = [];
   for (let i = 0; i < rawArgs.length; i++) {
     if (rawArgs[i] === "--model") {
@@ -306,6 +420,19 @@ async function main(): Promise<void> {
         console.error("error: --model requires a value");
         process.exit(1);
       }
+    } else if (rawArgs[i] === "--effort") {
+      const val = rawArgs[++i];
+      if (!val) {
+        console.error("error: --effort requires a value");
+        process.exit(1);
+      }
+      if (val !== "low" && val !== "medium" && val !== "high") {
+        console.error(
+          `error: --effort must be one of: low, medium, high (got: ${JSON.stringify(val)})`,
+        );
+        process.exit(1);
+      }
+      effort = val;
     } else {
       args.push(rawArgs[i]);
     }
@@ -315,17 +442,37 @@ async function main(): Promise<void> {
   const workspaceRoot = process.cwd();
 
   try {
+    const carlConfig = loadCarlConfig(workspaceRoot, command !== "pr-review");
     switch (command) {
-      case "code":
+      case "code": {
         if (args.length > 2) {
-          console.error("Usage: carl [--model <model>] code [<prompt-file>]");
+          console.error(
+            "Usage: carl [--model <model>] [--effort <level>] code [<prompt-file>]",
+          );
           process.exit(1);
         }
-        await cmdCode(workspaceRoot, args[1], model);
+        const { model: resolvedModel, effort: resolvedEffort } =
+          resolveSkillArgs("code", model, effort, carlConfig);
+        await cmdCode(
+          workspaceRoot,
+          resolvedModel,
+          resolvedEffort,
+          carlConfig,
+          args[1],
+        );
         break;
-      case "review":
-        await cmdReview(workspaceRoot, model);
+      }
+      case "review": {
+        const { model: resolvedModel, effort: resolvedEffort } =
+          resolveSkillArgs("review", model, effort, carlConfig);
+        await cmdReview(
+          workspaceRoot,
+          resolvedModel,
+          resolvedEffort,
+          carlConfig,
+        );
         break;
+      }
       case "reset":
         cmdReset(workspaceRoot);
         break;
@@ -334,7 +481,15 @@ async function main(): Promise<void> {
           console.error("Usage: carl pr-review <github-pr-url>");
           process.exit(1);
         }
-        await cmdPrReview(workspaceRoot, args[1], model);
+        const { model: resolvedModel, effort: resolvedEffort } =
+          resolveSkillArgs("pr-review", model, effort, carlConfig);
+        await cmdPrReview(
+          workspaceRoot,
+          args[1],
+          resolvedModel,
+          resolvedEffort,
+          carlConfig,
+        );
         break;
       }
       default:

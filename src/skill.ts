@@ -1,12 +1,6 @@
 import { getGitStatus, getCurrentBranch, getGitDiff } from "./git";
 import { getSkillOutputPath } from "./editor";
-import {
-  AgentRunner,
-  AuggieRunner,
-  BedrockRunner,
-  BEDROCK_MODEL_IDS,
-  UsageSummary,
-} from "./runner";
+import type { AgentRunner, UsageSummary, EffortLevel } from "./types";
 
 import { randomUUID } from "crypto";
 import * as path from "path";
@@ -16,7 +10,13 @@ import * as os from "os";
 const CARL_SKILLS_DIR = path.join(__dirname, "..", "skills");
 const CARL_RULES_DIR = path.join(__dirname, "..", "rules");
 const GLOBAL_SKILLS_DIR = path.join(os.homedir(), ".augment", "skills");
-const EVENTS_LOG_DIR = ".carl";
+const LOCAL_CONFIG_DIR = ".carl";
+
+function getGlobalConfigDir(): string {
+  return (
+    process.env.CARL_CONFIG_DIR ?? path.join(os.homedir(), ".config", "carl")
+  );
+}
 const EVENTS_LOG_FILE = "events.jsonl";
 
 type PromptMeta = {
@@ -39,7 +39,6 @@ type SkillMeta = {
 };
 
 type ToolCallMeta = {
-  tool: string;
   input_summary: string;
   output_bytes: number;
   error: boolean;
@@ -73,12 +72,26 @@ type CarlConfig = {
       region?: string;
     };
   };
+  /** Global fallback effort level for all skills. */
+  effort?: EffortLevel;
+  /** Per-skill effort overrides; take precedence over the global `effort` field. */
+  efforts?: {
+    code?: EffortLevel;
+    review?: EffortLevel;
+    "pr-review"?: EffortLevel;
+  };
 };
 
 export const DEFAULT_MODELS: Record<string, string> = {
   code: "sonnet4.6",
   review: "sonnet4.6",
   "pr-review": "sonnet4.6",
+};
+
+export const DEFAULT_EFFORTS: Record<string, EffortLevel> = {
+  code: "medium",
+  review: "high",
+  "pr-review": "high",
 };
 
 const BASE_RULE_FILES = ["carl.md"] as const;
@@ -104,28 +117,7 @@ type GitStatusCounts = {
   untracked: number;
 };
 
-function loadCarlConfig(
-  workspaceRoot: string,
-  createIfMissing = true,
-): CarlConfig {
-  const carlDir = path.join(workspaceRoot, EVENTS_LOG_DIR);
-  const configPath = path.join(carlDir, "config.json");
-  if (!fs.existsSync(configPath)) {
-    if (!createIfMissing) {
-      return {};
-    }
-    const defaults: CarlConfig = {
-      backend: "bedrock",
-      models: { ...DEFAULT_MODELS },
-    };
-    fs.mkdirSync(carlDir, { recursive: true });
-    fs.writeFileSync(
-      configPath,
-      JSON.stringify(defaults, null, 2) + "\n",
-      "utf-8",
-    );
-    return defaults;
-  }
+function readConfigFile(configPath: string): CarlConfig {
   try {
     return JSON.parse(fs.readFileSync(configPath, "utf-8")) as CarlConfig;
   } catch (err: any) {
@@ -134,6 +126,65 @@ function loadCarlConfig(
         `Fix or delete the file and try again.`,
     );
   }
+}
+
+export function loadCarlConfig(
+  workspaceRoot: string,
+  createIfMissing = true,
+): CarlConfig {
+  const globalConfigDir = getGlobalConfigDir();
+  const globalConfigPath = path.join(globalConfigDir, "config.json");
+  const localConfigPath = path.join(
+    workspaceRoot,
+    LOCAL_CONFIG_DIR,
+    "config.json",
+  );
+
+  const globalExists = fs.existsSync(globalConfigPath);
+  const localExists = fs.existsSync(localConfigPath);
+
+  if (!globalExists && !localExists) {
+    if (!createIfMissing) return {};
+    const defaults: CarlConfig = {
+      backend: "bedrock",
+      models: { ...DEFAULT_MODELS },
+    };
+    fs.mkdirSync(globalConfigDir, { recursive: true });
+    fs.writeFileSync(
+      globalConfigPath,
+      JSON.stringify(defaults, null, 2) + "\n",
+      "utf-8",
+    );
+    return defaults;
+  }
+
+  const globalConfig = globalExists ? readConfigFile(globalConfigPath) : {};
+  const localConfig = localExists ? readConfigFile(localConfigPath) : {};
+
+  // Local overrides global field-by-field within nested objects so that, e.g.,
+  // a local { efforts: { review: "low" } } does not silently drop global
+  // { efforts: { code: "high" } }.
+  return {
+    ...globalConfig,
+    ...localConfig,
+    models: { ...globalConfig.models, ...localConfig.models },
+    efforts: { ...globalConfig.efforts, ...localConfig.efforts },
+    backends: { ...globalConfig.backends, ...localConfig.backends },
+    providers: Object.fromEntries(
+      [
+        ...new Set([
+          ...Object.keys(globalConfig.providers ?? {}),
+          ...Object.keys(localConfig.providers ?? {}),
+        ]),
+      ].map((k) => [
+        k,
+        {
+          ...(globalConfig.providers as any)?.[k],
+          ...(localConfig.providers as any)?.[k],
+        },
+      ]),
+    ) as CarlConfig["providers"],
+  };
 }
 
 function getRuleFiles(skill: string): string[] {
@@ -167,59 +218,28 @@ function getExcludedTools(skill: string): string[] {
   return WRITABLE_SKILLS.has(skill) ? [] : [...READ_ONLY_WRITE_TOOL_EXCLUSIONS];
 }
 
-function getSkillModel(
-  skill: string,
-  workspaceRoot?: string,
-  config?: CarlConfig,
-): string {
-  if (workspaceRoot) {
-    const resolved =
-      config ?? loadCarlConfig(workspaceRoot, skill !== "pr-review");
-    const override =
-      resolved.models?.[skill as keyof NonNullable<CarlConfig["models"]>];
-    if (override) return override;
-  }
+export function getSkillModel(skill: string, config?: CarlConfig): string {
+  const override =
+    config?.models?.[skill as keyof NonNullable<CarlConfig["models"]>];
+  if (override) return override;
   return DEFAULT_MODELS[skill] ?? "sonnet4.6";
 }
 
-const VALID_BACKENDS = ["auggie", "bedrock"] as const;
-
-function getBackend(
-  workspaceRoot?: string,
-  skill?: string,
+export function getSkillEffort(
+  skill: string,
   config?: CarlConfig,
-): string {
-  if (workspaceRoot) {
-    const resolved = config ?? loadCarlConfig(workspaceRoot, false);
-    const backend =
-      (skill &&
-        resolved.backends?.[
-          skill as keyof NonNullable<CarlConfig["backends"]>
-        ]) ||
-      resolved.backend;
-    if (backend) {
-      if (!(VALID_BACKENDS as readonly string[]).includes(backend)) {
-        throw new Error(
-          `Invalid backend "${backend}" in .carl/config.json.\n` +
-            `Valid options: ${VALID_BACKENDS.join(", ")}.`,
-        );
-      }
-      return backend;
-    }
-  }
-  throw new Error(
-    `No backend configured. Set "backend" in .carl/config.json.\n` +
-      `Valid options: ${VALID_BACKENDS.join(", ")}.`,
-  );
+): EffortLevel {
+  const perSkill =
+    config?.efforts?.[skill as keyof NonNullable<CarlConfig["efforts"]>];
+  if (perSkill) return perSkill;
+  if (config?.effort) return config.effort;
+  return DEFAULT_EFFORTS[skill] ?? "medium";
 }
 
-function writeTimingEvent(workspaceRoot: string, event: TimingEvent): void {
-  const eventsDir = path.join(workspaceRoot, EVENTS_LOG_DIR);
-  if (!fs.existsSync(eventsDir)) {
-    fs.mkdirSync(eventsDir, { recursive: true });
-  }
-
-  const eventsLogPath = path.join(eventsDir, EVENTS_LOG_FILE);
+function writeTimingEvent(event: TimingEvent): void {
+  const globalConfigDir = getGlobalConfigDir();
+  fs.mkdirSync(globalConfigDir, { recursive: true });
+  const eventsLogPath = path.join(globalConfigDir, EVENTS_LOG_FILE);
   fs.appendFileSync(eventsLogPath, `${JSON.stringify(event)}\n`, "utf-8");
 }
 
@@ -234,7 +254,7 @@ function logTimingDuration(
   meta?: PromptMeta | SkillMeta,
 ): void {
   if (skill !== "pr-review") {
-    writeTimingEvent(workspaceRoot, {
+    writeTimingEvent({
       timestamp: new Date().toISOString(),
       run_id: runId,
       event,
@@ -448,57 +468,24 @@ function isTransientFetchError(err: unknown): boolean {
   return ((err as any)?.message ?? "").includes("fetch failed");
 }
 
-function createRunner(
-  workspaceRoot: string,
-  skill: string,
-  model: string,
-  region: string | undefined,
-  config: CarlConfig,
-): AgentRunner {
-  const backend = getBackend(workspaceRoot, skill, config);
-
-  if (backend === "auggie") {
-    return new AuggieRunner();
-  }
-
-  if (!BEDROCK_MODEL_IDS[model]) {
-    const supportedModels = Object.keys(BEDROCK_MODEL_IDS).join(", ");
-    throw new Error(
-      `Model "${model}" is not supported by Bedrock backend.\n` +
-        `Supported Bedrock models: ${supportedModels}\n` +
-        `Either:\n` +
-        `  1. Change model to a supported Bedrock model in .carl/config.json\n` +
-        `  2. Set "backends": {"${skill}": "auggie"} to use auggie for ${skill} skill\n` +
-        `  3. Change global "backend" to "auggie" or remove it`,
-    );
-  }
-  return new BedrockRunner(region ?? process.env.AWS_REGION ?? "us-east-1");
-}
-
 export async function runSkill(
   workspaceRoot: string,
   skill: string,
-  initialPrompt?: string,
-  modelOverride?: string,
-  runner?: AgentRunner,
+  initialPrompt: string | undefined,
+  model: string,
+  effort: EffortLevel,
+  runner: AgentRunner,
 ): Promise<RunSkillResult> {
   const runId = randomUUID();
-  const carlConfig = loadCarlConfig(workspaceRoot);
-  const model =
-    modelOverride ?? getSkillModel(skill, workspaceRoot, carlConfig);
   const skillStartTime = Date.now();
   const gitStatusBefore = countGitStatus(workspaceRoot);
   const excludedTools = getExcludedTools(skill);
 
-  const activeRunner =
-    runner ??
-    createRunner(
-      workspaceRoot,
-      skill,
-      model,
-      carlConfig.providers?.bedrock?.region,
-      carlConfig,
+  if (!runner) {
+    throw new Error(
+      `runSkill: no runner provided for skill "${skill}". Callers must construct and pass a runner.`,
     );
+  }
 
   let instruction = buildSkillInstruction(skill, workspaceRoot);
   if (initialPrompt) {
@@ -525,14 +512,15 @@ export async function runSkill(
       let shouldRetry = false;
       try {
         const promptStart = Date.now();
-        const result = await activeRunner.run({
+        const result = await runner.run({
           workspaceRoot,
           skill,
           model,
           instruction,
           excludedTools,
+          effort,
           onToolCall: (event) => {
-            writeTimingEvent(workspaceRoot, {
+            writeTimingEvent({
               timestamp: new Date().toISOString(),
               run_id: runId,
               event: "tool_call",
@@ -541,7 +529,6 @@ export async function runSkill(
               skill,
               model,
               meta: {
-                tool: event.tool,
                 input_summary: event.inputSummary ?? "",
                 output_bytes: event.outputBytes ?? 0,
                 error: event.error,
@@ -608,25 +595,23 @@ export async function runSkill(
 
     return { response };
   } catch (err) {
-    if (skill !== "pr-review") {
-      logTimingDuration(
+    logTimingDuration(
+      workspaceRoot,
+      runId,
+      "skill",
+      skill,
+      Date.now() - skillStartTime,
+      skill,
+      model,
+      buildSkillEventMeta(
         workspaceRoot,
-        runId,
-        "skill",
         skill,
-        Date.now() - skillStartTime,
-        skill,
-        model,
-        buildSkillEventMeta(
-          workspaceRoot,
-          skill,
-          "error",
-          gitStatusBefore,
-          retryCount,
-          classifySkillError(err),
-        ),
-      );
-    }
+        "error",
+        gitStatusBefore,
+        retryCount,
+        classifySkillError(err),
+      ),
+    );
     throw err;
   }
 }

@@ -1,13 +1,18 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { runSkill, buildSkillInstruction, computeCost } from "./skill";
+import {
+  runSkill,
+  buildSkillInstruction,
+  computeCost,
+  loadCarlConfig,
+} from "./skill";
 import type {
   AgentRunner,
   AgentRunRequest,
   AgentRunResponse,
   UsageSummary,
-} from "./runner";
+} from "./types";
 
 jest.mock("./git", () => ({
   getCurrentBranch: jest.fn().mockReturnValue("main"),
@@ -119,21 +124,33 @@ describe("buildSkillInstruction", () => {
 
 describe("runSkill", () => {
   let workspaceRoot: string;
+  let configDir: string;
   let logSpy: jest.SpyInstance;
 
   beforeEach(() => {
     workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "carl-skill-"));
+    configDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-config-"));
+    process.env.CARL_CONFIG_DIR = configDir;
     logSpy = jest.spyOn(console, "log").mockImplementation(() => {});
   });
 
   afterEach(() => {
     logSpy.mockRestore();
+    delete process.env.CARL_CONFIG_DIR;
     fs.rmSync(workspaceRoot, { recursive: true, force: true });
+    fs.rmSync(configDir, { recursive: true, force: true });
   });
 
   test("excludes write tools for review skill", async () => {
     const runner = new MockRunner();
-    await runSkill(workspaceRoot, "review", undefined, "test-model", runner);
+    await runSkill(
+      workspaceRoot,
+      "review",
+      undefined,
+      "test-model",
+      "high",
+      runner,
+    );
 
     expect(runner.requests[0].excludedTools).toEqual(
       expect.arrayContaining([
@@ -151,6 +168,7 @@ describe("runSkill", () => {
       "code",
       "implement this",
       "test-model",
+      "medium",
       runner,
     );
 
@@ -164,6 +182,7 @@ describe("runSkill", () => {
       "pr-review",
       "review this",
       "test-model",
+      "high",
       runner,
     );
 
@@ -172,7 +191,14 @@ describe("runSkill", () => {
 
   test("appends usage summary to output file when usage is absent", async () => {
     const runner = new MockRunner();
-    await runSkill(workspaceRoot, "review", undefined, "test-model", runner);
+    await runSkill(
+      workspaceRoot,
+      "review",
+      undefined,
+      "test-model",
+      "high",
+      runner,
+    );
 
     const outputPath = path.join(workspaceRoot, ".agent/notes/review.md");
     const content = fs.readFileSync(outputPath, "utf-8");
@@ -187,7 +213,14 @@ describe("runSkill", () => {
       modelId: "test-model-id",
       turns: 7,
     });
-    await runSkill(workspaceRoot, "review", undefined, "test-model", runner);
+    await runSkill(
+      workspaceRoot,
+      "review",
+      undefined,
+      "test-model",
+      "high",
+      runner,
+    );
 
     const outputPath = path.join(workspaceRoot, ".agent/notes/review.md");
     const content = fs.readFileSync(outputPath, "utf-8");
@@ -200,7 +233,14 @@ describe("runSkill", () => {
       modelId: "test-model-id",
       turns: 1,
     });
-    await runSkill(workspaceRoot, "review", undefined, "test-model", runner);
+    await runSkill(
+      workspaceRoot,
+      "review",
+      undefined,
+      "test-model",
+      "high",
+      runner,
+    );
 
     const outputPath = path.join(workspaceRoot, ".agent/notes/review.md");
     const content = fs.readFileSync(outputPath, "utf-8");
@@ -215,7 +255,14 @@ describe("runSkill", () => {
       inputTokens: 100,
       outputTokens: 50,
     });
-    await runSkill(workspaceRoot, "review", undefined, "test-model", runner);
+    await runSkill(
+      workspaceRoot,
+      "review",
+      undefined,
+      "test-model",
+      "high",
+      runner,
+    );
 
     const outputPath = path.join(workspaceRoot, ".agent/notes/review.md");
     const content = fs.readFileSync(outputPath, "utf-8");
@@ -231,7 +278,14 @@ describe("runSkill", () => {
       cacheReadTokens: 800,
       cacheWriteTokens: 200,
     });
-    await runSkill(workspaceRoot, "review", undefined, "test-model", runner);
+    await runSkill(
+      workspaceRoot,
+      "review",
+      undefined,
+      "test-model",
+      "high",
+      runner,
+    );
 
     const outputPath = path.join(workspaceRoot, ".agent/notes/review.md");
     const content = fs.readFileSync(outputPath, "utf-8");
@@ -246,7 +300,14 @@ describe("runSkill", () => {
       modelId: "test-model-id",
       inputTokens: 1000,
     });
-    await runSkill(workspaceRoot, "review", undefined, "test-model", runner);
+    await runSkill(
+      workspaceRoot,
+      "review",
+      undefined,
+      "test-model",
+      "high",
+      runner,
+    );
 
     const outputPath = path.join(workspaceRoot, ".agent/notes/review.md");
     const content = fs.readFileSync(outputPath, "utf-8");
@@ -264,7 +325,14 @@ describe("runSkill", () => {
       cacheReadTokens: 200_000,
       cacheWriteTokens: 10_000,
     });
-    await runSkill(workspaceRoot, "review", undefined, "test-model", runner);
+    await runSkill(
+      workspaceRoot,
+      "review",
+      undefined,
+      "test-model",
+      "high",
+      runner,
+    );
 
     const outputPath = path.join(workspaceRoot, ".agent/notes/review.md");
     const content = fs.readFileSync(outputPath, "utf-8");
@@ -278,7 +346,14 @@ describe("runSkill", () => {
       inputTokens: 1000,
       outputTokens: 500,
     });
-    await runSkill(workspaceRoot, "review", undefined, "test-model", runner);
+    await runSkill(
+      workspaceRoot,
+      "review",
+      undefined,
+      "test-model",
+      "high",
+      runner,
+    );
 
     const outputPath = path.join(workspaceRoot, ".agent/notes/review.md");
     const content = fs.readFileSync(outputPath, "utf-8");
@@ -316,9 +391,16 @@ describe("runSkill", () => {
       },
     ];
     const runner = new MockRunner("# Summary\n\nDone.", undefined, toolCalls);
-    await runSkill(workspaceRoot, "code", "build it", "test-model", runner);
+    await runSkill(
+      workspaceRoot,
+      "code",
+      "build it",
+      "test-model",
+      "medium",
+      runner,
+    );
 
-    const eventsPath = path.join(workspaceRoot, ".carl/events.jsonl");
+    const eventsPath = path.join(configDir, "events.jsonl");
     const lines = fs.readFileSync(eventsPath, "utf-8").trim().split("\n");
     const toolEvents = lines
       .map((l) => JSON.parse(l))
@@ -327,45 +409,121 @@ describe("runSkill", () => {
     expect(toolEvents).toHaveLength(3);
 
     expect(toolEvents[0].subject).toBe("read_file");
-    expect(toolEvents[0].meta.tool).toBe("read_file");
     expect(toolEvents[0].meta.input_summary).toBe("src/foo.ts");
     expect(toolEvents[0].meta.output_bytes).toBe(512);
     expect(toolEvents[0].meta.error).toBe(false);
 
-    expect(toolEvents[1].meta.tool).toBe("bash");
+    expect(toolEvents[1].subject).toBe("bash");
     expect(toolEvents[1].meta.error).toBe(false);
 
-    expect(toolEvents[2].meta.tool).toBe("bash");
+    expect(toolEvents[2].subject).toBe("bash");
     expect(toolEvents[2].meta.error).toBe(true);
 
     for (const e of toolEvents) {
+      expect(e.meta.tool).toBeUndefined();
       expect(e.skill).toBe("code");
       expect(e.run_id).toBeDefined();
       expect(e.timestamp).toBeDefined();
     }
+
+    // All events in a run (prompt + tool_calls) must share the same run_id
+    // so downstream telemetry can group them correctly.
+    const allEvents = lines.map((l) => JSON.parse(l));
+    const runIds = new Set(allEvents.map((e: any) => e.run_id));
+    expect(runIds.size).toBe(1);
+  });
+});
+
+describe("loadCarlConfig two-file merge", () => {
+  let workspaceRoot: string;
+  let configDir: string;
+
+  beforeEach(() => {
+    workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "carl-ws-"));
+    configDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-cfg-"));
+    process.env.CARL_CONFIG_DIR = configDir;
   });
 
-  test("all tool_call events for a run share the same run_id as prompt/skill events", async () => {
-    const toolCalls = [
-      {
-        tool: "read_file",
-        inputSummary: "a.ts",
-        outputBytes: 10,
-        durationMs: 1,
-        error: false,
-      },
-    ];
-    const runner = new MockRunner("# Summary\n\nDone.", undefined, toolCalls);
-    await runSkill(workspaceRoot, "code", "go", "test-model", runner);
+  afterEach(() => {
+    delete process.env.CARL_CONFIG_DIR;
+    fs.rmSync(workspaceRoot, { recursive: true, force: true });
+    fs.rmSync(configDir, { recursive: true, force: true });
+  });
 
-    const eventsPath = path.join(workspaceRoot, ".carl/events.jsonl");
-    const events = fs
-      .readFileSync(eventsPath, "utf-8")
-      .trim()
-      .split("\n")
-      .map((l) => JSON.parse(l));
-    const runIds = [...new Set(events.map((e: any) => e.run_id))];
-    expect(runIds).toHaveLength(1);
+  test("local nested field does not drop unrelated global nested fields", () => {
+    fs.writeFileSync(
+      path.join(configDir, "config.json"),
+      JSON.stringify({
+        backend: "bedrock",
+        efforts: { code: "high", review: "high" },
+        models: { code: "opus", review: "haiku" },
+        backends: { code: "auggie" },
+        providers: { bedrock: { region: "us-west-2" } },
+      }),
+      "utf-8",
+    );
+
+    const localConfigDir = path.join(workspaceRoot, ".carl");
+    fs.mkdirSync(localConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(localConfigDir, "config.json"),
+      JSON.stringify({
+        efforts: { review: "low" },
+        models: { review: "sonnet" },
+        backends: { review: "bedrock" },
+        providers: { bedrock: { region: "eu-west-1" } },
+      }),
+      "utf-8",
+    );
+
+    const config = loadCarlConfig(workspaceRoot, false);
+
+    // local field wins
+    expect(config.efforts?.review).toBe("low");
+    expect(config.models?.review).toBe("sonnet");
+    expect(config.backends?.review).toBe("bedrock");
+    expect(config.providers?.bedrock?.region).toBe("eu-west-1");
+
+    // global field not touched by local survives
+    expect(config.efforts?.code).toBe("high");
+    expect(config.models?.code).toBe("opus");
+    expect(config.backends?.code).toBe("auggie");
+
+    // scalar top-level: local wins
+    expect(config.backend).toBe("bedrock");
+  });
+
+  test("providers deep merge: local sub-field wins, unset global sub-field survives", () => {
+    fs.writeFileSync(
+      path.join(configDir, "config.json"),
+      JSON.stringify({
+        providers: {
+          bedrock: { region: "us-east-1", timeout: 30 },
+          auggie: { endpoint: "https://example.com" },
+        },
+      }),
+      "utf-8",
+    );
+
+    const localConfigDir = path.join(workspaceRoot, ".carl");
+    fs.mkdirSync(localConfigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(localConfigDir, "config.json"),
+      JSON.stringify({
+        providers: { bedrock: { region: "eu-west-1" } },
+      }),
+      "utf-8",
+    );
+
+    const config = loadCarlConfig(workspaceRoot, false);
+    // Local sub-field wins.
+    expect(config.providers?.bedrock?.region).toBe("eu-west-1");
+    // Global sub-field not overridden by local survives.
+    expect((config.providers?.bedrock as any)?.timeout).toBe(30);
+    // Unrelated global provider key survives.
+    expect((config.providers as any)?.auggie?.endpoint).toBe(
+      "https://example.com",
+    );
   });
 });
 

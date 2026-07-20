@@ -526,6 +526,7 @@ describe("BedrockRunner.run — trailing cachePoint on every ConverseCommand", (
       skill: "code",
       model: "sonnet4",
       instruction: "do the thing",
+      effort: "medium",
     });
 
     // Sanity: we got two ConverseCommand calls.
@@ -647,6 +648,7 @@ describe("BedrockRunner.run — onToolCall callback", () => {
       skill: "code",
       model: "sonnet4",
       instruction: "test",
+      effort: "medium",
       onToolCall: (event) => toolCallEvents.push(event),
     });
 
@@ -708,6 +710,7 @@ describe("BedrockRunner.run — onToolCall callback", () => {
       skill: "code",
       model: "sonnet4",
       instruction: "test",
+      effort: "medium",
       onToolCall: (event) => toolCallEvents.push(event),
     });
 
