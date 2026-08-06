@@ -47,7 +47,7 @@ chmod +x ~/.local/bin/carl
 
 ## Configuration
 
-On first run, carl writes `.carl/config.json` in the current directory:
+On first run, carl writes `~/.config/carl/config.json`:
 
 ```json
 {
@@ -60,11 +60,15 @@ On first run, carl writes `.carl/config.json` in the current directory:
 }
 ```
 
+A per-project `.carl/config.json` is optional and overrides the global file
+field-by-field. `CARL_CONFIG_DIR` overrides the global directory (used by tests).
+
 **Backends:**
+
 - `"bedrock"` — AWS Bedrock. Requires AWS credentials in the environment (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_REGION`, or an IAM role).
 - `"auggie"` — Augment SDK. Requires `@augmentcode/auggie-sdk` available (it is bundled when installing from source).
 
-Edit `.carl/config.json` to change the backend or default models.
+Edit `~/.config/carl/config.json` to change the backend or default models.
 
 ## Usage
 
@@ -73,16 +77,55 @@ carl [--model <model>] <command>
 carl --version
 ```
 
-| Command | What it does |
-|---|---|
-| `carl code [<prompt-file>]` | Open editor (or read file) for a prompt; run the implementation skill; open notes in editor |
-| `carl review` | Review staged/uncommitted local changes; open notes in editor |
-| `carl pr-review <github-pr-url>` | Review a teammate's PR; create a pending GitHub review |
-| `carl reset` | Clear `.agent/` |
+| Command                          | What it does                                                                                |
+| -------------------------------- | ------------------------------------------------------------------------------------------- |
+| `carl code [<prompt-file>]`      | Open editor (or read file) for a prompt; run the implementation skill; open notes in editor |
+| `carl review`                    | Review staged/uncommitted local changes; open notes in editor                               |
+| `carl pr-review <github-pr-url>` | Review a teammate's PR; create a pending GitHub review                                      |
+| `carl reset`                     | Clear `.agent/`                                                                             |
+| `carl stats`                     | Report cost, tokens, turns, and duration per skill                                          |
 
-`--model <model>` overrides the model for that run. Supported model aliases: `sonnet4.6`, `sonnet4.5`, `sonnet4`, `haiku4.5`, `opus4.5` (and others — see `.carl/config.json` after first run).
+`--model <model>` overrides the model for that run. Supported model aliases: `sonnet4.6`, `sonnet4.5`, `sonnet4`, `haiku4.5`, `opus4.5` (and others — see `~/.config/carl/config.json` after first run).
 
-Diagnostics are written to `.carl/events.jsonl`.
+Diagnostics are appended to `~/.config/carl/events.jsonl`, one JSON object per line.
+
+## Stats
+
+`carl stats` reports what carl costs and how hard it is working, broken out by skill.
+
+```
+carl stats                                  # this week (default)
+carl stats --this-month
+carl stats --this-year
+carl stats --all
+carl stats --from 2026-08-01 --to 2026-08-05 # --to is inclusive
+carl stats --skill code
+carl stats --json                            # aggregates for downstream charting
+```
+
+```
+SKILL      RUNS    COST  $/RUN  p50 DUR  p50 TURNS  p50 TOKENS  p50 TOOLS  CACHE  ERR
+code        246  $78.95  $0.34      57s         10        127k         12    94%   6%
+review       33   $5.58  $0.17      47s        8.5        127k         14    89%   3%
+TOTAL       287  $84.53  $0.32      56s         10        127k                     6%
+```
+
+Also printed: per-skill cost/duration/turn/token histograms, per-tool call counts
+and error rates, and breakdowns by effort level, workspace, and day.
+
+The event log is the source of truth. `~/.config/carl/metrics.db` is a derived
+cache that is refreshed incrementally on every run; delete it or pass `--rebuild`
+at any time and it is reconstructed from the log.
+
+Unpriced runs (no token data recorded, or a model with no known rates) are
+reported as unpriced, never as $0.
+
+**Costs are always reported at current rates, including historical runs.** These
+metrics exist to show whether a change to carl made it cheaper, so every run is
+priced with one rate table; pricing each run at the rates in effect on its own
+date would make a vendor price change look like a regression in carl. When the
+rate table changes, the next `carl stats` reprices every cached run and says so.
+Historical invoices will not match — use AWS Cost Explorer for billing.
 
 ## PR review
 

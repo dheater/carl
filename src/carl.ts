@@ -9,6 +9,7 @@ import {
   loadCarlConfig,
 } from "./skill";
 import type { EffortLevel } from "./types";
+import { cmdStats } from "./stats-command";
 import { AuggieRunner, BedrockRunner, BEDROCK_MODEL_IDS } from "./runner";
 import type { AgentRunner } from "./types";
 import { collectPrompt, openFileInEditor, getSkillOutputPath } from "./editor";
@@ -381,6 +382,22 @@ function usage(): void {
   console.error(
     `  pr-review <github-pr-url>  Fetch PR diff, draft review comments in .agent/notes/pr-review.md, and upload as a pending GitHub review (requires gh CLI) (default effort: ${DEFAULT_EFFORTS["pr-review"]})`,
   );
+  console.error(
+    "  stats         Report cost, tokens, turns, and duration per skill from the event log",
+  );
+  console.error("");
+  console.error("stats options:");
+  console.error(
+    "  --this-week | --this-month | --this-year | --all   Time range (default: --this-week)",
+  );
+  console.error(
+    "  --from YYYY-MM-DD --to YYYY-MM-DD                  Explicit range (--to is inclusive)",
+  );
+  console.error("  --skill <name>         Limit the report to one skill");
+  console.error("  --json                 Emit the aggregates as JSON");
+  console.error(
+    "  --rebuild              Discard the derived metrics cache and re-read the logs",
+  );
   console.error("");
   console.error(
     "Config: ~/.config/carl/config.json (global default), .carl/config.json (local override, optional)",
@@ -442,6 +459,13 @@ async function main(): Promise<void> {
   const workspaceRoot = process.cwd();
 
   try {
+    // Reporting reads the event log only; it needs no config and must not
+    // create one as a side effect of asking how much carl costs.
+    if (command === "stats") {
+      cmdStats(args.slice(1));
+      return;
+    }
+
     const carlConfig = loadCarlConfig(workspaceRoot, command !== "pr-review");
     switch (command) {
       case "code": {

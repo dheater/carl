@@ -719,3 +719,133 @@ describe("BedrockRunner.run — onToolCall callback", () => {
     expect(toolCallEvents[0].error).toBe(true);
   });
 });
+
+// ── BedrockRunner.run — spend is reported even when the run fails ─────────────
+describe("BedrockRunner.run — usage on failure", () => {
+  let workspaceRoot: string;
+
+  const TURN_USAGE = {
+    inputTokens: 1000,
+    outputTokens: 200,
+    cacheReadInputTokens: 5000,
+    cacheWriteInputTokens: 300,
+  };
+
+  function toolUseTurn() {
+    return {
+      stopReason: "tool_use",
+      output: {
+        message: {
+          content: [
+            {
+              toolUse: {
+                toolUseId: "t",
+                name: "bash",
+                input: { command: "echo hi" },
+              },
+            },
+          ],
+        },
+      },
+      usage: TURN_USAGE,
+    };
+  }
+
+  beforeEach(() => {
+    workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "carl-usage-"));
+    jest.spyOn(console, "log").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    fs.rmSync(workspaceRoot, { recursive: true, force: true });
+  });
+
+  function run() {
+    return new BedrockRunner("us-east-1").run({
+      workspaceRoot,
+      skill: "code",
+      model: "sonnet4",
+      instruction: "do the thing",
+      effort: "low",
+    });
+  }
+
+  test("an unexpected stop reason reports the tokens already spent", async () => {
+    jest.spyOn(BedrockRuntimeClient.prototype, "send").mockImplementation(
+      async () =>
+        ({
+          stopReason: "guardrail_intervened",
+          output: { message: { content: [{ text: "blocked" }] } },
+          usage: TURN_USAGE,
+        }) as any,
+    );
+
+    const err = await run().then(
+      () => null,
+      (e) => e,
+    );
+    expect(err.message).toMatch(/Unexpected stop reason/);
+    expect(err.usage).toEqual(
+      expect.objectContaining({
+        inputTokens: 1000,
+        outputTokens: 200,
+        cacheReadTokens: 5000,
+        cacheWriteTokens: 300,
+        turns: 1,
+      }),
+    );
+  });
+
+  test("exhausting the turn cap reports the full accumulated spend", async () => {
+    jest
+      .spyOn(BedrockRuntimeClient.prototype, "send")
+      .mockImplementation(async () => toolUseTurn() as any);
+
+    const err = await run().then(
+      () => null,
+      (e) => e,
+    );
+    expect(err.message).toMatch(/Exceeded maximum conversation turns \(80\)/);
+    // 80 turns of identical usage, so the totals are the per-turn figures × 80.
+    expect(err.usage.turns).toBe(80);
+    expect(err.usage.inputTokens).toBe(1000 * 80);
+    expect(err.usage.cacheReadTokens).toBe(5000 * 80);
+  });
+
+  test("a mid-run SDK failure carries forward what earlier turns cost", async () => {
+    let call = 0;
+    jest
+      .spyOn(BedrockRuntimeClient.prototype, "send")
+      .mockImplementation(async () => {
+        if (call++ === 0) return toolUseTurn() as any;
+        throw new Error("fetch failed");
+      });
+
+    const err = await run().then(
+      () => null,
+      (e) => e,
+    );
+    // The original error is preserved so transient-fetch detection still works.
+    expect(err.message).toBe("fetch failed");
+    expect(err.usage).toEqual(
+      expect.objectContaining({ inputTokens: 1000, turns: 1 }),
+    );
+  });
+
+  test("a failure on the very first turn reports zero spend, not undefined", async () => {
+    jest
+      .spyOn(BedrockRuntimeClient.prototype, "send")
+      .mockImplementation(async () => {
+        throw new Error("fetch failed");
+      });
+
+    const err = await run().then(
+      () => null,
+      (e) => e,
+    );
+    expect(err.usage).toEqual(
+      expect.objectContaining({ inputTokens: 0, turns: 0 }),
+    );
+  });
+});

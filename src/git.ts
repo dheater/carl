@@ -45,6 +45,15 @@ export function getHeadSha(workspaceRoot: string): string {
   }
 }
 
+/** Like getHeadSha, but returns null outside a repo instead of throwing. */
+export function getHeadShaOrNull(workspaceRoot: string): string | null {
+  try {
+    return getHeadSha(workspaceRoot);
+  } catch {
+    return null;
+  }
+}
+
 export function getGitDiff(workspaceRoot: string): string | null {
   try {
     return execSync("git diff HEAD", {

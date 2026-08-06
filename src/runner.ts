@@ -35,6 +35,7 @@ import type {
   AgentRunResponse,
   AgentRunner,
 } from "./types";
+import { AgentRunError, attachUsage } from "./types";
 
 export class AuggieRunner implements AgentRunner {
   async run(request: AgentRunRequest): Promise<AgentRunResponse> {
@@ -617,32 +618,50 @@ export class BedrockRunner implements AgentRunner {
         )
       : BEDROCK_TOOLS;
 
+    // failure paths below, so a run that throws still reports what it cost.
+    const usageSoFar = (turns: number): UsageSummary => ({
+      source: "bedrock",
+      modelId,
+      inputTokens: totalInputTokens,
+      outputTokens: totalOutputTokens,
+      cacheReadTokens: totalCacheReadTokens,
+      cacheWriteTokens: totalCacheWriteTokens,
+      latencyMs: Date.now() - start,
+      turns,
+    });
+
     for (let turn = 0; turn < maxTurns; turn++) {
-      const response = await this.client.send(
-        new ConverseCommand({
-          modelId,
-          messages: withTrailingCachePoint(messages),
-          ...(effort !== "low" && {
-            additionalModelRequestFields: {
-              thinking: {
-                type: "enabled",
-                budget_tokens: effortBudget(effort),
+      let response;
+      try {
+        response = await this.client.send(
+          new ConverseCommand({
+            modelId,
+            messages: withTrailingCachePoint(messages),
+            ...(effort !== "low" && {
+              additionalModelRequestFields: {
+                thinking: {
+                  type: "enabled",
+                  budget_tokens: effortBudget(effort),
+                },
               },
-            },
+            }),
+            // Omit toolConfig entirely when no tools remain after filtering,
+            // rather than sending a tools array with only a cachePoint entry.
+            ...(filteredTools.length > 0 && {
+              toolConfig: {
+                // static tools array; same prefix each turn
+                tools: [
+                  ...filteredTools,
+                  { cachePoint: { type: CachePointType.DEFAULT } },
+                ],
+              },
+            }),
           }),
-          // Omit toolConfig entirely when no tools remain after filtering,
-          // rather than sending a tools array with only a cachePoint entry.
-          ...(filteredTools.length > 0 && {
-            toolConfig: {
-              // static tools array; same prefix each turn
-              tools: [
-                ...filteredTools,
-                { cachePoint: { type: CachePointType.DEFAULT } },
-              ],
-            },
-          }),
-        }),
-      );
+        );
+      } catch (err) {
+        // Preserve spend from earlier turns; a mid-run network failure is not free.
+        throw attachUsage(err, usageSoFar(turn));
+      }
 
       totalInputTokens += response.usage?.inputTokens ?? 0;
       totalOutputTokens += response.usage?.outputTokens ?? 0;
@@ -663,19 +682,7 @@ export class BedrockRunner implements AgentRunner {
           .map((block) => block.text)
           .join("");
 
-        return {
-          text,
-          usage: {
-            source: "bedrock",
-            modelId,
-            inputTokens: totalInputTokens,
-            outputTokens: totalOutputTokens,
-            cacheReadTokens: totalCacheReadTokens,
-            cacheWriteTokens: totalCacheWriteTokens,
-            latencyMs: Date.now() - start,
-            turns: turn + 1,
-          },
-        };
+        return { text, usage: usageSoFar(turn + 1) };
       } else if (stopReason === "tool_use") {
         const toolResults: ContentBlock[] = [];
 
@@ -716,12 +723,16 @@ export class BedrockRunner implements AgentRunner {
           content: toolResults,
         });
       } else {
-        throw new Error(`Unexpected stop reason: ${stopReason}`);
+        throw new AgentRunError(
+          `Unexpected stop reason: ${stopReason}`,
+          usageSoFar(turn + 1),
+        );
       }
     }
 
-    throw new Error(
+    throw new AgentRunError(
       `Exceeded maximum conversation turns (${maxTurns}). Break the task into smaller steps or use --model to select a larger model.`,
+      usageSoFar(maxTurns),
     );
   }
 }

@@ -13,9 +13,11 @@ import type {
   AgentRunResponse,
   UsageSummary,
 } from "./types";
+import { AgentRunError } from "./types";
 
 jest.mock("./git", () => ({
   getCurrentBranch: jest.fn().mockReturnValue("main"),
+  getHeadShaOrNull: jest.fn().mockReturnValue("abc123"),
   getGitStatus: jest.fn().mockReturnValue({
     isRepo: true,
     trackedChanged: [],
@@ -432,6 +434,161 @@ describe("runSkill", () => {
     const runIds = new Set(allEvents.map((e: any) => e.run_id));
     expect(runIds.size).toBe(1);
   });
+
+  function readEvents(): any[] {
+    const eventsPath = path.join(configDir, "events.jsonl");
+    return fs
+      .readFileSync(eventsPath, "utf-8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+  }
+
+  test("emits skill and prompt events for pr-review", async () => {
+    await runSkill(
+      workspaceRoot,
+      "pr-review",
+      "review this",
+      "test-model",
+      "high",
+      new MockRunner("draft updated", {
+        source: "bedrock",
+        modelId: "us.anthropic.claude-sonnet-4-6",
+        inputTokens: 100,
+        outputTokens: 50,
+      }),
+    );
+
+    const events = readEvents();
+    const kinds = events.map((e) => e.event);
+    expect(kinds).toContain("skill");
+    expect(kinds).toContain("prompt");
+
+    const prompt = events.find((e) => e.event === "prompt");
+    expect(prompt.meta.usage.inputTokens).toBe(100);
+    expect(computeCost(prompt.meta.usage)).toBeGreaterThan(0);
+  });
+
+  test("stamps workspace, git context, effort, and invocation_id on every event", async () => {
+    await runSkill(
+      workspaceRoot,
+      "code",
+      "build it",
+      "test-model",
+      "low",
+      new MockRunner("# Summary\n\nDone.", undefined, [
+        {
+          tool: "bash",
+          inputSummary: "ls",
+          outputBytes: 4,
+          durationMs: 1,
+          error: false,
+        },
+      ]),
+    );
+
+    const events = readEvents();
+    expect(events.length).toBeGreaterThan(1);
+    for (const e of events) {
+      expect(e.workspace).toBe(workspaceRoot);
+      expect(e.git_branch).toBe("main");
+      expect(e.git_sha).toBe("abc123");
+      expect(e.effort).toBe("low");
+      expect(e.invocation_id).toBeDefined();
+    }
+    // One process is one invocation, even across event types.
+    expect(new Set(events.map((e) => e.invocation_id)).size).toBe(1);
+  });
+
+  test("two runs in one process share invocation_id but not run_id", async () => {
+    for (const prompt of ["first", "second"]) {
+      await runSkill(
+        workspaceRoot,
+        "pr-review",
+        prompt,
+        "test-model",
+        "high",
+        new MockRunner("draft"),
+      );
+    }
+
+    const events = readEvents();
+    expect(new Set(events.map((e) => e.invocation_id)).size).toBe(1);
+    expect(new Set(events.map((e) => e.run_id)).size).toBe(2);
+  });
+
+  test("records tokens spent by a run that fails at max turns", async () => {
+    const spentBeforeFailure: UsageSummary = {
+      source: "bedrock",
+      modelId: "us.anthropic.claude-sonnet-4-6",
+      inputTokens: 1000,
+      outputTokens: 5000,
+      cacheReadTokens: 900_000,
+      cacheWriteTokens: 20_000,
+      turns: 80,
+    };
+    const runner: AgentRunner = {
+      async run() {
+        throw new AgentRunError(
+          "Exceeded maximum conversation turns (80).",
+          spentBeforeFailure,
+        );
+      },
+    };
+
+    await expect(
+      runSkill(
+        workspaceRoot,
+        "code",
+        "loop forever",
+        "test-model",
+        "medium",
+        runner,
+      ),
+    ).rejects.toThrow("Exceeded maximum conversation turns");
+
+    const skillEvent = readEvents().find((e) => e.event === "skill");
+    expect(skillEvent.meta.status).toBe("error");
+    expect(skillEvent.meta.usage).toEqual(spentBeforeFailure);
+    expect(computeCost(skillEvent.meta.usage)).toBeGreaterThan(0);
+  });
+
+  test("records tokens spent before a non-runner error", async () => {
+    const runner: AgentRunner = {
+      async run() {
+        const err: any = new Error("boom");
+        err.usage = {
+          source: "bedrock",
+          modelId: "us.anthropic.claude-sonnet-4-6",
+          inputTokens: 42,
+        };
+        throw err;
+      },
+    };
+
+    await expect(
+      runSkill(workspaceRoot, "code", "x", "test-model", "medium", runner),
+    ).rejects.toThrow("boom");
+
+    const skillEvent = readEvents().find((e) => e.event === "skill");
+    expect(skillEvent.meta.usage.inputTokens).toBe(42);
+  });
+
+  test("omits usage from the skill event when a failure spent nothing", async () => {
+    const runner: AgentRunner = {
+      async run() {
+        throw new Error("config error before any request");
+      },
+    };
+
+    await expect(
+      runSkill(workspaceRoot, "code", "x", "test-model", "medium", runner),
+    ).rejects.toThrow("config error");
+
+    const skillEvent = readEvents().find((e) => e.event === "skill");
+    expect(skillEvent.meta.status).toBe("error");
+    expect(skillEvent.meta.usage).toBeUndefined();
+  });
 });
 
 describe("loadCarlConfig two-file merge", () => {
@@ -583,7 +740,8 @@ describe("computeCost", () => {
       cacheWriteTokens: 20_000,
       cacheReadTokens: 50_000,
     });
-    expect(cost).toBeCloseTo(0.144, 5);
+    // 0.1 in + 0.05 out + 0.025 cache write + 0.005 cache read
+    expect(cost).toBeCloseTo(0.18, 5);
   });
 
   test("opus: input only", () => {
@@ -592,6 +750,43 @@ describe("computeCost", () => {
       modelId: "us.anthropic.claude-opus-4-5-20251101-v1:0",
       inputTokens: 1_000_000,
     });
-    expect(cost).toBeCloseTo(15.0, 5);
+    expect(cost).toBeCloseTo(5.0, 5);
+  });
+
+  test("fable: input only", () => {
+    const cost = computeCost({
+      source: "bedrock",
+      modelId: "us.anthropic.claude-fable-5",
+      inputTokens: 1_000_000,
+    });
+    expect(cost).toBeCloseTo(10.0, 5);
+  });
+
+  test("cache multipliers are 1.25x input for write and 0.1x for read", () => {
+    for (const modelId of [
+      "us.anthropic.claude-opus-4-8",
+      "us.anthropic.claude-sonnet-4-6",
+      "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+      "us.anthropic.claude-fable-5",
+    ]) {
+      const input = computeCost({ source: "b", modelId, inputTokens: 1e6 })!;
+      const write = computeCost({
+        source: "b",
+        modelId,
+        cacheWriteTokens: 1e6,
+      })!;
+      const read = computeCost({ source: "b", modelId, cacheReadTokens: 1e6 })!;
+      expect(write).toBeCloseTo(input * 1.25, 5);
+      expect(read).toBeCloseTo(input * 0.1, 5);
+    }
+  });
+
+  test("returns null for an unpriced model and warns once", () => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    const usage = { source: "openai", modelId: "gpt5.4", inputTokens: 1000 };
+    expect(computeCost(usage)).toBeNull();
+    expect(computeCost(usage)).toBeNull();
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
   });
 });

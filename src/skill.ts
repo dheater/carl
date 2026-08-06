@@ -1,6 +1,12 @@
-import { getGitStatus, getCurrentBranch, getGitDiff } from "./git";
+import {
+  getGitStatus,
+  getCurrentBranch,
+  getGitDiff,
+  getHeadShaOrNull,
+} from "./git";
 import { getSkillOutputPath } from "./editor";
 import type { AgentRunner, UsageSummary, EffortLevel } from "./types";
+import { attachUsage, usageFromError } from "./types";
 
 import { randomUUID } from "crypto";
 import * as path from "path";
@@ -12,12 +18,19 @@ const CARL_RULES_DIR = path.join(__dirname, "..", "rules");
 const GLOBAL_SKILLS_DIR = path.join(os.homedir(), ".augment", "skills");
 const LOCAL_CONFIG_DIR = ".carl";
 
-function getGlobalConfigDir(): string {
+export function getGlobalConfigDir(): string {
   return (
     process.env.CARL_CONFIG_DIR ?? path.join(os.homedir(), ".config", "carl")
   );
 }
-const EVENTS_LOG_FILE = "events.jsonl";
+export const EVENTS_LOG_FILE = "events.jsonl";
+
+/**
+ * Identifies one `carl` process. A single invocation can run a skill more than
+ * once (`carl pr-review` re-runs on validation failure), so `run_id` alone
+ * over-counts invocations.
+ */
+const INVOCATION_ID = randomUUID();
 
 type PromptMeta = {
   prompt_chars: number;
@@ -36,6 +49,8 @@ type SkillMeta = {
   untracked_after: number;
   output_path: string | null;
   output_exists: boolean;
+  /** Usage accumulated before the failure; absent on success (see PromptMeta). */
+  usage?: UsageSummary;
 };
 
 type ToolCallMeta = {
@@ -47,12 +62,28 @@ type ToolCallMeta = {
 type TimingEvent = {
   timestamp: string;
   run_id: string;
+  invocation_id: string;
   event: "prompt" | "skill" | "tool_call";
   subject: string;
   duration_ms: number;
   skill: string;
   model: string;
+  effort: EffortLevel;
+  workspace: string;
+  git_branch: string | null;
+  git_sha: string | null;
   meta?: PromptMeta | SkillMeta | ToolCallMeta;
+};
+
+/** Fields shared by every event emitted during one skill run. */
+type RunContext = {
+  runId: string;
+  skill: string;
+  model: string;
+  effort: EffortLevel;
+  workspace: string;
+  gitBranch: string | null;
+  gitSha: string | null;
 };
 
 type CarlConfig = {
@@ -243,34 +274,66 @@ function writeTimingEvent(event: TimingEvent): void {
   fs.appendFileSync(eventsLogPath, `${JSON.stringify(event)}\n`, "utf-8");
 }
 
-function logTimingDuration(
+function buildRunContext(
   workspaceRoot: string,
   runId: string,
+  skill: string,
+  model: string,
+  effort: EffortLevel,
+): RunContext {
+  return {
+    runId,
+    skill,
+    model,
+    effort,
+    workspace: workspaceRoot,
+    gitBranch: getCurrentBranch(workspaceRoot),
+    gitSha: getHeadShaOrNull(workspaceRoot),
+  };
+}
+
+function emitEvent(
+  ctx: RunContext,
   event: TimingEvent["event"],
   subject: string,
   durationMs: number,
-  skill: string,
-  model: string,
+  meta?: PromptMeta | SkillMeta | ToolCallMeta,
+): void {
+  writeTimingEvent({
+    timestamp: new Date().toISOString(),
+    run_id: ctx.runId,
+    invocation_id: INVOCATION_ID,
+    event,
+    subject,
+    duration_ms: durationMs,
+    skill: ctx.skill,
+    model: ctx.model,
+    effort: ctx.effort,
+    workspace: ctx.workspace,
+    git_branch: ctx.gitBranch,
+    git_sha: ctx.gitSha,
+    meta,
+  });
+}
+
+/**
+ * Milestone events use this; tool calls go through `emitEvent` directly.
+ */
+function logTimingDuration(
+  ctx: RunContext,
+  event: TimingEvent["event"],
+  subject: string,
+  durationMs: number,
   meta?: PromptMeta | SkillMeta,
 ): void {
-  if (skill !== "pr-review") {
-    writeTimingEvent({
-      timestamp: new Date().toISOString(),
-      run_id: runId,
-      event,
-      subject,
-      duration_ms: durationMs,
-      skill,
-      model,
-      meta,
-    });
-  }
+  emitEvent(ctx, event, subject, durationMs, meta);
   console.log(`[Timing] ${event} duration ${durationMs}ms ${subject}`);
 }
 
 export function buildSkillInstruction(
   skill: string,
   workspaceRoot?: string,
+  gitBranch?: string | null,
 ): string {
   const rules = loadRules(skill);
   const skillContent = loadSkillFile(skill);
@@ -284,7 +347,7 @@ export function buildSkillInstruction(
   instruction += skillContent || `Follow the ${skill} skill.`;
 
   if (skill === "review" && workspaceRoot) {
-    const branch = getCurrentBranch(workspaceRoot);
+    const branch = gitBranch ?? getCurrentBranch(workspaceRoot);
     const isTicketBranch = branch && branch !== "main" && branch !== "master";
 
     instruction += "\n\n---\n\n# Commit message\n\n";
@@ -309,22 +372,40 @@ export function buildSkillInstruction(
   return instruction;
 }
 
-// Per-million-token prices (USD) for each model family.
-// Cache write is charged at 1.25× the input rate; cache read at 0.1× the input rate.
-// Source: Anthropic pricing page (Sonnet/Haiku/Opus tiers).
-const MODEL_RATES: Array<{
+// Per-million-token prices (USD) by model family, most specific pattern first.
+// Cache write is charged at 1.25x the input rate (5-minute TTL); cache read at
+// 0.1x the input rate.
+//
+// Reviewed 2026-08-06 against the published Anthropic first-party rates.
+// CAVEAT: carl calls Bedrock, which is a separate price list from the
+// first-party API. aws.amazon.com/bedrock/pricing renders its Anthropic rows
+// dynamically and only the Sonnet 5 footnote was retrievable ($2/$10 promo
+// through 2026-08-31, then $3/$15). Sonnet 4.6, Haiku 4.5, and Opus Bedrock
+// rates below are first-party figures used as a stand-in. Costs are estimates;
+// reconcile against AWS Cost Explorer before trusting them to the cent.
+//
+type ModelRate = {
   pattern: RegExp;
   input: number;
   output: number;
   cacheWrite: number;
   cacheRead: number;
-}> = [
+};
+
+const MODEL_RATES: ModelRate[] = [
+  {
+    pattern: /fable|mythos/i,
+    input: 10.0,
+    output: 50.0,
+    cacheWrite: 12.5,
+    cacheRead: 1.0,
+  },
   {
     pattern: /opus/i,
-    input: 15.0,
-    output: 75.0,
-    cacheWrite: 18.75,
-    cacheRead: 1.5,
+    input: 5.0,
+    output: 25.0,
+    cacheWrite: 6.25,
+    cacheRead: 0.5,
   },
   {
     pattern: /sonnet/i,
@@ -335,18 +416,50 @@ const MODEL_RATES: Array<{
   },
   {
     pattern: /haiku/i,
-    input: 0.8,
-    output: 4.0,
-    cacheWrite: 1.0,
-    cacheRead: 0.08,
+    input: 1.0,
+    output: 5.0,
+    cacheWrite: 1.25,
+    cacheRead: 0.1,
   },
 ];
 
+/**
+ * Fingerprint of the rate table above, derived from its contents so it changes
+ * automatically when any number does. Metrics compare this against the value
+ * cached alongside each run's cost and reprice when it differs — a hand-bumped
+ * version constant would eventually be forgotten during a rate edit, silently
+ * leaving stale costs in the cache.
+ */
+export const RATES_FINGERPRINT: string = MODEL_RATES.map(
+  (r) =>
+    `${r.pattern.source}:${r.input}/${r.output}/${r.cacheWrite}/${r.cacheRead}`,
+).join("|");
+
+const warnedUnpricedModels = new Set<string>();
+
+/**
+ * Estimated USD cost of a run at *current* rates, or null when the model has no
+ * known rates (non-Anthropic backends). Returning null keeps unpriced runs
+ * distinguishable from genuinely-free ones; callers must not coerce it to 0.
+ *
+ * Deliberately not historical: these metrics exist to show whether changes to
+ * carl made it cheaper, so every run is priced with one rate table. Pricing each
+ * run at the rates in effect on its own date would make a vendor price change
+ * look like a regression (or an improvement) in carl.
+ */
 export function computeCost(usage: UsageSummary): number | null {
   const { modelId } = usage;
   if (!modelId) return null;
   const rates = MODEL_RATES.find((r) => r.pattern.test(modelId));
-  if (!rates) return null;
+  if (!rates) {
+    if (!warnedUnpricedModels.has(modelId)) {
+      warnedUnpricedModels.add(modelId);
+      console.warn(
+        `[Cost] No pricing for model "${modelId}" — reporting it as unpriced.`,
+      );
+    }
+    return null;
+  }
   const cost =
     ((usage.inputTokens ?? 0) * rates.input +
       (usage.outputTokens ?? 0) * rates.output +
@@ -438,6 +551,7 @@ function buildSkillEventMeta(
   gitStatusBefore: GitStatusCounts,
   retryCount: number,
   errorType?: "network" | "exception",
+  usage?: UsageSummary,
 ): SkillMeta {
   const gitStatusAfter = countGitStatus(workspaceRoot);
   const outputPath = getSkillOutputRelativePath(workspaceRoot, skill);
@@ -454,6 +568,7 @@ function buildSkillEventMeta(
     output_exists: outputPath
       ? fs.existsSync(path.join(workspaceRoot, outputPath))
       : false,
+    ...(usage && { usage }),
   };
 }
 
@@ -480,6 +595,7 @@ export async function runSkill(
   const skillStartTime = Date.now();
   const gitStatusBefore = countGitStatus(workspaceRoot);
   const excludedTools = getExcludedTools(skill);
+  const ctx = buildRunContext(workspaceRoot, runId, skill, model, effort);
 
   if (!runner) {
     throw new Error(
@@ -487,7 +603,7 @@ export async function runSkill(
     );
   }
 
-  let instruction = buildSkillInstruction(skill, workspaceRoot);
+  let instruction = buildSkillInstruction(skill, workspaceRoot, ctx.gitBranch);
   if (initialPrompt) {
     instruction += `\n\n# User request\n\n${initialPrompt}`;
   }
@@ -520,46 +636,31 @@ export async function runSkill(
           excludedTools,
           effort,
           onToolCall: (event) => {
-            writeTimingEvent({
-              timestamp: new Date().toISOString(),
-              run_id: runId,
-              event: "tool_call",
-              subject: event.tool,
-              duration_ms: event.durationMs ?? 0,
-              skill,
-              model,
-              meta: {
-                input_summary: event.inputSummary ?? "",
-                output_bytes: event.outputBytes ?? 0,
-                error: event.error,
-              },
+            emitEvent(ctx, "tool_call", event.tool, event.durationMs ?? 0, {
+              input_summary: event.inputSummary ?? "",
+              output_bytes: event.outputBytes ?? 0,
+              error: event.error,
             });
           },
         });
         response = result.text;
         usage = result.usage;
         const promptDuration = Date.now() - promptStart;
-        logTimingDuration(
-          workspaceRoot,
-          runId,
-          "prompt",
-          `${skill}/${model}`,
-          promptDuration,
-          skill,
-          model,
-          {
-            prompt_chars: instruction.length,
-            response_chars: response.length,
-            ...(usage && { usage }),
-          },
-        );
+        logTimingDuration(ctx, "prompt", `${skill}/${model}`, promptDuration, {
+          prompt_chars: instruction.length,
+          response_chars: response.length,
+          ...(usage && { usage }),
+        });
       } catch (err) {
         if (attempt < MAX_FETCH_RETRIES && isTransientFetchError(err)) {
           shouldRetry = true;
         } else if (isTransientFetchError(err)) {
-          throw new NetworkUnavailableError(
+          const networkError = new NetworkUnavailableError(
             `Network unavailable after ${MAX_FETCH_RETRIES + 1} attempts — run \`carl ${skill}\` to retry.`,
           );
+          // Carry the failed attempt's spend forward onto the replacement error.
+          const spent = usageFromError(err);
+          throw spent ? attachUsage(networkError, spent) : networkError;
         } else {
           throw err;
         }
@@ -577,13 +678,10 @@ export async function runSkill(
     );
 
     logTimingDuration(
-      workspaceRoot,
-      runId,
+      ctx,
       "skill",
       skill,
       Date.now() - skillStartTime,
-      skill,
-      model,
       buildSkillEventMeta(
         workspaceRoot,
         skill,
@@ -596,13 +694,10 @@ export async function runSkill(
     return { response };
   } catch (err) {
     logTimingDuration(
-      workspaceRoot,
-      runId,
+      ctx,
       "skill",
       skill,
       Date.now() - skillStartTime,
-      skill,
-      model,
       buildSkillEventMeta(
         workspaceRoot,
         skill,
@@ -610,6 +705,7 @@ export async function runSkill(
         gitStatusBefore,
         retryCount,
         classifySkillError(err),
+        usageFromError(err),
       ),
     );
     throw err;
