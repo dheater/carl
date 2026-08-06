@@ -121,7 +121,7 @@ export const DEFAULT_MODELS: Record<string, string> = {
 
 export const DEFAULT_EFFORTS: Record<string, EffortLevel> = {
   code: "medium",
-  review: "high",
+  review: "medium",
   "pr-review": "high",
 };
 
@@ -159,10 +159,7 @@ function readConfigFile(configPath: string): CarlConfig {
   }
 }
 
-export function loadCarlConfig(
-  workspaceRoot: string,
-  createIfMissing = true,
-): CarlConfig {
+export function loadCarlConfig(workspaceRoot: string): CarlConfig {
   const globalConfigDir = getGlobalConfigDir();
   const globalConfigPath = path.join(globalConfigDir, "config.json");
   const localConfigPath = path.join(
@@ -175,7 +172,6 @@ export function loadCarlConfig(
   const localExists = fs.existsSync(localConfigPath);
 
   if (!globalExists && !localExists) {
-    if (!createIfMissing) return {};
     const defaults: CarlConfig = {
       backend: "bedrock",
       models: { ...DEFAULT_MODELS },
@@ -191,10 +187,6 @@ export function loadCarlConfig(
 
   const globalConfig = globalExists ? readConfigFile(globalConfigPath) : {};
   const localConfig = localExists ? readConfigFile(localConfigPath) : {};
-
-  // Local overrides global field-by-field within nested objects so that, e.g.,
-  // a local { efforts: { review: "low" } } does not silently drop global
-  // { efforts: { code: "high" } }.
   return {
     ...globalConfig,
     ...localConfig,

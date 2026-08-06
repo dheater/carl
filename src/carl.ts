@@ -466,7 +466,7 @@ async function main(): Promise<void> {
       return;
     }
 
-    const carlConfig = loadCarlConfig(workspaceRoot, command !== "pr-review");
+    const carlConfig = loadCarlConfig(workspaceRoot);
     switch (command) {
       case "code": {
         if (args.length > 2) {

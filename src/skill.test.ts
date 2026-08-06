@@ -633,7 +633,7 @@ describe("loadCarlConfig two-file merge", () => {
       "utf-8",
     );
 
-    const config = loadCarlConfig(workspaceRoot, false);
+    const config = loadCarlConfig(workspaceRoot);
 
     // local field wins
     expect(config.efforts?.review).toBe("low");
@@ -672,7 +672,7 @@ describe("loadCarlConfig two-file merge", () => {
       "utf-8",
     );
 
-    const config = loadCarlConfig(workspaceRoot, false);
+    const config = loadCarlConfig(workspaceRoot);
     // Local sub-field wins.
     expect(config.providers?.bedrock?.region).toBe("eu-west-1");
     // Global sub-field not overridden by local survives.
