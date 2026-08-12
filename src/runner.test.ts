@@ -5,12 +5,41 @@ import {
   BedrockRuntimeClient,
   ConverseCommand,
 } from "@aws-sdk/client-bedrock-runtime";
+import { execSync } from "child_process";
 import {
   isBlockedBashCommand,
   BLOCKED_COMMAND_ERROR,
   BedrockRunner,
   BEDROCK_SYSTEM_PROMPT,
+  BEDROCK_MODEL_IDS,
+  resolveAwsAccountId,
 } from "./runner";
+
+// ── resolveAwsAccountId / BEDROCK_MODEL_IDS ARN shape ────────────────────────
+
+describe("resolveAwsAccountId", () => {
+  test("returns a string of digits or null — never throws", () => {
+    const id = resolveAwsAccountId();
+    if (id !== null) {
+      expect(id).toMatch(/^\d+$/);
+    }
+  });
+});
+
+describe("BEDROCK_MODEL_IDS ARN shape", () => {
+  test("every value is either a bare profile ID or a valid us-east-1 ARN", () => {
+    for (const [name, value] of Object.entries(BEDROCK_MODEL_IDS)) {
+      const isArnOrProfileId =
+        value.startsWith("arn:aws:bedrock:us-east-1:") ||
+        value.startsWith("us.anthropic.");
+      expect({ name, value, isArnOrProfileId }).toMatchObject({
+        name,
+        value,
+        isArnOrProfileId: true,
+      });
+    }
+  });
+});
 
 // ── isBlockedBashCommand ──────────────────────────────────────────────────────
 

@@ -740,7 +740,7 @@ describe("computeCost", () => {
       cacheWriteTokens: 20_000,
       cacheReadTokens: 50_000,
     });
-    // 0.1 in + 0.05 out + 0.025 cache write + 0.005 cache read
+    // base rates: 0.1 in + 0.05 out + 0.025 cache write + 0.005 cache read
     expect(cost).toBeCloseTo(0.18, 5);
   });
 

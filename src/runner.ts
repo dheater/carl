@@ -8,23 +8,50 @@ import {
   ToolResultBlock,
   CachePointType,
 } from "@aws-sdk/client-bedrock-runtime";
+import { NodeHttpHandler } from "@smithy/node-http-handler";
 import { execSync, spawnSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 
-// Using US region inference profiles for lower latency.
+// us-east-1 inference profile ARNs.
+// Using the ARN form pins routing to us-east-1 (no cross-region fees).
+// The bare "us.anthropic.*" IDs let Bedrock route across east-1/east-2/west-2,
+// which incurs cross-region transfer charges.
+//
+// The account ID is resolved once at startup from the active AWS profile via
+// `aws sts get-caller-identity`. If that call fails (no credentials, no CLI),
+// the code falls back to the bare profile ID (cross-region routing).
+export function resolveAwsAccountId(): string | null {
+  try {
+    return execSync("aws sts get-caller-identity --query Account --output text", {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 10000,
+    }).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+const _awsAccountId = resolveAwsAccountId();
+
+function usEast1Arn(profileId: string): string {
+  if (!_awsAccountId) return profileId;
+  return `arn:aws:bedrock:us-east-1:${_awsAccountId}:inference-profile/${profileId}`;
+}
+
 export const BEDROCK_MODEL_IDS: Record<string, string> = {
-  sonnet5: "us.anthropic.claude-sonnet-5",
-  "sonnet4.6": "us.anthropic.claude-sonnet-4-6",
-  "sonnet4.5": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-  sonnet4: "us.anthropic.claude-sonnet-4-20250514-v1:0",
-  "haiku4.5": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-  "opus4.8": "us.anthropic.claude-opus-4-8",
-  "opus4.7": "us.anthropic.claude-opus-4-7",
-  "opus4.6": "us.anthropic.claude-opus-4-6-v1",
-  "opus4.5": "us.anthropic.claude-opus-4-5-20251101-v1:0",
-  "opus4.1": "us.anthropic.claude-opus-4-1-20250805-v1:0",
-  fable5: "us.anthropic.claude-fable-5",
+  sonnet5: usEast1Arn("us.anthropic.claude-sonnet-5"),
+  "sonnet4.6": usEast1Arn("us.anthropic.claude-sonnet-4-6"),
+  "sonnet4.5": usEast1Arn("us.anthropic.claude-sonnet-4-5-20250929-v1:0"),
+  sonnet4: usEast1Arn("us.anthropic.claude-sonnet-4-20250514-v1:0"),
+  "haiku4.5": usEast1Arn("us.anthropic.claude-haiku-4-5-20251001-v1:0"),
+  "opus4.8": usEast1Arn("us.anthropic.claude-opus-4-8"),
+  "opus4.7": usEast1Arn("us.anthropic.claude-opus-4-7"),
+  "opus4.6": usEast1Arn("us.anthropic.claude-opus-4-6-v1"),
+  "opus4.5": usEast1Arn("us.anthropic.claude-opus-4-5-20251101-v1:0"),
+  "opus4.1": usEast1Arn("us.anthropic.claude-opus-4-1-20250805-v1:0"),
+  fable5: usEast1Arn("us.anthropic.claude-fable-5"),
 };
 
 import type {
@@ -492,11 +519,31 @@ export const BEDROCK_SYSTEM_PROMPT =
   "Issue all independent tool calls in the same turn — never wait for one result before requesting the next.\n\n" +
   "Prefer write_file over repeated str_replace when making many edits to a file.";
 
+// Error names that indicate regional capacity/routing problems.
+// These are the errors that cross-region profiles exist to route around.
+// Logged to stderr so we can evaluate whether paying for cross-region is worth it.
+const TRANSIENT_ERROR_NAMES = new Set([
+  "ServiceUnavailableException",
+  "ThrottlingException",
+  "ModelNotReadyException",
+]);
+
+function logUnavailability(region: string, modelId: string, err: any): void {
+  const name: string = err?.name ?? "UnknownError";
+  const msg: string = err?.message ?? String(err);
+  process.stderr.write(
+    `[bedrock-unavailable] region=${region} model=${modelId} error=${name}: ${msg}\n`,
+  );
+}
+
 export class BedrockRunner implements AgentRunner {
   private readonly client: BedrockRuntimeClient;
 
-  constructor(region: string) {
-    this.client = new BedrockRuntimeClient({ region });
+  constructor(private readonly region: string) {
+    this.client = new BedrockRuntimeClient({
+      region,
+      requestHandler: new NodeHttpHandler({ requestTimeout: 8000 }),
+    });
   }
 
   private executeTool(
@@ -664,6 +711,10 @@ export class BedrockRunner implements AgentRunner {
           }),
         );
       } catch (err) {
+        // Log regional capacity failures so we can evaluate cross-region costs.
+        if (TRANSIENT_ERROR_NAMES.has((err as any)?.name)) {
+          logUnavailability(this.region, modelId, err);
+        }
         // Preserve spend from earlier turns; a mid-run network failure is not free.
         throw attachUsage(err, usageSoFar(turn));
       }
