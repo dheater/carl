@@ -8,7 +8,6 @@ import {
   ToolResultBlock,
   CachePointType,
 } from "@aws-sdk/client-bedrock-runtime";
-import { NodeHttpHandler } from "@smithy/node-http-handler";
 import { execSync, spawnSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
@@ -542,7 +541,6 @@ export class BedrockRunner implements AgentRunner {
   constructor(private readonly region: string) {
     this.client = new BedrockRuntimeClient({
       region,
-      requestHandler: new NodeHttpHandler({ requestTimeout: 8000 }),
     });
   }
 
