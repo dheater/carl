@@ -1,7 +1,5 @@
 # Git Policy
 
-Never stage/commit/push/rebase/merge/reset --hard/cherry-pick/delete-branch without explicit user permission.
+Never stage, commit, push, rebase, merge, `reset --hard`, cherry-pick, or delete a branch unless the request says to.
 
-Before any dangerous op: show modified files + proposed commit message, ask, wait for approval.
-
-Exception: user says "commit" or "push" in the same request.
+Do not ask for approval either — this session has no interactive channel, so a question only stalls it. Name the files you changed in your summary; the human commits.

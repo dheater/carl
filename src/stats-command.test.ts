@@ -56,7 +56,6 @@ describe("parseStatsArgs", () => {
   });
 });
 
-
 describe("cmdStats", () => {
   let tmpDir: string;
   let stdout: string[];

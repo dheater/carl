@@ -100,11 +100,11 @@ export function buildPrReviewDraft(
     `# Append \`||| COMMENT\` blocks below \`## Review comments\`. Two formats:`,
     `#`,
     `#   ||| COMMENT inline <path>:<line>`,
-    `#   <what the problem is — then why it matters and how it happens>`,
+    `#   <what is wrong, in plain language — then what to do about it>`,
     `#   ||| END`,
     `#`,
     `#   ||| COMMENT overall`,
-    `#   <prose rationale>`,
+    `#   <plain-language comment about the PR as a whole>`,
     `#   ||| END`,
     `#`,
     `# Inline line numbers must reference new-side lines that appear in the PR diff hunks below.`,
@@ -268,7 +268,7 @@ export function validateInlineCommentsHaveRationale(
     const hasProse = proseLines.some((l) => l.trim().length > 0);
     if (!hasProse) {
       errors.push(
-        `${label}: missing a rationale line — inline comment must open with a prose line naming the problem (WHAT is broken), then why it matters — do not start with a code fence`,
+        `${label}: starts with a code fence — an inline comment must open with a prose line saying what is wrong, in plain language, before any code`,
       );
     }
   });

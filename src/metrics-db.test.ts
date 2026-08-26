@@ -357,8 +357,8 @@ describe("ingestFile: hygiene filters", () => {
     expect(runs()).toHaveLength(0);
   });
 
-  test("skips unrecognized event types such as Auggie.create", () => {
-    write([makeEvent({ event: "Auggie.create" })]);
+  test("skips unrecognized event types", () => {
+    write([makeEvent({ event: "some.unrecognized.event" })]);
     expect(ingestFile(db, logPath).eventsSkipped).toBe(1);
   });
 

@@ -12,9 +12,22 @@ export interface AgentRunRequest {
   workspaceRoot: string;
   skill: string;
   model: string;
+  /**
+   * Who the agent is and how it works: carl's rules plus the skill definition.
+   * Carried as the deployment persona, which is an order-0 system-prompt
+   * section — the reason the rules' `[ABSOLUTE — overrides all]` framing is
+   * true rather than aspirational.
+   */
+  persona: string;
+  /** The request and its context: workspace, diff, and the user's prompt. */
   instruction: string;
-  excludedTools?: string[];
   effort: EffortLevel;
+  /**
+   * Reviewing skills must not change the workspace. Enforced by the runtime's
+   * sandbox rather than by withholding write tools, so `bash` cannot route
+   * around it.
+   */
+  readOnly: boolean;
   onToolCall?: (event: ToolCallEvent) => void;
 }
 

@@ -2,26 +2,23 @@
 
 import {
   runSkill,
+  runSkillWithValidation,
+  resolveValidation,
   DEFAULT_MODELS,
   DEFAULT_EFFORTS,
+  DEFAULT_MAX_RETRIES,
   getSkillModel,
   getSkillEffort,
   loadCarlConfig,
+  type SkillValidation,
 } from "./skill";
 import type { EffortLevel } from "./types";
 import { cmdStats } from "./stats-command";
-import { AuggieRunner, BedrockRunner, BEDROCK_MODEL_IDS } from "./runner";
+import { DshRunner, BEDROCK_MODEL_IDS } from "./dsh-runner";
 import type { AgentRunner } from "./types";
 import { collectPrompt, openFileInEditor, getSkillOutputPath } from "./editor";
-import {
-  parsePrUrl,
-  checkGhCli,
-  checkRepoMatch,
-  fetchPrMetadata,
-  fetchPrDiff,
-  checkNotForkPr,
-  createPendingReview,
-} from "./github";
+import { checkGhCli, fetchPrMetadata, fetchPrDiff } from "./github";
+import { checkTuicrCli, openPrReviewInTuicr } from "./tuicr";
 import {
   getPrReviewDraftPath,
   buildPrReviewDraft,
@@ -39,57 +36,21 @@ import * as os from "os";
 import * as path from "path";
 import { spawnSync } from "child_process";
 
-const VALID_BACKENDS = ["auggie", "bedrock"] as const;
-
-function getBackend(
-  skill: string,
-  config: ReturnType<typeof loadCarlConfig>,
-): string {
-  const backend =
-    config.backends?.[skill as keyof NonNullable<typeof config.backends>] ||
-    config.backend;
-  if (backend) {
-    if (!(VALID_BACKENDS as readonly string[]).includes(backend)) {
-      throw new Error(
-        `Invalid backend "${backend}" in config.json.\n` +
-          `Valid options: ${VALID_BACKENDS.join(", ")}.`,
-      );
-    }
-    return backend;
-  }
-  throw new Error(
-    `No backend configured. Set "backend" in ~/.config/carl/config.json.\n` +
-      `Valid options: ${VALID_BACKENDS.join(", ")}.`,
-  );
-}
-
-function createRunner(
-  skill: string,
-  model: string,
-  carlConfig: ReturnType<typeof loadCarlConfig>,
-): AgentRunner {
-  const backend = getBackend(skill, carlConfig);
-
-  if (backend === "auggie") {
-    return new AuggieRunner();
-  }
-
+/**
+ * There is one runner: a DeepSeek Harness runtime on Bedrock. A stale
+ * `"backend"` in config.json is ignored rather than rejected, since the field
+ * only ever had one valid value by the time it was removed.
+ */
+function createRunner(skill: string, model: string): AgentRunner {
   if (!BEDROCK_MODEL_IDS[model]) {
     const supportedModels = Object.keys(BEDROCK_MODEL_IDS).join(", ");
     throw new Error(
-      `Model "${model}" is not supported by Bedrock backend.\n` +
-        `Supported Bedrock models: ${supportedModels}\n` +
-        `Either:\n` +
-        `  1. Change model to a supported Bedrock model in ~/.config/carl/config.json\n` +
-        `  2. Set "backends": {"${skill}": "auggie"} to use auggie for ${skill} skill\n` +
-        `  3. Change global "backend" to "auggie" or remove it`,
+      `Model "${model}" is not a known Bedrock model.\n` +
+        `Supported models: ${supportedModels}\n` +
+        `Set a supported model for ${skill} in ~/.config/carl/config.json.`,
     );
   }
-  const region =
-    carlConfig.providers?.bedrock?.region ??
-    process.env.AWS_REGION ??
-    "us-east-1";
-  return new BedrockRunner(region);
+  return new DshRunner();
 }
 
 function collectCommandPrompt(
@@ -108,13 +69,73 @@ function collectCommandPrompt(
   return userInput || null;
 }
 
+/**
+ * `carl ask` and `carl plan`: one read-only session that answers in prose and
+ * leaves the workspace alone. Neither validates — there is nothing to check when
+ * nothing changed — so this is `carl code` without the loop.
+ *
+ * Returns whether a session ran, so `plan` can tell the human what to do with a
+ * plan and stay quiet when there is none.
+ */
+async function cmdReadOnlyPrompt(
+  workspaceRoot: string,
+  skill: "ask" | "plan",
+  model: string,
+  effort: EffortLevel,
+  header: string,
+  promptFile?: string,
+): Promise<boolean> {
+  const initialPrompt = collectCommandPrompt(promptFile, header);
+  if (!initialPrompt) {
+    console.log("No prompt provided. Cancelled.");
+    return false;
+  }
+
+  await runSkill(
+    workspaceRoot,
+    skill,
+    initialPrompt,
+    model,
+    effort,
+    createRunner(skill, model),
+  );
+  const outputPath = getSkillOutputPath(workspaceRoot, skill);
+  if (fs.existsSync(outputPath)) openFileInEditor(outputPath);
+  return true;
+}
+
+async function cmdPlan(
+  workspaceRoot: string,
+  model: string,
+  effort: EffortLevel,
+  promptFile?: string,
+): Promise<void> {
+  const ran = await cmdReadOnlyPrompt(
+    workspaceRoot,
+    "plan",
+    model,
+    effort,
+    "# What should Carl plan?",
+    promptFile,
+  );
+  if (!ran) return;
+  // A plan is only worth writing if something acts on it, and the file is the
+  // whole handoff: `carl code --plan` re-reads it, edits included.
+  const planPath = path.relative(
+    workspaceRoot,
+    getSkillOutputPath(workspaceRoot, "plan"),
+  );
+  console.log(
+    `Plan saved to ${planPath}. Edit it, then run \`carl code --plan\` to implement it.`,
+  );
+}
+
 async function cmdReview(
   workspaceRoot: string,
   model: string,
   effort: EffortLevel,
-  carlConfig: ReturnType<typeof loadCarlConfig>,
 ): Promise<void> {
-  const runner = createRunner("review", model, carlConfig);
+  const runner = createRunner("review", model);
   await runSkill(
     workspaceRoot,
     "review",
@@ -127,58 +148,129 @@ async function cmdReview(
   if (fs.existsSync(outputPath)) openFileInEditor(outputPath);
 }
 
-async function cmdCode(
+/**
+ * `carl code` and `carl feedback`: one session that changes the workspace, then
+ * the configured check, then a repair loop. They differ only in the skill and the
+ * question asked in the editor, so they share the outcome reporting below.
+ */
+async function cmdValidatedPrompt(
   workspaceRoot: string,
+  skill: "code" | "feedback",
+  header: string,
   model: string,
   effort: EffortLevel,
-  carlConfig: ReturnType<typeof loadCarlConfig>,
+  validation: SkillValidation | undefined,
   promptFile?: string,
 ): Promise<void> {
-  const initialPrompt = collectCommandPrompt(
-    promptFile,
-    "# What should Carl implement?",
-  );
+  const initialPrompt = collectCommandPrompt(promptFile, header);
   if (!initialPrompt) {
     console.log("No prompt provided. Cancelled.");
     return;
   }
 
-  await runSkill(
+  const result = await runSkillWithValidation(
     workspaceRoot,
-    "code",
+    skill,
     initialPrompt,
     model,
     effort,
-    createRunner("code", model, carlConfig),
+    createRunner(skill, model),
+    validation,
   );
-  const outputPath = getSkillOutputPath(workspaceRoot, "code");
+  const outputPath = getSkillOutputPath(workspaceRoot, skill);
   if (fs.existsSync(outputPath)) openFileInEditor(outputPath);
+
+  // Reported after the editor closes so it is the last thing on screen, and as a
+  // non-zero exit so a keybind or script can tell a red run from a green one.
+  // Not thrown: the notes are worth reading either way.
+  const outcome = result.validation;
+  if (outcome && !outcome.ok) {
+    const runs = `${outcome.runs} run${outcome.runs === 1 ? "" : "s"}`;
+    // What to do next depends on why carl stopped: more budget helps an exhausted
+    // one and is useless on a stalled or timed-out one.
+    const [what, next] = {
+      budget: [
+        `Validation is still failing after ${runs}`,
+        `Fix it yourself, or run \`carl ${skill}\` again saying what to fix. Raise \`maxRetries\` in .carl/config.json to give carl more attempts.`,
+      ],
+      stalled: [
+        `Validation is still failing after ${runs}, and the last session changed no files`,
+        `Another run would repeat it, so carl stopped. Say what to fix and run \`carl ${skill}\` again.`,
+      ],
+      timeout: [
+        `Validation did not finish, so nothing here is checked`,
+        `Run the command yourself to see why, or point \`validate\` at a faster check.`,
+      ],
+      passed: [`Validation failed`, `Run the command yourself to see why.`],
+    }[outcome.stopped];
+    console.error(
+      red(
+        `${what}: \`${outcome.result.command}\`\n` +
+          `Carl left the workspace as the last run made it — nothing was reverted.\n` +
+          next,
+      ),
+    );
+    if (outcome.result.output.trim()) {
+      console.error(`\n${outcome.result.output.trim()}`);
+    }
+    process.exitCode = 1;
+  }
+}
+
+/**
+ * Notes from an earlier skill, used as this command's prompt: `carl code --plan`
+ * takes the plan, `carl feedback --review` takes the review.
+ *
+ * The absence is checked here rather than left to the generic "prompt file not
+ * found", because the fix is a different command and `carl reset` is a common way
+ * to arrive here.
+ */
+function savedNotesPromptFile(
+  command: string,
+  flag: string,
+  source: string,
+  workspaceRoot: string,
+): string {
+  const notesPath = getSkillOutputPath(workspaceRoot, source);
+  if (!fs.existsSync(notesPath)) {
+    throw new Error(
+      `\`carl ${command} ${flag}\` found nothing at ${path.relative(workspaceRoot, notesPath)}.\n` +
+        `That file is written by \`carl ${source}\` and deleted by \`carl reset\`.\n` +
+        `Run \`carl ${source}\` first, or pass a prompt file: carl ${command} <file>`,
+    );
+  }
+  return notesPath;
+}
+
+/**
+ * `carl pr-review` takes the PR number of the repo in the current directory;
+ * gh and tuicr both resolve owner/repo from the checkout. A URL used to be
+ * required, so say so instead of failing on "not a number".
+ */
+function parsePrNumber(arg: string): number {
+  if (!/^#?\d+$/.test(arg.trim())) {
+    throw new Error(
+      `\`carl pr-review\` takes the PR number of the repo in the current directory.\n` +
+        `Usage: carl pr-review <pr-number>   (e.g. carl pr-review 42)\n` +
+        `(received: ${JSON.stringify(arg)})`,
+    );
+  }
+  return parseInt(arg.trim().replace(/^#/, ""), 10);
 }
 
 async function cmdPrReview(
   workspaceRoot: string,
-  url: string,
+  prArg: string,
   model: string,
   effort: EffortLevel,
-  carlConfig: ReturnType<typeof loadCarlConfig>,
 ): Promise<void> {
-  if (!url.startsWith("http://") && !url.startsWith("https://")) {
-    throw new Error(
-      `\`carl pr-review\` now requires a GitHub PR URL.\n` +
-        `Usage: carl pr-review https://github.com/owner/repo/pull/NUMBER\n` +
-        `(received: ${JSON.stringify(url)})`,
-    );
-  }
+  const number = parsePrNumber(prArg);
 
   checkGhCli();
+  checkTuicrCli();
 
-  const { owner, repo, number } = parsePrUrl(url);
-
-  checkRepoMatch(workspaceRoot, owner, repo);
-
-  console.log(`Fetching PR metadata for ${owner}/${repo}#${number}...`);
-  const metadata = fetchPrMetadata(owner, repo, number);
-  checkNotForkPr(metadata, owner, repo);
+  console.log(`Fetching PR metadata for #${number}...`);
+  const metadata = fetchPrMetadata(workspaceRoot, number);
 
   const localHead = getHeadSha(workspaceRoot);
   if (localHead !== metadata.headSha) {
@@ -201,18 +293,16 @@ async function cmdPrReview(
   }
 
   console.log(`Fetching PR diff...`);
-  const prDiff = fetchPrDiff(owner, repo, number);
+  const prDiff = fetchPrDiff(workspaceRoot, number);
   if (!prDiff.trim()) {
-    throw new Error(
-      `No diff for ${owner}/${repo}#${number}. Nothing to review.`,
-    );
+    throw new Error(`No diff for PR #${number}. Nothing to review.`);
   }
 
   const agentDir = path.join(workspaceRoot, ".agent/notes");
   fs.mkdirSync(agentDir, { recursive: true });
   const draftPath = getPrReviewDraftPath(workspaceRoot);
   const draftRel = path.relative(workspaceRoot, draftPath);
-  const prIdentity = `${owner}/${repo}#${number}`;
+  const prIdentity = metadata.url;
   fs.writeFileSync(
     draftPath,
     buildPrReviewDraft(prDiff, prIdentity, metadata.headSha),
@@ -223,19 +313,19 @@ async function cmdPrReview(
     if (!fs.existsSync(draftPath)) {
       throw new Error(
         `Draft ${draftRel} is missing.\n` +
-          `Reset .agent and re-run: carl pr-review ${url}`,
+          `Reset .agent and re-run: carl pr-review ${number}`,
       );
     }
   }
 
-  const runner = createRunner("pr-review", model, carlConfig);
+  const runner = createRunner("pr-review", model);
 
   const initialPrompt = [
     `Review GitHub PR ${prIdentity}.`,
     `The draft file is at \`${draftRel}\` and contains the full PR diff.`,
     `Append \`||| COMMENT\` blocks under \`## Review comments\` per the pr-review skill.`,
     `Inline comments must reference a path + new-side line that appears in a diff hunk; multi-line ranges must lie within a single hunk.`,
-    `Every inline comment must open with a sentence naming WHAT the problem is, then explain why it matters. Do not start with impact or importance — state the defect first.`,
+    `Every inline comment must open with a sentence saying what is wrong, in plain language, then say what you would do about it. Write for a junior developer reading it on GitHub with no other context.`,
     `Write prose comments only — do not write suggestion blocks.`,
     `Read any workspace file you need for context. Do not modify any file outside the draft.`,
   ].join("\n");
@@ -285,7 +375,7 @@ async function cmdPrReview(
       ...errors.map((e) => `- ${e}`),
       ``,
       `Inline comments must reference a path + new-side line that appears in a PR diff hunk (added \`+\` or context line); multi-line ranges must lie within a single hunk.`,
-      `Inline comments must also open with a prose line naming WHAT the problem is (the defect or broken contract), then why it matters.`,
+      `Inline comments must also open with a prose line saying what is wrong, in plain language, before anything else.`,
       ``,
       `Edit \`${draftRel}\`: remove or fix only the failing comments and keep the valid ones. Do not modify any other file.`,
     ].join("\n");
@@ -305,7 +395,7 @@ async function cmdPrReview(
     throw new Error(
       `Invalid review comments remain in ${draftRel}:\n` +
         errors.map((e) => `  - ${e}`).join("\n") +
-        `\nEdit ${draftRel} by hand and re-run: carl pr-review ${url}`,
+        `\nEdit ${draftRel} by hand and re-run: carl pr-review ${number}`,
     );
   }
 
@@ -316,18 +406,12 @@ async function cmdPrReview(
   }
 
   console.log(
-    `Creating pending review on ${prIdentity} (${comments.length} comment(s))...`,
+    `Opening PR #${number} in tuicr with ${comments.length} drafted comment(s)...`,
   );
-  const reviewId = createPendingReview(
-    owner,
-    repo,
-    number,
-    metadata.headSha,
-    comments,
-  );
+  await openPrReviewInTuicr(workspaceRoot, number, comments, `carl (${model})`);
   console.log(
-    `Pending review created (id: ${reviewId}).\n` +
-      `Open the PR on GitHub and submit it.`,
+    `tuicr closed. The drafted comments are still in ${draftRel}.\n` +
+      `Nothing was sent to GitHub unless you ran \`:submit\` in tuicr.`,
   );
 }
 
@@ -373,14 +457,23 @@ function usage(): void {
   console.error("");
   console.error("Commands:");
   console.error(
-    `  code [<file>] Read prompt from file or open editor; run the implementation skill (default model: ${DEFAULT_MODELS.code}, default effort: ${DEFAULT_EFFORTS.code})`,
+    `  code [<file>|--plan] Read prompt from file, from the saved plan (--plan), or open editor; run the implementation skill (default model: ${DEFAULT_MODELS.code}, default effort: ${DEFAULT_EFFORTS.code})`,
+  );
+  console.error(
+    `  ask [<file>]  Ask a question about the code; read-only session, answer written to .agent/notes/ask.md (default effort: ${DEFAULT_EFFORTS.ask})`,
+  );
+  console.error(
+    `  plan [<file>] Plan a change without making it; read-only session, plan written to .agent/notes/plan.md for \`carl code --plan\` (default effort: ${DEFAULT_EFFORTS.plan})`,
   );
   console.error(
     `  review        Run reviewer once (cleanup/refactor your own local changes) (default effort: ${DEFAULT_EFFORTS.review})`,
   );
+  console.error(
+    `  feedback [<file>|--review] Assess review comments, apply the correct ones, and report how each was disposed of; validates like \`code\` (default effort: ${DEFAULT_EFFORTS.feedback})`,
+  );
   console.error("  reset         Clear .agent/");
   console.error(
-    `  pr-review <github-pr-url>  Fetch PR diff, draft review comments in .agent/notes/pr-review.md, and upload as a pending GitHub review (requires gh CLI) (default effort: ${DEFAULT_EFFORTS["pr-review"]})`,
+    `  pr-review <pr-number>  Draft review comments for a PR of the repo in the current directory, then open them in tuicr to review, edit, and submit (requires gh and tuicr) (default effort: ${DEFAULT_EFFORTS["pr-review"]})`,
   );
   console.error(
     "  stats         Report cost, tokens, turns, and duration per skill from the event log",
@@ -403,7 +496,14 @@ function usage(): void {
     "Config: ~/.config/carl/config.json (global default), .carl/config.json (local override, optional)",
   );
   console.error(
-    `  { "backend": "bedrock", "models": ${JSON.stringify(DEFAULT_MODELS, null, 2)}, "effort": "high", "efforts": { "code": "medium", "review": "high", "pr-review": "high" } }`,
+    `  { "models": ${JSON.stringify(DEFAULT_MODELS, null, 2)}, "effort": "high", "efforts": { "code": "medium", "review": "high", "pr-review": "high" } }`,
+  );
+  console.error("");
+  console.error(
+    `  "validate": "<shell command>"   After \`carl code\` or \`carl feedback\`, run this to check the work; on failure, re-run the skill with the output`,
+  );
+  console.error(
+    `  "maxRetries": <n>               Repair runs allowed after a failed validation (default: ${DEFAULT_MAX_RETRIES}, 0 to report only)`,
   );
 }
 
@@ -471,30 +571,80 @@ async function main(): Promise<void> {
       case "code": {
         if (args.length > 2) {
           console.error(
-            "Usage: carl [--model <model>] [--effort <level>] code [<prompt-file>]",
+            "Usage: carl [--model <model>] [--effort <level>] code [<prompt-file> | --plan]",
           );
           process.exit(1);
         }
         const { model: resolvedModel, effort: resolvedEffort } =
           resolveSkillArgs("code", model, effort, carlConfig);
-        await cmdCode(
+        await cmdValidatedPrompt(
           workspaceRoot,
+          "code",
+          "# What should Carl implement?",
           resolvedModel,
           resolvedEffort,
-          carlConfig,
-          args[1],
+          resolveValidation(carlConfig),
+          args[1] === "--plan"
+            ? savedNotesPromptFile("code", "--plan", "plan", workspaceRoot)
+            : args[1],
         );
+        break;
+      }
+      case "feedback": {
+        if (args.length > 2) {
+          console.error(
+            "Usage: carl [--model <model>] [--effort <level>] feedback [<feedback-file> | --review]",
+          );
+          process.exit(1);
+        }
+        const { model: resolvedModel, effort: resolvedEffort } =
+          resolveSkillArgs("feedback", model, effort, carlConfig);
+        await cmdValidatedPrompt(
+          workspaceRoot,
+          "feedback",
+          "# Paste the review feedback for Carl to assess",
+          resolvedModel,
+          resolvedEffort,
+          resolveValidation(carlConfig),
+          args[1] === "--review"
+            ? savedNotesPromptFile(
+                "feedback",
+                "--review",
+                "review",
+                workspaceRoot,
+              )
+            : args[1],
+        );
+        break;
+      }
+      case "ask":
+      case "plan": {
+        if (args.length > 2) {
+          console.error(
+            `Usage: carl [--model <model>] [--effort <level>] ${command} [<prompt-file>]`,
+          );
+          process.exit(1);
+        }
+        const { model: resolvedModel, effort: resolvedEffort } =
+          resolveSkillArgs(command, model, effort, carlConfig);
+        if (command === "plan") {
+          await cmdPlan(workspaceRoot, resolvedModel, resolvedEffort, args[1]);
+        } else {
+          await cmdReadOnlyPrompt(
+            workspaceRoot,
+            "ask",
+            resolvedModel,
+            resolvedEffort,
+            "# What do you want to ask Carl?",
+            args[1],
+          );
+        }
         break;
       }
       case "review": {
         const { model: resolvedModel, effort: resolvedEffort } =
           resolveSkillArgs("review", model, effort, carlConfig);
-        await cmdReview(
-          workspaceRoot,
-          resolvedModel,
-          resolvedEffort,
-          carlConfig,
-        );
+        await cmdReview(workspaceRoot, resolvedModel, resolvedEffort);
         break;
       }
       case "reset":
@@ -502,7 +652,7 @@ async function main(): Promise<void> {
         break;
       case "pr-review": {
         if (args.length !== 2) {
-          console.error("Usage: carl pr-review <github-pr-url>");
+          console.error("Usage: carl pr-review <pr-number>");
           process.exit(1);
         }
         const { model: resolvedModel, effort: resolvedEffort } =
@@ -512,7 +662,6 @@ async function main(): Promise<void> {
           args[1],
           resolvedModel,
           resolvedEffort,
-          carlConfig,
         );
         break;
       }

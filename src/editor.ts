@@ -51,6 +51,17 @@ function getEditorCommand(): string {
   return process.env.EDITOR || process.env.VISUAL || "vi";
 }
 
+/**
+ * Whether a terminal editor has a terminal to take over.
+ *
+ * A backgrounded, piped, or CI run has no tty, and `vi` handed a dead stdin does
+ * not fail — it waits. A `carl feedback` run in a script sat on an invisible nvim
+ * for twenty minutes before anyone noticed, so every editor call checks first.
+ */
+function isInteractive(): boolean {
+  return Boolean(process.stdin.isTTY && process.stdout.isTTY);
+}
+
 function runEditor(filePath: string) {
   const editorCommand = getEditorCommand();
   const [editor, ...editorArgs] = splitCommand(editorCommand);
@@ -81,6 +92,13 @@ function throwIfEditorFailed(
 export function collectPrompt(
   header = "# What would you like to work on?",
 ): string | null {
+  if (!isInteractive()) {
+    throw new Error(
+      `No terminal here, so carl cannot open an editor to ask for the prompt.\n` +
+        `Write the prompt to a file and pass it: carl <command> <file>`,
+    );
+  }
+
   const template = [header, "# Leave blank to cancel.", ""].join("\n");
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-prompt-"));
@@ -105,6 +123,11 @@ export function collectPrompt(
 }
 
 export function openFileInEditor(filePath: string): void {
+  if (!isInteractive()) {
+    console.log(`Wrote ${filePath}`);
+    return;
+  }
+
   const { result } = runEditor(filePath);
 
   if (result.error || result.status !== 0) {

@@ -1,0 +1,170 @@
+# carl's DeepSeek Harness runtime composition.
+#
+# Booted by `dsh-jsonrpc-agent` (from @deepseek-ai/dsh-sdk-jsonrpc-demo) and
+# driven over stdio JSON-RPC by src/dsh-runner.ts. stdout is reserved for
+# JSON-RPC frames: no console logger, no terminal UI, no approval prompt.
+#
+# This is an explicit composition rather than a `~/.dsh` profile over
+# `dsh-base`. carl wants a small, versioned, minimal-context tool surface it
+# owns, and it wants stdout purity guaranteed by construction rather than by
+# hoping no inherited bundle row mounts a stdout logger.
+#
+# Every value carl varies per run arrives through the environment, because the
+# config is loaded once per subprocess and carl spawns one subprocess per skill
+# run. See src/dsh-runner.ts for the producing side of this contract.
+
+# ── Entry point ───────────────────────────────────────────────────────────────
+
+# Stdio JSON-RPC server; without it there is no SDK client surface.
+- id: sdk-jsonrpc-server
+  name: "@deepseek-ai/dsh-sdk-jsonrpc-server"
+
+# ── Agent spine ───────────────────────────────────────────────────────────────
+
+# One bundle plugin carrying the services every agent needs: llm, session,
+# tools, system-prompt, agent, agent-loop, tool-bash.
+- id: agent-spine
+  name: "@deepseek-ai/dsh-agent-spine-demo"
+  config:
+    # carl's rules plus the skill definition, as the deployment persona. This is
+    # the whole point of the SDK integration: an order-0 system-prompt section
+    # outranks the AGENTS.md-style guidance a workspace loader would demote it
+    # to. Empty would drop the section, so a missing variable is a bug, not a
+    # default worth papering over.
+    persona: !!js "process.env.CARL_PERSONA ?? ''"
+
+    # carl's rules open with an `[ABSOLUTE — overrides all]` block, and a
+    # "You are an AI agent powered by DeepSeek Harness" preamble ahead of it
+    # weakens exactly the ordering carl moved to the SDK to obtain. carl also
+    # composes its own workspace context into the instruction, so the harness's
+    # dynamic snapshots would be a second, differently-worded copy.
+    includeHarnessIdentity: false
+    includeRuntimeContext: false
+
+    # Code Mode: the model writes one TypeScript program that calls tools as
+    # functions instead of emitting a streak of one-tool-per-turn calls. `code`
+    # rather than `both`, so `run_code` is the only directly callable tool and
+    # the collapse is enforced rather than merely offered.
+    tools:
+      mode: code
+
+    # carl composes its own workspace context into the prompt and owns its own
+    # skill catalog on disk, so the harness loaders for both would duplicate
+    # context carl already pays for.
+    workspaceContext: false
+    skills:
+      enabled: false
+
+    # Background jobs, goal tracking, and the model-facing job controls are all
+    # orchestration, and orchestration is the human's job in carl.
+    toolJobs: false
+    goals: false
+    toolBash:
+      enableRunInBackground: false
+
+# ── Model route ───────────────────────────────────────────────────────────────
+
+# Amazon Bedrock, as a pi-ai catalog route serving its installed catalog
+# unchanged. No `models` list: pi-ai refuses an explicit endpoint override on
+# Bedrock (SigV4 needs a region and credentials a baseURL cannot carry), so a
+# hand-declared entry — an inference-profile ARN, for instance — resolves to a
+# route that cannot authenticate. The catalog pins the us-east-1 endpoint, so
+# region selection lives there rather than here, and the model id is what carl
+# chooses. See BEDROCK_MODEL_IDS for why those ids must be `us.`-prefixed
+# inference profiles and why that leaves the cost model unchanged.
+#
+# No credential reference either: SigV4 resolves through the ambient AWS chain,
+# so no secret is named here and none needs to be.
+- id: llm
+  name: "@deepseek-ai/dsh-llm-pi-ai"
+  config:
+    providers:
+      amazon-bedrock:
+        # carl's --effort, mapped to a pi-ai thinking level by REASONING_EFFORT
+        # in src/dsh-runner.ts. This is the profile's default level, which pi-ai
+        # uses whenever the request names no effort — and carl's never do,
+        # because effort is a per-run deployment choice here, not a per-turn one.
+        reasoning: !!js "process.env.CARL_REASONING ?? 'medium'"
+
+# ── Tool backends ─────────────────────────────────────────────────────────────
+
+# Managed child-process groups behind the bash executor.
+- id: subprocess
+  name: "@deepseek-ai/dsh-subprocess-local"
+
+# The file-effect boundary. carl's read-only skills (review, pr-review) used to
+# be enforced by deleting write tools from the request's tool list, which is a
+# suggestion the model can only obey — nothing stopped `bash` from running
+# `tee`. `read-only` is enforcement, so the skill's contract is now real.
+- id: sandbox
+  name: "@deepseek-ai/dsh-sandbox-local"
+
+- id: sandbox-policy
+  name: "@deepseek-ai/dsh-sandbox-policy"
+  config:
+    mode: !!js "process.env.CARL_SANDBOX_MODE ?? 'workspace-write'"
+    workspaceRoot: !!js process.env.CARL_CWD ?? process.cwd()
+
+- id: shell-env
+  name: "@deepseek-ai/dsh-shell-env"
+
+- id: bash-sandbox
+  name: "@deepseek-ai/dsh-bash-sandbox"
+  config:
+    timeoutMs: 60000
+
+- id: fs-sandbox
+  name: "@deepseek-ai/dsh-fs-sandbox"
+
+# Nothing can answer an approval prompt: carl drives this runtime over JSON-RPC
+# with no interactive channel, so `ask` would hang the run forever. carl's
+# human-in-the-loop happens at the editor, before and after the run, not
+# per tool call — and the sandbox above is what bounds the run's effects.
+- id: approval
+  name: "@deepseek-ai/dsh-user-approval"
+  config:
+    policy: never
+
+- id: fs-observation-policy
+  name: "@deepseek-ai/dsh-fs-observation-policy"
+
+# read / write / edit — carl's read_file, write_file, str_replace.
+- id: tool-fs
+  name: "@deepseek-ai/dsh-tool-fs"
+
+# glob / grep — carl's list_files, find_symbol. A sampled over-cap result reads
+# as a complete one, and carl would rather the model see the cap.
+- id: tool-fs-search
+  name: "@deepseek-ai/dsh-tool-fs-search"
+  config:
+    sampleOverCapGlobResults: false
+
+# The Code Mode executor. One fresh worker thread per program, empty env.
+- id: code-runtime
+  name: "@deepseek-ai/dsh-code-runtime-worker-thread"
+
+# ── Session state ─────────────────────────────────────────────────────────────
+
+# Session transcripts live under carl's own config dir, not the workspace. The
+# fallback is deliberately outside the repo too, so a misconfigured spawn cannot
+# quietly start littering someone's project.
+- id: sessions
+  name: "@deepseek-ai/dsh-session-persistence-jsonl"
+  config:
+    root: !!js "process.env.CARL_SESSION_ROOT ?? `${process.env.HOME}/.config/carl/sessions`"
+
+- id: session-checkpoints
+  name: "@deepseek-ai/dsh-session-checkpoint-policy"
+
+- id: token-meter
+  name: "@deepseek-ai/dsh-token-meter"
+
+# carl's predecessor capped runs at 80 turns and died on context overflow.
+# Compaction is a strictly better bound than a turn count.
+- id: compaction-basic
+  name: "@deepseek-ai/dsh-compaction-basic"
+  config:
+    thresholdRatio: 0.8
+    retainRatio: 0.16
+    maxTokens: 8192
+    compactionRetries: 1

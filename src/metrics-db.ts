@@ -28,7 +28,6 @@ const TEST_MODELS = new Set(["test-model", "test-model-id"]);
  */
 const NON_MODEL_VALUES = new Set(["code-review"]);
 
-
 export function getMetricsDbPath(): string {
   return path.join(getGlobalConfigDir(), METRICS_DB_FILE);
 }
@@ -290,9 +289,9 @@ function resolveModelId(
 }
 
 /**
- * Auggie tool calls report placeholder zeros rather than measurements. Storing
- * them as 0 would drag duration and size percentiles toward zero, so they are
- * recorded as unknown.
+ * A backend that reports placeholder zeros instead of real measurements would
+ * drag duration and size percentiles toward zero if stored as 0, so a
+ * non-positive value is recorded as unknown rather than as a measurement.
  */
 function measuredOrNull(value: unknown): number | null {
   return typeof value === "number" && value > 0 ? value : null;

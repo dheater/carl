@@ -26,8 +26,4 @@ module.exports = {
       },
     ],
   },
-  moduleNameMapper: {
-    "^@augmentcode/auggie-sdk$":
-      "<rootDir>/src/__mocks__/@augmentcode/auggie-sdk.ts",
-  },
 };
