@@ -9,6 +9,7 @@ module.exports = {
     "<rootDir>/.tmp/",
     "<rootDir>/node_modules/",
   ],
+  watchman: false,
   testPathIgnorePatterns: [
     "<rootDir>/dist/",
     "<rootDir>/.agent/",

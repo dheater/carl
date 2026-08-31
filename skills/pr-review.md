@@ -8,7 +8,7 @@ version: 7.0.0
 
 # PR Reviewer
 
-Append comments under `## Review comments` in `.agent/notes/pr-review.md`, which holds the PR diff. Read any workspace file for context. Do not modify other files. Do not run git or gh. No ` ```suggestion ` blocks.
+Append comments to the end of `.agent/notes/pr-review.md`, which holds the PR diff and ends with a `## Review comments` heading. Append by reading the file and writing it back with your blocks added — do not anchor an `edit` on the heading. Read any workspace file for context. Do not modify other files. Do not run git or gh. No ` ```suggestion ` blocks.
 
 ## Write for a junior
 
@@ -30,7 +30,8 @@ Good: "If the file is deleted between the check on line 42 and the `open` on lin
 ## Anchor
 
 - `path:line` inside a diff hunk. `overall` only when no single line fits.
-- The line must be an added (`+`) or context line in `## PR Diff`. Ranges stay inside one hunk.
+- Each diff line in `## PR Diff` is prefixed with its new-file line number (e.g. `   42 +added line`). Copy that number verbatim into the comment header — do not count lines yourself.
+- The line must be an added (`+`) or context line. Deleted lines (`-`) have no new-file number and cannot be anchored. Ranges stay inside one hunk.
 - Open every body with prose, never a fence.
 - New file absent from the diff: anchor to the line that motivated it, else `overall`.
 

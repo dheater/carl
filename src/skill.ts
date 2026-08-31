@@ -5,6 +5,7 @@ import {
   getHeadShaOrNull,
 } from "./git";
 import { getSkillOutputPath } from "./editor";
+import { formatDuration } from "./stats-format";
 import type { AgentRunner, UsageSummary, EffortLevel } from "./types";
 import { attachUsage, usageFromError } from "./types";
 import {
@@ -207,7 +208,12 @@ export const DEFAULT_EFFORTS: Record<string, EffortLevel> = {
  */
 export const DEFAULT_MAX_RETRIES = 2;
 
-const BASE_RULE_FILES = ["carl.md"] as const;
+/**
+ * Rules every skill loads. `code-mode.md` is base because every skill runs
+ * through the same Code Mode tool surface, and the logs showed 60% of programs
+ * making one tool call or fewer — a model round-trip each, for no batching.
+ */
+const BASE_RULE_FILES = ["carl.md", "code-mode.md"] as const;
 
 /** Every other skill runs in a read-only sandbox. */
 const WRITABLE_SKILLS = new Set(["code", "feedback", "pr-review"]);
@@ -883,6 +889,11 @@ export async function runSkill(
           instruction,
           effort,
           readOnly,
+          onProgress: (line) => {
+            process.stderr.write(
+              `  [${formatDuration(Date.now() - promptStart)}] ${line}\n`,
+            );
+          },
           onToolCall: (event) => {
             if (!event.error && MUTATING_TOOLS.has(event.tool)) mutations++;
             emitEvent(ctx, "tool_call", event.tool, event.durationMs ?? 0, {

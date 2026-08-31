@@ -4,6 +4,7 @@
     "just@latest",
     "git@latest",
     "prettier@latest",
-    "nodejs@latest"
+    "nodejs@latest",
+    "typescript-language-server@latest"
   ]
 }

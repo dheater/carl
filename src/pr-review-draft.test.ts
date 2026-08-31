@@ -1,6 +1,8 @@
 import {
+  buildPrReviewDraft,
   parsePrReviewDraftComments,
   parseDiffHunks,
+  annotateDiffWithLineNumbers,
   validateCommentsInScope,
   type ReviewComment,
 } from "./pr-review-draft";
@@ -41,6 +43,47 @@ describe("pr-review draft parsing", () => {
         body: "Why:\nInline rationale.\n\n```suggestion\nfixed\n```",
       },
     ]);
+  });
+});
+
+describe("annotateDiffWithLineNumbers", () => {
+  test("prepends new-side line numbers; deleted lines get blank prefix", () => {
+    const diff = [
+      "diff --git a/src/f.ts b/src/f.ts",
+      "--- a/src/f.ts",
+      "+++ b/src/f.ts",
+      "@@ -10,3 +10,3 @@",
+      " context",
+      "-removed",
+      "+added",
+      " after",
+    ].join("\n");
+    const out = annotateDiffWithLineNumbers(diff).split("\n");
+    // Header lines unchanged
+    expect(out[0]).toBe("diff --git a/src/f.ts b/src/f.ts");
+    expect(out[3]).toBe("@@ -10,3 +10,3 @@");
+    // context line at new-side 10
+    expect(out[4]).toBe("   10  context");
+    // deleted line — blank prefix, no line number advance
+    expect(out[5]).toBe("       -removed");
+    // added line at new-side 11 (10 was context, removed didn't advance)
+    expect(out[6]).toBe("   11 +added");
+    // context line at new-side 12
+    expect(out[7]).toBe("   12  after");
+  });
+
+  test("handles multiple hunks resetting line counter", () => {
+    const diff = [
+      "diff --git a/x.ts b/x.ts",
+      "+++ b/x.ts",
+      "@@ -1,1 +1,1 @@",
+      "+first",
+      "@@ -100,1 +200,1 @@",
+      "+second",
+    ].join("\n");
+    const out = annotateDiffWithLineNumbers(diff).split("\n");
+    expect(out[3]).toBe("    1 +first");
+    expect(out[5]).toBe("  200 +second");
   });
 });
 
@@ -99,5 +142,20 @@ describe("validateCommentsInScope", () => {
     const errors = validateCommentsInScope([inline(50)], hunks);
     expect(errors).toHaveLength(1);
     expect(errors[0]).toMatch(/line 50/);
+  });
+});
+
+describe("buildPrReviewDraft", () => {
+  test("names the review-comments heading exactly once", () => {
+    // The instruction header used to quote the heading, so the model's append —
+    // an `edit` with the heading as `old_string` — matched twice and failed on
+    // every pr-review run.
+    const draft = buildPrReviewDraft(
+      "diff --git a/src/f.ts b/src/f.ts\n+++ b/src/f.ts\n@@ -1,1 +1,1 @@\n+added\n",
+      "owner/repo#1",
+      "0123456789abcdef",
+    );
+    const occurrences = draft.split("## Review comments").length - 1;
+    expect(occurrences).toBe(1);
   });
 });

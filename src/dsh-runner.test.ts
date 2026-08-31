@@ -3,6 +3,7 @@ import {
   REASONING_EFFORT,
   describeFailure,
   finalTurnReason,
+  formatProgress,
   replayToolCalls,
   sessionDirPath,
   summarizeArguments,
@@ -43,13 +44,17 @@ function stepEnd(step: number): TestEvent {
 }
 
 describe("BEDROCK_MODEL_IDS", () => {
-  test("every alias maps to a us-prefixed inference profile", () => {
+  test("every alias maps to a us-prefixed inference profile, optionally wrapped in an ARN", () => {
     const ids = Object.values(BEDROCK_MODEL_IDS);
     expect(ids.length).toBeGreaterThan(0);
     for (const id of ids) {
       // A bare `anthropic.*` id is refused by AWS: on-demand throughput is not
       // supported for these models, so only an inference profile invokes.
-      expect(id).toMatch(/^us\.anthropic\./);
+      // If AWS credentials are available, the profile is wrapped in a us-east-1 ARN
+      // to avoid cross-region costs. Otherwise, the bare profile ID is used.
+      expect(id).toMatch(
+        /^(arn:aws:bedrock:us-east-1:\d+:inference-profile\/)?us\.anthropic\./,
+      );
     }
   });
 
@@ -238,7 +243,14 @@ describe("replayToolCalls", () => {
       {
         type: "tool/call",
         time: 500,
-        data: { callId: "c1", name: "run_code", arguments: "{}" },
+        data: {
+          callId: "c1",
+          name: "run_code",
+          arguments: {
+            code: "await tools.grep({})",
+            description: "Search src",
+          },
+        },
       },
       {
         type: "tool/code-dispatch",
@@ -272,6 +284,9 @@ describe("replayToolCalls", () => {
 
     expect(seen.map((e) => e.tool)).toEqual(["grep", "run_code"]);
     expect(seen[1].durationMs).toBe(400);
+    // The program body is too long to log, so the model's own description is
+    // what makes a run_code row mineable.
+    expect(seen[1].inputSummary).toBe("Search src");
   });
 
   test("marks a failed dispatch as an error", () => {
@@ -346,6 +361,120 @@ describe("replayToolCalls", () => {
         { type: "session/title", data: { title: "x" } },
       ]),
     ).toEqual([]);
+  });
+});
+
+describe("formatProgress", () => {
+  test("names the tool and arguments of a code-mode sub-dispatch", () => {
+    expect(
+      formatProgress({
+        type: "tool/code-dispatch-start",
+        data: {
+          subCallId: "c1:code:0",
+          name: "read",
+          arguments: { file_path: "src/a.ts" },
+        },
+      }),
+    ).toBe('read {"file_path":"src/a.ts"}');
+  });
+
+  test("stays silent for the run_code wrapper its sub-calls already describe", () => {
+    expect(
+      formatProgress({
+        type: "tool/call",
+        data: { callId: "c1", name: "run_code", arguments: "{}" },
+      }),
+    ).toBeUndefined();
+  });
+
+  test("reports a native tool call that is not run_code", () => {
+    expect(
+      formatProgress({
+        type: "tool/call",
+        data: { callId: "c1", name: "bash", arguments: '{"command":"ls"}' },
+      }),
+    ).toBe('bash {"command":"ls"}');
+  });
+
+  test("reports both reasoning and visible text from the assistant", () => {
+    expect(
+      formatProgress({
+        type: "assistant/message",
+        data: {
+          message: {
+            role: "assistant",
+            content: [
+              { type: "reasoning", text: "secret deliberation" },
+              { type: "text", text: "Reading  the\nrunner" },
+            ],
+          },
+        },
+      }),
+    ).toBe("secret deliberation Reading the runner");
+  });
+
+  test("stays silent for an assistant message with no visible text", () => {
+    expect(
+      formatProgress({
+        type: "assistant/message",
+        data: { message: { role: "assistant", content: [] } },
+      }),
+    ).toBeUndefined();
+  });
+
+  test("truncates a long line so it fits one terminal row", () => {
+    const line = formatProgress({
+      type: "assistant/message",
+      data: {
+        message: { content: [{ type: "text", text: "x".repeat(500) }] },
+      },
+    });
+    expect(line).toBe(`${"x".repeat(120)}…`);
+  });
+
+  test("announces a failed sub-dispatch but not a successful one", () => {
+    const failed = {
+      subCallId: "c1:code:0",
+      name: "write",
+      arguments: {},
+      content: [],
+    };
+    expect(
+      formatProgress({
+        type: "tool/code-dispatch",
+        data: { ...failed, isError: true },
+      }),
+    ).toBe("write failed");
+    expect(
+      formatProgress({
+        type: "tool/code-dispatch",
+        data: { ...failed, isError: false },
+      }),
+    ).toBeUndefined();
+  });
+
+  test("breaks the silence of a long model request", () => {
+    expect(
+      formatProgress({ type: "step/start", data: { turn: 1, step: 2 } }),
+    ).toBe("thinking…");
+  });
+
+  test("counts a provider retry", () => {
+    expect(
+      formatProgress({
+        type: "llm/retry",
+        data: { retry: 2, maxRetries: 5, provider: "amazon-bedrock" },
+      }),
+    ).toBe("model request failed, retrying (2/5)…");
+  });
+
+  test("stays silent for events a watching human gains nothing from", () => {
+    expect(
+      formatProgress({ type: "session/title", data: { title: "x" } }),
+    ).toBeUndefined();
+    expect(
+      formatProgress({ type: "turn/start", data: { turn: 1 } }),
+    ).toBeUndefined();
   });
 });
 

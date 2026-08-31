@@ -86,18 +86,81 @@ export function parsePrReviewDraftComments(draft: string): ReviewComment[] {
   return comments;
 }
 
+/**
+ * Prepend each diff content line with its new-file line number so the model
+ * can read the number directly instead of counting from the hunk header.
+ *
+ * Format: `  42 +added line` / `  42  context line` / `      -removed line`
+ * Header lines (diff --git, ---, +++, @@, index, …) pass through unchanged.
+ */
+export function annotateDiffWithLineNumbers(diff: string): string {
+  const lines = diff.split("\n");
+  const result: string[] = [];
+  let nextLineNo: number | null = null;
+
+  for (const line of lines) {
+    if (
+      line.startsWith("diff --git") ||
+      line.startsWith("--- ") ||
+      line.startsWith("+++ ") ||
+      line.startsWith("index ") ||
+      line.startsWith("new file") ||
+      line.startsWith("deleted file") ||
+      line.startsWith("old mode") ||
+      line.startsWith("new mode") ||
+      line.startsWith("\\ No newline")
+    ) {
+      result.push(line);
+      continue;
+    }
+
+    const hunkHeader = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+    if (hunkHeader) {
+      nextLineNo = parseInt(hunkHeader[1], 10);
+      result.push(line);
+      continue;
+    }
+
+    if (nextLineNo === null) {
+      result.push(line);
+      continue;
+    }
+
+    if (line.startsWith("+") && !line.startsWith("+++")) {
+      result.push(`${String(nextLineNo).padStart(5)} ${line}`);
+      nextLineNo++;
+    } else if (line.startsWith(" ")) {
+      result.push(`${String(nextLineNo).padStart(5)} ${line}`);
+      nextLineNo++;
+    } else if (line.startsWith("-") && !line.startsWith("---")) {
+      result.push(`       ${line}`);
+    } else {
+      result.push(line);
+    }
+  }
+
+  return result.join("\n");
+}
+
 export function buildPrReviewDraft(
   diff: string,
   prIdentity: string,
   headSha: string,
 ): string {
-  const draftDiff = diff.endsWith("\n") ? diff.slice(0, -1) : diff;
+  const annotated = annotateDiffWithLineNumbers(diff);
+  const draftDiff = annotated.endsWith("\n")
+    ? annotated.slice(0, -1)
+    : annotated;
 
   return [
     `# PR Review Draft`,
     `# PR: ${prIdentity} | HEAD: ${headSha.slice(0, 8)}`,
     `#`,
-    `# Append \`||| COMMENT\` blocks below \`## Review comments\`. Two formats:`,
+    // The heading below is deliberately not quoted here. The model appends by
+    // running `edit` with the heading as its `old_string`, and `edit` refuses a
+    // match that is not unique — naming the heading in this instruction line
+    // made that edit fail on every pr-review run.
+    `# Append \`||| COMMENT\` blocks at the end of this file. Two formats:`,
     `#`,
     `#   ||| COMMENT inline <path>:<line>`,
     `#   <what is wrong, in plain language — then what to do about it>`,
@@ -107,7 +170,7 @@ export function buildPrReviewDraft(
     `#   <plain-language comment about the PR as a whole>`,
     `#   ||| END`,
     `#`,
-    `# Inline line numbers must reference new-side lines that appear in the PR diff hunks below.`,
+    `# Each diff line is prefixed with its new-file line number. Use that number verbatim in the inline comment header.`,
     ``,
     `## PR Diff`,
     ``,

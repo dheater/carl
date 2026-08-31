@@ -232,6 +232,20 @@ carl --version
 `--effort low|medium|high` overrides how much the model thinks. `low` is the
 smallest thinking budget the model offers, not none.
 
+While a skill runs, carl streams progress to **stderr** — one timestamped line
+per model request, per tool call the agent's program makes, and per thing the
+agent says on its way to the answer:
+
+```
+  [3s] thinking…
+  [7s] read {"file_path":"src/skill.ts"}
+  [9s] grep {"pattern":"runSkill"}
+```
+
+It is stderr so that redirecting stdout keeps the progress on your terminal, and
+piping stdout keeps the progress out of the pipe. `carl code 2>/dev/null`
+silences it; `carl code 2>progress.log` follows it from another window.
+
 Diagnostics are appended to `~/.config/carl/events.jsonl`, one JSON object per line.
 
 ## Ask and plan

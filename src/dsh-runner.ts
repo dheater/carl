@@ -1,5 +1,6 @@
 import assert from "assert";
 import { randomUUID } from "crypto";
+import { execSync } from "child_process";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -14,33 +15,64 @@ import {
 } from "./types";
 
 /**
+ * Resolve the AWS account ID from the active AWS profile credentials.
+ *
+ * us-east-1 inference profile ARNs route to us-east-1 only (no cross-region
+ * fees). The bare "us.anthropic.*" IDs let Bedrock route across east-1/east-2/
+ * west-2, which incurs cross-region transfer charges.
+ *
+ * The account ID is resolved once at startup from the active AWS profile via
+ * `aws sts get-caller-identity`. If that call fails (no credentials, no CLI),
+ * the code falls back to the bare profile ID (cross-region routing).
+ */
+function resolveAwsAccountId(): string | null {
+  try {
+    return (
+      execSync("aws sts get-caller-identity --query Account --output text", {
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 10000,
+      }).trim() || null
+    );
+  } catch {
+    return null;
+  }
+}
+
+const _awsAccountId = resolveAwsAccountId();
+
+function usEast1Arn(profileId: string): string {
+  if (!_awsAccountId) return profileId;
+  return `arn:aws:bedrock:us-east-1:${_awsAccountId}:inference-profile/${profileId}`;
+}
+
+/**
  * carl's model aliases mapped to Bedrock catalog ids.
  *
- * These are the cross-region `us.*` inference profiles rather than the bare
- * `anthropic.*` single-region ids, because AWS refuses on-demand invocation of
- * every current Claude model: "Retry your request with the ID or ARN of an
- * inference profile that contains this model." The us-east-1 endpoint resolves
- * the same us-east-1-owned profile the previous Bedrock backend named by ARN, so
- * the routing — and therefore the pricing CROSS_REGION_MULTIPLIER assumes — is
- * unchanged. An ARN is not an option here: dsh-llm-pi-ai refuses an explicit
- * endpoint override on Bedrock, since SigV4 needs a region and credentials that
- * a baseURL cannot carry, and an id outside the installed catalog has no route.
+ * These are wrapped in us-east-1 ARNs to avoid cross-region routing costs.
+ * The ARN format pins routing to us-east-1 (no cross-region fees), whereas the
+ * bare "us.anthropic.*" IDs let Bedrock route across east-1/east-2/west-2,
+ * incurring cross-region transfer charges.
+ *
+ * If AWS credentials are unavailable or the account ID cannot be resolved,
+ * the bare profile IDs are used and the run falls back to default routing
+ * (cross-region).
  *
  * The table stays in carl rather than deferring to the runtime's catalog because
  * carl prices its own runs, and MODEL_RATES is keyed on these ids.
  */
 export const BEDROCK_MODEL_IDS: Record<string, string> = {
-  sonnet5: "us.anthropic.claude-sonnet-5",
-  "sonnet4.6": "us.anthropic.claude-sonnet-4-6",
-  "sonnet4.5": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-  "haiku4.5": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-  opus5: "us.anthropic.claude-opus-5",
-  "opus4.8": "us.anthropic.claude-opus-4-8",
-  "opus4.7": "us.anthropic.claude-opus-4-7",
-  "opus4.6": "us.anthropic.claude-opus-4-6-v1",
-  "opus4.5": "us.anthropic.claude-opus-4-5-20251101-v1:0",
-  "opus4.1": "us.anthropic.claude-opus-4-1-20250805-v1:0",
-  fable5: "us.anthropic.claude-fable-5",
+  sonnet5: usEast1Arn("us.anthropic.claude-sonnet-5"),
+  "sonnet4.6": usEast1Arn("us.anthropic.claude-sonnet-4-6"),
+  "sonnet4.5": usEast1Arn("us.anthropic.claude-sonnet-4-5-20250929-v1:0"),
+  "haiku4.5": usEast1Arn("us.anthropic.claude-haiku-4-5-20251001-v1:0"),
+  opus5: usEast1Arn("us.anthropic.claude-opus-5"),
+  "opus4.8": usEast1Arn("us.anthropic.claude-opus-4-8"),
+  "opus4.7": usEast1Arn("us.anthropic.claude-opus-4-7"),
+  "opus4.6": usEast1Arn("us.anthropic.claude-opus-4-6-v1"),
+  "opus4.5": usEast1Arn("us.anthropic.claude-opus-4-5-20251101-v1:0"),
+  "opus4.1": usEast1Arn("us.anthropic.claude-opus-4-1-20250805-v1:0"),
+  fable5: usEast1Arn("us.anthropic.claude-fable-5"),
 };
 
 /**
@@ -84,11 +116,93 @@ type WireEvent = {
   data?: Record<string, unknown>;
 };
 
+/** Collapses whitespace and truncates, so any text fits one terminal line. */
+export function oneLine(text: string, limit: number): string {
+  const collapsed = text.replace(/\s+/g, " ").trim();
+  return collapsed.length > limit ? `${collapsed.slice(0, limit)}…` : collapsed;
+}
+
 /** A one-line stand-in for a tool's arguments, for the tool_call event log. */
 export function summarizeArguments(args: unknown, limit = 200): string {
-  const text = typeof args === "string" ? args : JSON.stringify(args ?? "");
-  const oneLine = text.replace(/\s+/g, " ").trim();
-  return oneLine.length > limit ? `${oneLine.slice(0, limit)}…` : oneLine;
+  return oneLine(
+    typeof args === "string" ? args : JSON.stringify(args ?? ""),
+    limit,
+  );
+}
+
+/**
+ * The label for one Code Mode program.
+ *
+ * A `run_code` call carries the whole program, which is thousands of characters
+ * and truncates to noise, so the model's own `description` is what gets logged.
+ * Without it every `run_code` row in the metrics DB — the most frequent tool
+ * there is — recorded an empty `input_summary` and could not be mined at all.
+ */
+export function summarizeProgram(args: unknown): string {
+  let parsed = args;
+  if (typeof args === "string") {
+    try {
+      parsed = JSON.parse(args);
+    } catch {
+      return "";
+    }
+  }
+  const description = (parsed as { description?: unknown } | null | undefined)
+    ?.description;
+  return typeof description === "string" ? oneLine(description, 200) : "";
+}
+
+/** Longest progress line carl prints; a run_code program is far longer. */
+const PROGRESS_LIMIT = 120;
+
+/** The visible text of an assistant message, including reasoning and excluding tool calls. */
+function assistantText(message: unknown): string {
+  const content = (
+    message as { content?: Array<{ type?: string; text?: string }> } | undefined
+  )?.content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((block) => block?.type === "text" || block?.type === "reasoning")
+    .map((block) => block.text ?? "")
+    .join(" ");
+}
+
+/**
+ * One progress line for a session event, or undefined for events a watching
+ * human gains nothing from.
+ *
+ * Under Code Mode the model's own calls are all `run_code`, so the sub-dispatch
+ * events inside the program are what name the actual work (`read src/a.ts`);
+ * the outer `run_code` call would only ever print its own name.
+ */
+export function formatProgress(event: WireEvent): string | undefined {
+  const data = event.data ?? {};
+
+  switch (event.type) {
+    case "step/start":
+      return "thinking…";
+    case "assistant/message": {
+      const text = assistantText(data.message);
+      return text.trim() ? oneLine(text, PROGRESS_LIMIT) : undefined;
+    }
+    case "tool/call": {
+      const name = String(data.name ?? "tool");
+      if (name === "run_code") return undefined;
+      return `${name} ${summarizeArguments(data.arguments, PROGRESS_LIMIT)}`;
+    }
+    case "tool/code-dispatch-start":
+      return `${String(data.name ?? "tool")} ${summarizeArguments(data.arguments, PROGRESS_LIMIT)}`;
+    case "tool/code-dispatch":
+      return data.isError === true
+        ? `${String(data.name ?? "tool")} failed`
+        : undefined;
+    case "llm/retry":
+      return `model request failed, retrying (${data.retry ?? "?"}/${data.maxRetries ?? "?"})…`;
+    case "compaction/start":
+      return "compacting context…";
+    default:
+      return undefined;
+  }
 }
 
 function contentBytes(content: unknown): number {
@@ -145,12 +259,14 @@ export function replayToolCalls(
   onToolCall: (event: ToolCallEvent) => void,
 ): void {
   const startedAt = new Map<string, number>();
+  const programLabels = new Map<string, string>();
 
   for (const event of events) {
     const data = event.data ?? {};
 
     if (event.type === "tool/call") {
       startedAt.set(String(data.callId), event.time ?? 0);
+      programLabels.set(String(data.callId), summarizeProgram(data.arguments));
       continue;
     }
 
@@ -180,7 +296,7 @@ export function replayToolCalls(
       const start = startedAt.get(callId);
       onToolCall({
         tool: "run_code",
-        inputSummary: "",
+        inputSummary: programLabels.get(callId) ?? "",
         outputBytes: contentBytes(result?.content),
         durationMs: start ? (event.time ?? start) - start : undefined,
         error: result?.isError === true,
@@ -283,6 +399,7 @@ export class DshRunner implements AgentRunner {
       effort,
       readOnly,
       onToolCall,
+      onProgress,
     } = request;
 
     const modelId = BEDROCK_MODEL_IDS[model];
@@ -329,7 +446,21 @@ export class DshRunner implements AgentRunner {
     });
 
     try {
-      const result = await harness.run(instruction, { sessionId });
+      // The notification stream is the only in-flight view of the run: the
+      // returned events arrive minutes later, all at once.
+      const result = await harness.run(instruction, {
+        sessionId,
+        onNotification: onProgress
+          ? (notification) => {
+              if (notification.method !== "session.event") return;
+              if (notification.params.sessionId !== sessionId) return;
+              const line = formatProgress(
+                notification.params.event as WireEvent,
+              );
+              if (line) onProgress(line);
+            }
+          : undefined,
+      });
       const events: WireEvent[] = Array.isArray(result.events)
         ? (result.events as WireEvent[])
         : [];

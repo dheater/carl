@@ -29,6 +29,7 @@ export interface AgentRunRequest {
    */
   readOnly: boolean;
   onToolCall?: (event: ToolCallEvent) => void;
+  onProgress?: (line: string) => void;
 }
 
 export interface UsageSummary {
