@@ -9,6 +9,7 @@ import {
   ingestFile,
   repriceIfRatesChanged,
   workspaceFromLogPath,
+  targetPathFrom,
   MODERN_ERA_START,
 } from "./metrics-db";
 import { RATES_FINGERPRINT } from "./skill";
@@ -259,6 +260,210 @@ describe("ingestFile: tool calls", () => {
     expect(call.duration_ms).toBeNull();
     expect(call.output_bytes).toBeNull();
   });
+
+  test("keeps the arguments and the file they name", () => {
+    write([
+      toolCall({
+        subject: "read",
+        meta: {
+          input_summary: '{"path":"src/skill.ts","offset":1,"limit":200}',
+          output_bytes: 4096,
+          error: false,
+        },
+      }),
+    ]);
+    ingestFile(db, logPath);
+
+    const [call] = db.prepare("SELECT * FROM tool_calls").all() as any[];
+    expect(call.input_summary).toBe(
+      '{"path":"src/skill.ts","offset":1,"limit":200}',
+    );
+    expect(call.target_path).toBe("src/skill.ts");
+  });
+
+  test("leaves target_path NULL for a call that names no file", () => {
+    write([toolCall({ subject: "bash" })]);
+    ingestFile(db, logPath);
+
+    const [call] = db.prepare("SELECT * FROM tool_calls").all() as any[];
+    expect(call.target_path).toBeNull();
+  });
+});
+
+describe("targetPathFrom", () => {
+  test.each([
+    ['{"path":"src/a.ts"}', "src/a.ts"],
+    ['{"file_path":"/abs/b.ts","content":"x"}', "/abs/b.ts"],
+    ['{"filePath":"c.ts"}', "c.ts"],
+    ['{"path":"a\\"b.ts"}', 'a"b.ts'],
+  ])("reads the file out of %s", (summary, expected) => {
+    expect(targetPathFrom(summary)).toBe(expected);
+  });
+
+  test.each([
+    ["no arguments at all", undefined],
+    ["a summary with no path key", '{"pattern":"foo","cwd":"."}'],
+    ["a bare string argument", "npm test"],
+    ["an empty path", '{"path":""}'],
+  ])("returns null for %s", (_label, summary) => {
+    expect(targetPathFrom(summary)).toBeNull();
+  });
+
+  test("declines a path the 200-char summary truncated mid-string", () => {
+    // No closing quote: half a path would look like a different file.
+    expect(targetPathFrom('{"path":"src/very/long/pa')).toBeNull();
+  });
+
+  test("reads the predecessor's bare-path summary for a file tool", () => {
+    // The old logger recorded one argument, not the argument object.
+    expect(targetPathFrom("src/carl.ts", "read_file")).toBe("src/carl.ts");
+    expect(targetPathFrom("src/carl.ts", "str_replace")).toBe("src/carl.ts");
+  });
+
+  test("does not read a bash command line as a path", () => {
+    expect(targetPathFrom("npm test", "bash")).toBeNull();
+    expect(targetPathFrom("No backend configured", "find_symbol")).toBeNull();
+  });
+
+  test("declines a bare summary the runner cut short", () => {
+    expect(targetPathFrom("src/a/very/long/pa…", "read_file")).toBeNull();
+  });
+
+  test("does not mistake a glob for a file", () => {
+    // A `pattern` is not a path; storing one would invent a file that never
+    // existed and count it as read.
+    expect(targetPathFrom('{"pattern":"src/**/*.ts"}')).toBeNull();
+  });
+
+  test("spells a file inside the workspace one way, however it was named", () => {
+    // The model picks the spelling and does not pick the same one twice, so an
+    // absolute read and a relative read of one file must compare equal.
+    expect(targetPathFrom('{"path":"/ws/proj/a.ts"}', "read", "/ws/proj")).toBe(
+      "a.ts",
+    );
+    expect(targetPathFrom('{"path":"./a.ts"}', "read", "/ws/proj")).toBe(
+      "a.ts",
+    );
+    expect(targetPathFrom('{"path":"src/../a.ts"}', "read", "/ws/proj")).toBe(
+      "a.ts",
+    );
+    expect(targetPathFrom("/ws/proj/a.ts", "read_file", "/ws/proj")).toBe(
+      "a.ts",
+    );
+  });
+
+  test("keeps a file outside the workspace absolute", () => {
+    // `../../etc/hosts` would read as a file in the project.
+    expect(targetPathFrom('{"path":"/etc/hosts"}', "read", "/ws/proj")).toBe(
+      "/etc/hosts",
+    );
+  });
+
+  test("normalises without a workspace to compare against", () => {
+    expect(targetPathFrom('{"path":"./a.ts"}', "read")).toBe("a.ts");
+  });
+});
+
+describe("ingestFile: per-turn detail", () => {
+  test("splits the prompt into persona and instruction", () => {
+    write([
+      promptEvent({
+        meta: {
+          prompt_chars: 4000,
+          persona_chars: 3200,
+          instruction_chars: 800,
+          response_chars: 900,
+        },
+      }),
+    ]);
+    ingestFile(db, logPath);
+
+    const [run] = runs();
+    expect(run.prompt_chars).toBe(4000);
+    expect(run.persona_chars).toBe(3200);
+    expect(run.instruction_chars).toBe(800);
+  });
+
+  test("stores the first turn, the peak prompt, and the compaction count", () => {
+    write([
+      promptEvent({
+        meta: {
+          prompt_chars: 4000,
+          response_chars: 900,
+          usage: {
+            source: "dsh-bedrock",
+            modelId: "us.anthropic.claude-sonnet-4-6",
+            turns: 3,
+            firstTurn: { inputTokens: 20, cacheWriteTokens: 40_000 },
+            turnPromptTokens: [40_020, 41_000, 40_500],
+            compactions: 1,
+          },
+        },
+      }),
+    ]);
+    ingestFile(db, logPath);
+
+    const [run] = runs();
+    expect(run.first_turn_input_tokens).toBe(20);
+    expect(run.first_turn_cache_write_tokens).toBe(40_000);
+    expect(run.first_turn_cache_read_tokens).toBeNull();
+    // The peak, not the last: a run that compacted sheds context and its final
+    // prompt is smaller than the one that forced the compaction.
+    expect(run.peak_prompt_tokens).toBe(41_000);
+    expect(run.compactions).toBe(1);
+  });
+
+  test("records the per-turn series as one row per model request", () => {
+    write([
+      promptEvent({
+        meta: {
+          prompt_chars: 10,
+          response_chars: 10,
+          usage: {
+            source: "dsh-bedrock",
+            modelId: "m",
+            turns: 2,
+            turnPromptTokens: [1000, 2500],
+          },
+        },
+      }),
+    ]);
+    ingestFile(db, logPath);
+
+    expect(
+      db
+        .prepare("SELECT turn, prompt_tokens FROM turn_tokens ORDER BY turn")
+        .all(),
+    ).toEqual([
+      { turn: 1, prompt_tokens: 1000 },
+      { turn: 2, prompt_tokens: 2500 },
+    ]);
+  });
+
+  test("re-ingesting the same prompt event does not duplicate turns", () => {
+    const event = promptEvent({
+      meta: {
+        prompt_chars: 10,
+        response_chars: 10,
+        usage: {
+          source: "dsh-bedrock",
+          modelId: "m",
+          turns: 1,
+          turnPromptTokens: [1000],
+        },
+      },
+    });
+    write([event]);
+    ingestFile(db, logPath);
+    // Rewriting the file makes it look rotated, which re-reads from byte 0.
+    write([event]);
+    fs.utimesSync(logPath, new Date(0), new Date(0));
+    ingestFile(db, logPath);
+
+    expect(
+      (db.prepare("SELECT COUNT(*) AS n FROM turn_tokens").get() as any).n,
+    ).toBe(1);
+  });
 });
 
 describe("ingestFile: incremental resume", () => {
@@ -477,6 +682,73 @@ describe("openMetricsDb: schema drift", () => {
     write([promptEvent(), makeEvent()]);
     expect(ingestFile(old, logPath).eventsAccepted).toBe(2);
     old.close();
+  });
+
+  test("a stale tool_calls table triggers the rebuild too", () => {
+    // The drift check reads every table it inserts into: a runs table that is
+    // current says nothing about the one beside it.
+    const dbPath = path.join(tmpDir, "old-tools.db");
+    let old = openMetricsDb(dbPath);
+    old.exec(
+      "DROP TABLE tool_calls;" +
+        " CREATE TABLE tool_calls (run_id TEXT, ordinal INTEGER, tool TEXT)",
+    );
+    old.close();
+
+    const warn = jest.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      old = openMetricsDb(dbPath);
+    } finally {
+      warn.mockRestore();
+    }
+    const columns = (
+      old.prepare("PRAGMA table_info(tool_calls)").all() as Array<{
+        name: string;
+      }>
+    ).map((c) => c.name);
+    expect(columns).toContain("target_path");
+    old.close();
+  });
+});
+
+describe("openMetricsDb: derivation drift", () => {
+  test("rebuilds when ingest now derives different values from the same event", () => {
+    // The column list is unchanged and tells the schema check nothing; only the
+    // recorded version reveals that every target_path was spelled differently.
+    const dbPath = path.join(tmpDir, "old-derivation.db");
+    let old = openMetricsDb(dbPath);
+    logPath = path.join(tmpDir, "derivation-events.jsonl");
+    write([promptEvent(), makeEvent()]);
+    ingestFile(old, logPath);
+    old
+      .prepare("UPDATE meta SET value = ? WHERE key = ?")
+      .run("1", "derivation_version");
+    old.close();
+
+    const warn = jest.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      old = openMetricsDb(dbPath);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("Ingest"));
+    } finally {
+      warn.mockRestore();
+    }
+    // Dropped, not migrated: the log refills it on the next ingest.
+    expect(
+      (old.prepare("SELECT COUNT(*) AS n FROM runs").get() as { n: number }).n,
+    ).toBe(0);
+    expect(ingestFile(old, logPath).eventsAccepted).toBe(2);
+    old.close();
+  });
+
+  test("a cache being created for the first time is not a rebuild", () => {
+    const warn = jest.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const fresh = openMetricsDb(path.join(tmpDir, "fresh.db"));
+      expect(warn).not.toHaveBeenCalled();
+      fresh.close();
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 

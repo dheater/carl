@@ -22,6 +22,12 @@ test:
 run *args:
     npm start -- {{args}}
 
+# Compare models on the graded fixture tasks. See bench/README.md.
+# Writes to bench/results/ and to its own carl home; the production event log is
+# untouched. `just bench --help` lists the options.
+bench *args: build
+    node dist/bench.mjs {{args}}
+
 # Build and install carl CLI to ~/.local/bin
 install: build
     @echo '#!/usr/bin/env bash' > {{home_dir}}/.local/bin/carl

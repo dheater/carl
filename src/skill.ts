@@ -39,7 +39,17 @@ export const EVENTS_LOG_FILE = "events.jsonl";
 const INVOCATION_ID = randomUUID();
 
 type PromptMeta = {
+  /** `persona_chars + instruction_chars`; kept so older rows stay comparable. */
   prompt_chars: number;
+  /**
+   * carl's rules plus the skill definition — the same text on every run of a
+   * skill, and the part a preserved context would only send once. Split out from
+   * the instruction because the two answer different questions: this one is what
+   * one-shot re-establishes, the other is what the human had to restate.
+   */
+  persona_chars: number;
+  /** Workspace context, diff, and the human's prompt: this run's own input. */
+  instruction_chars: number;
   response_chars: number;
   usage?: UsageSummary;
 };
@@ -866,7 +876,14 @@ export async function runSkill(
     instruction += `\n\n---\n\n# User request\n\n${initialPrompt}`;
   }
 
-  console.log(`Starting skill: ${skill}`);
+  // The model and route are named here because they are chosen from three places
+  // — the command line, .carl/config.json, ~/.config/carl/config.json — and a run
+  // that picked a different one than intended is otherwise invisible until the
+  // bill or the wall clock says so.
+  const route = runner.describeRoute?.();
+  console.log(
+    `Starting skill: ${skill} (model ${model}${route ? ` via ${route}` : ""}, effort ${effort})`,
+  );
 
   let response = "";
   let usage: UsageSummary | undefined;
@@ -903,6 +920,8 @@ export async function runSkill(
         const promptDuration = Date.now() - promptStart;
         logTimingDuration(ctx, "prompt", `${skill}/${model}`, promptDuration, {
           prompt_chars: persona.length + instruction.length,
+          persona_chars: persona.length,
+          instruction_chars: instruction.length,
           response_chars: response.length,
           ...(usage && { usage }),
         });

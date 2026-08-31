@@ -1,10 +1,15 @@
 import {
   BEDROCK_MODEL_IDS,
+  DEFAULT_LOCAL_BASE_URL,
   REASONING_EFFORT,
   describeFailure,
   finalTurnReason,
   formatProgress,
+  localBaseURL,
+  matchesModelName,
+  parseLocalModels,
   replayToolCalls,
+  resolveLocalModel,
   sessionDirPath,
   summarizeArguments,
   summarizeUsage,
@@ -124,6 +129,9 @@ describe("summarizeUsage", () => {
       turns: 2,
       inputTokens: 400,
       outputTokens: 60,
+      firstTurn: { inputTokens: 100, outputTokens: 20 },
+      turnPromptTokens: [100, 300],
+      compactions: 0,
     });
   });
 
@@ -177,7 +185,68 @@ describe("summarizeUsage", () => {
       source: "dsh-bedrock",
       modelId: "m",
       turns: 0,
+      // A measured zero, unlike the token fields: "did not compact" is a finding.
+      compactions: 0,
     });
+  });
+
+  test("records the first turn on its own, as the cold-start tax", () => {
+    // The totals cannot separate it: turn 3 writes cache too, so a run that
+    // re-primed 40k tokens and one that grew into 40k look identical summed.
+    const usage = summarizeUsage(
+      [
+        assistantMessage(1, {
+          inputTokens: 20,
+          outputTokens: 5,
+          cacheWriteTokens: 40_000,
+        }),
+        stepEnd(1),
+        assistantMessage(2, {
+          inputTokens: 10,
+          outputTokens: 5,
+          cacheReadTokens: 40_000,
+          cacheWriteTokens: 300,
+        }),
+        stepEnd(2),
+      ],
+      "m",
+    );
+
+    expect(usage.firstTurn).toEqual({
+      inputTokens: 20,
+      outputTokens: 5,
+      cacheWriteTokens: 40_000,
+    });
+    expect(usage.cacheWriteTokens).toBe(40_300);
+  });
+
+  test("records the per-turn prompt size, in request order", () => {
+    const usage = summarizeUsage(
+      [
+        assistantMessage(1, { inputTokens: 100, cacheWriteTokens: 900 }),
+        stepEnd(1),
+        assistantMessage(2, { inputTokens: 50, cacheReadTokens: 1000 }),
+        stepEnd(2),
+      ],
+      "m",
+    );
+
+    // Output is excluded: this is the size of the conversation being sent.
+    expect(usage.turnPromptTokens).toEqual([1000, 1050]);
+  });
+
+  test("counts compactions, which had no reader before", () => {
+    const usage = summarizeUsage(
+      [
+        assistantMessage(1, { inputTokens: 1 }),
+        { type: "compaction/start", data: {} },
+        assistantMessage(2, { inputTokens: 1 }),
+        { type: "compaction/start", data: {} },
+      ],
+      "m",
+    );
+
+    expect(usage.compactions).toBe(2);
   });
 
   test("tolerates an assistant message that carries no usage", () => {
@@ -236,8 +305,8 @@ describe("replayToolCalls", () => {
   });
 
   test("reports the outer run_code call the program arrived in", () => {
-    // Under Code Mode every model-emitted call is `run_code`, so the outer calls
-    // measure model round-trips while the inner ones measure the work.
+    // The outer call measures one model round-trip; the inner ones measure the
+    // work the program did.
     const seen = collect([
       {
         type: "tool/call",
@@ -305,8 +374,57 @@ describe("replayToolCalls", () => {
     expect(seen[0].error).toBe(true);
   });
 
-  test("marks a failed run_code result as an error", () => {
+  test("reports a direct tool call under its own name", () => {
+    // Under `both` the model calls a tool directly on a turn that needs one
+    // call. Recording that as run_code would merge the model's round-trips with
+    // the work its programs did, which is the one ratio these rows exist for.
     const seen = collect([
+      {
+        type: "tool/call",
+        time: 500,
+        data: {
+          callId: "c1",
+          name: "read",
+          arguments: { file_path: "src/a.ts" },
+        },
+      },
+      {
+        type: "tool/result",
+        time: 700,
+        data: {
+          message: {
+            content: [
+              {
+                type: "tool-result",
+                toolCallId: "c1",
+                content: [{ type: "text", text: "hello" }],
+                isError: false,
+              },
+            ],
+          },
+        },
+      },
+    ]);
+
+    expect(seen).toEqual([
+      {
+        tool: "read",
+        inputSummary: '{"file_path":"src/a.ts"}',
+        outputBytes: Buffer.byteLength(
+          JSON.stringify([{ type: "text", text: "hello" }]),
+        ),
+        durationMs: 200,
+        error: false,
+      },
+    ]);
+  });
+
+  test("marks a failed result as an error", () => {
+    const seen = collect([
+      {
+        type: "tool/call",
+        data: { callId: "c1", name: "run_code", arguments: "{}" },
+      },
       {
         type: "tool/result",
         data: {
@@ -331,6 +449,25 @@ describe("replayToolCalls", () => {
       durationMs: undefined,
       error: true,
     });
+  });
+
+  test("names a result whose call landed in an earlier interval", () => {
+    // A resumed or compacted interval can carry a settle without its call, and
+    // guessing a name there would attribute the row to whichever tool was
+    // guessed.
+    const seen = collect([
+      {
+        type: "tool/result",
+        data: {
+          message: {
+            content: [{ type: "tool-result", toolCallId: "c1", content: [] }],
+          },
+        },
+      },
+    ]);
+
+    expect(seen[0].tool).toBe("unknown");
+    expect(seen[0].inputSummary).toBe("");
   });
 
   test("leaves duration undefined when no start was recorded", () => {
@@ -555,5 +692,153 @@ describe("describeFailure", () => {
 
   test("does not claim a kind it was not given", () => {
     expect(describeFailure({})).toBe("The agent turn ended as unknown");
+  });
+});
+
+describe("localBaseURL", () => {
+  test("defaults to the address the local server serves on", () => {
+    expect(localBaseURL({})).toBe(DEFAULT_LOCAL_BASE_URL);
+  });
+
+  test("takes the configured endpoint", () => {
+    expect(
+      localBaseURL({ CARL_LOCAL_BASE_URL: "http://gpu.lan:9000/v1" }),
+    ).toBe("http://gpu.lan:9000/v1");
+  });
+
+  test("treats a blank setting as unset rather than as an empty endpoint", () => {
+    expect(localBaseURL({ CARL_LOCAL_BASE_URL: "  " })).toBe(
+      DEFAULT_LOCAL_BASE_URL,
+    );
+  });
+});
+
+describe("parseLocalModels", () => {
+  // The shape mtplx actually returns; a rename upstream should break here
+  // rather than silently size the model with carl's fallback capacities.
+  test("reads mtplx's listing, including its context length", () => {
+    expect(
+      parseLocalModels({
+        object: "list",
+        data: [
+          {
+            id: "mtplx-qwen38-27b-optimized-speed",
+            object: "model",
+            owned_by: "mtplx",
+            context_length: 57344,
+            max_context_length: 57344,
+            max_model_len: 57344,
+          },
+        ],
+      }),
+    ).toEqual([
+      { id: "mtplx-qwen38-27b-optimized-speed", contextWindow: 57344 },
+    ]);
+  });
+
+  test("reads the other spellings servers use for the same capacities", () => {
+    expect(
+      parseLocalModels({
+        data: [
+          { id: "a", context_window: 8192, max_output_tokens: 1024 },
+          { id: "b", max_model_len: 4096, max_tokens: 512 },
+        ],
+      }),
+    ).toEqual([
+      { id: "a", contextWindow: 8192, maxTokens: 1024 },
+      { id: "b", contextWindow: 4096, maxTokens: 512 },
+    ]);
+  });
+
+  test("leaves capacities absent when the listing discloses only ids", () => {
+    expect(parseLocalModels({ data: [{ id: "bare" }] })).toEqual([
+      { id: "bare" },
+    ]);
+  });
+
+  test("skips unusable entries instead of dropping the whole listing", () => {
+    expect(
+      parseLocalModels({
+        data: [{ id: "" }, { id: 7 }, null, { id: "real" }],
+      }),
+    ).toEqual([{ id: "real" }]);
+  });
+
+  test("reads nothing from a body with no data array", () => {
+    expect(parseLocalModels({ error: "not found" })).toEqual([]);
+    expect(parseLocalModels(undefined)).toEqual([]);
+  });
+
+  test("ignores a capacity that is not a usable size", () => {
+    expect(
+      parseLocalModels({
+        data: [{ id: "a", context_length: 0, max_tokens: "lots" }],
+      }),
+    ).toEqual([{ id: "a" }]);
+  });
+});
+
+describe("matchesModelName", () => {
+  // mtplx's cache spelling and its served spelling disagree about where `mtplx`
+  // goes, so neither is a substring of the other and only order-free matching
+  // recognizes that a served model came from a given cached pack.
+  test("links mtplx's served spelling back to its cache spelling", () => {
+    expect(
+      matchesModelName(
+        "mtplx-qwen35-9b-optimized-speed",
+        "Youssofal/Qwen3.5-9B-MTPLX-Optimized-Speed",
+      ),
+    ).toBe(true);
+  });
+
+  test("takes the part of the name that identifies the model", () => {
+    expect(
+      matchesModelName("qwen38-27b", "mtplx-qwen38-27b-optimized-speed"),
+    ).toBe(true);
+    expect(matchesModelName("qwen3.8-27b", "mtplx-qwen38-27b-speed")).toBe(
+      true,
+    );
+  });
+
+  test("holds every part of the name against the id", () => {
+    expect(matchesModelName("qwen35-9b", "mtplx-qwen38-27b")).toBe(false);
+    expect(matchesModelName("qwen38-27b-tuned", "mtplx-qwen38-27b")).toBe(
+      false,
+    );
+  });
+});
+
+describe("resolveLocalModel", () => {
+  const served = [
+    { id: "mtplx-qwen38-27b-optimized-speed", contextWindow: 57344 },
+    { id: "mtplx-qwen38-8b", contextWindow: 32768 },
+  ];
+
+  test("resolves the full id the server reports", () => {
+    expect(resolveLocalModel("mtplx-qwen38-8b", served)).toBe(served[1]);
+  });
+
+  test("resolves the part of the id that identifies the model", () => {
+    expect(resolveLocalModel("qwen38-27b", served)).toBe(served[0]);
+  });
+
+  test("ignores case, since a listing's casing is the server's business", () => {
+    expect(resolveLocalModel("QWEN38-8B", served)).toBe(served[1]);
+  });
+
+  test("answers nothing for a model this server does not serve", () => {
+    expect(resolveLocalModel("sonnet4.6", served)).toBeUndefined();
+    expect(resolveLocalModel("qwen38-27b", [])).toBeUndefined();
+  });
+
+  // Picking one arbitrarily would change which model ran without changing
+  // anything the config says, so the run stops and names the candidates.
+  test("refuses a name that fits several models", () => {
+    expect(() => resolveLocalModel("qwen38", served)).toThrow(
+      /matches more than one model/,
+    );
+    expect(() => resolveLocalModel("qwen38", served)).toThrow(
+      /mtplx-qwen38-27b-optimized-speed/,
+    );
   });
 });

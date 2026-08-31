@@ -4,6 +4,10 @@ dist/
 coverage/
 .npm/
 
+# Benchmark output: one git repo, one carl home, and a full transcript per trial.
+# The fixture and the tasks are tracked; what a run of them produced is not.
+bench/results/
+
 # Devbox
 .devbox/
 

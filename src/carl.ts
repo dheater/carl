@@ -14,7 +14,14 @@ import {
 } from "./skill";
 import type { EffortLevel } from "./types";
 import { cmdStats } from "./stats-command";
-import { DshRunner, BEDROCK_MODEL_IDS } from "./dsh-runner";
+import {
+  DshRunner,
+  BEDROCK_MODEL_IDS,
+  listLocalModels,
+  localBaseURL,
+  resolveLocalModel,
+} from "./dsh-runner";
+import { startLocalModel } from "./mtplx";
 import type { AgentRunner } from "./types";
 import { collectPrompt, openFileInEditor, getSkillOutputPath } from "./editor";
 import { checkGhCli, fetchPrMetadata, fetchPrDiff } from "./github";
@@ -37,20 +44,58 @@ import * as path from "path";
 import { spawnSync } from "child_process";
 
 /**
- * There is one runner: a DeepSeek Harness runtime on Bedrock. A stale
- * `"backend"` in config.json is ignored rather than rejected, since the field
- * only ever had one valid value by the time it was removed.
+ * The runner for one run: a DeepSeek Harness runtime pointed at whichever route
+ * serves the configured model.
+ *
+ * The model name is the only thing that chooses — there is no `backend` setting,
+ * and a stale one in config.json is ignored rather than rejected. A locally
+ * hosted copy wins whenever one is running, because it costs nothing and the
+ * code never leaves the machine; Bedrock is the fallback. Which means the same
+ * config.json works on a laptop with the local server up and on one without,
+ * for any model both can serve.
+ *
+ * A model mtplx has cached but is not serving counts as locally hosted too: carl
+ * starts the server rather than quietly billing Bedrock for a model already on
+ * the disk. See src/mtplx.ts.
+ *
+ * Asked once per command rather than cached: the local server comes and goes,
+ * and the listing is a sub-second call on the machine carl is already running
+ * on.
  */
-function createRunner(skill: string, model: string): AgentRunner {
-  if (!BEDROCK_MODEL_IDS[model]) {
-    const supportedModels = Object.keys(BEDROCK_MODEL_IDS).join(", ");
-    throw new Error(
-      `Model "${model}" is not a known Bedrock model.\n` +
-        `Supported models: ${supportedModels}\n` +
-        `Set a supported model for ${skill} in ~/.config/carl/config.json.`,
-    );
+async function createRunner(
+  skill: string,
+  model: string,
+): Promise<AgentRunner> {
+  const baseURL = localBaseURL();
+  const served = await listLocalModels(baseURL);
+
+  const local = resolveLocalModel(model, served);
+  if (local) return new DshRunner({ provider: "local", baseURL, model: local });
+
+  const modelId = BEDROCK_MODEL_IDS[model];
+  if (modelId) return new DshRunner({ provider: "amazon-bedrock", modelId });
+
+  // Nothing is serving it and Bedrock does not have it, but mtplx might have it
+  // cached — in which case the model is on this machine and the only thing
+  // missing is a running server, so carl starts one.
+  const started = await startLocalModel(model, baseURL, served, (line) =>
+    process.stderr.write(`  ${line}\n`),
+  );
+  if (started) {
+    return new DshRunner({ provider: "local", baseURL, model: started });
   }
-  return new DshRunner();
+
+  throw new Error(
+    `Model "${model}" is not hosted locally and is not a known Bedrock model.\n` +
+      `Bedrock models: ${Object.keys(BEDROCK_MODEL_IDS).join(", ")}\n` +
+      (served.length > 0
+        ? `Local models at ${baseURL}:\n` +
+          served.map((m) => `  - ${m.id}`).join("\n") +
+          "\n"
+        : `No local server answered at ${baseURL} and mtplx has no copy of it — ` +
+          `start a server, or point CARL_LOCAL_BASE_URL at one.\n`) +
+      `Set a supported model for ${skill} in ~/.config/carl/config.json.`,
+  );
 }
 
 function collectCommandPrompt(
@@ -97,7 +142,7 @@ async function cmdReadOnlyPrompt(
     initialPrompt,
     model,
     effort,
-    createRunner(skill, model),
+    await createRunner(skill, model),
   );
   const outputPath = getSkillOutputPath(workspaceRoot, skill);
   if (fs.existsSync(outputPath)) openFileInEditor(outputPath);
@@ -135,7 +180,7 @@ async function cmdReview(
   model: string,
   effort: EffortLevel,
 ): Promise<void> {
-  const runner = createRunner("review", model);
+  const runner = await createRunner("review", model);
   await runSkill(
     workspaceRoot,
     "review",
@@ -174,7 +219,7 @@ async function cmdValidatedPrompt(
     initialPrompt,
     model,
     effort,
-    createRunner(skill, model),
+    await createRunner(skill, model),
     validation,
   );
   const outputPath = getSkillOutputPath(workspaceRoot, skill);
@@ -318,7 +363,7 @@ async function cmdPrReview(
     }
   }
 
-  const runner = createRunner("pr-review", model);
+  const runner = await createRunner("pr-review", model);
 
   const initialPrompt = [
     `Review GitHub PR ${prIdentity}.`,
@@ -450,6 +495,9 @@ function usage(): void {
   console.error("  --version              Print version and exit");
   console.error(
     "  --model <model>        Override the model for this run (ignores config and defaults)",
+  );
+  console.error(
+    `                         A locally hosted model of that name is used when one is served at ${localBaseURL()}; otherwise Bedrock: ${Object.keys(BEDROCK_MODEL_IDS).join(", ")}`,
   );
   console.error(
     "  --effort <level>       Override effort for this run: low, medium, high (ignores config and defaults)",

@@ -1,0 +1,10 @@
+{
+  "name": "todo-api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A small todo library. Pure logic, no server, no dependencies.",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test build/"
+  }
+}

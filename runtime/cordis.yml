@@ -42,11 +42,19 @@
     includeRuntimeContext: false
 
     # Code Mode: the model writes one TypeScript program that calls tools as
-    # functions instead of emitting a streak of one-tool-per-turn calls. `code`
-    # rather than `both`, so `run_code` is the only directly callable tool and
-    # the collapse is enforced rather than merely offered.
+    # functions instead of emitting a streak of one-tool-per-turn calls.
+    #
+    # `both`, not `code`, because enforcing the collapse did not produce one.
+    # Measured over the 788 programs in ~/.config/carl/events.jsonl: 1.70 tool
+    # calls per program, 62% of programs making one call or none, and a 6.0%
+    # `run_code` error rate against 0.4% for a direct `read` — four fifths of
+    # those failures in programs that made at most one call, so they are
+    # authoring mistakes on turns that needed no program at all. The batching
+    # `code` was chosen for shows up in a thin tail of real fan-outs, and `both`
+    # keeps that tail while letting a one-read turn be one read. The cost is the
+    # native tool schemas joining the SDK section in the cached prefix.
     tools:
-      mode: code
+      mode: both
 
     # carl composes its own workspace context into the prompt and owns its own
     # skill catalog on disk, so the harness loaders for both would duplicate
@@ -62,8 +70,13 @@
     toolBash:
       enableRunInBackground: false
 
-# ── Model route ───────────────────────────────────────────────────────────────
+# ── Model routes ──────────────────────────────────────────────────────────────
 
+# Two routes, and carl picks between them per run by resolving the configured
+# model name: a locally hosted copy if the local server serves it, Bedrock
+# otherwise. Both are declared here because the composition is loaded once per
+# subprocess, before carl's chosen provider name reaches the SDK client.
+#
 # Amazon Bedrock, as a pi-ai catalog route serving its installed catalog
 # unchanged. No `models` list: pi-ai refuses an explicit endpoint override on
 # Bedrock (SigV4 needs a region and credentials a baseURL cannot carry), so a
@@ -85,6 +98,42 @@
         # uses whenever the request names no effort — and carl's never do,
         # because effort is a per-run deployment choice here, not a per-turn one.
         reasoning: !!js "process.env.CARL_REASONING ?? 'medium'"
+
+      # A locally hosted, OpenAI-compatible inference server — mtplx by default.
+      # carl asks it what it serves before spawning this process and prefers it
+      # over Bedrock whenever it can serve the configured model; see
+      # createRunner in src/carl.ts.
+      #
+      # Declared on every run, including Bedrock ones. A hand-declared pi-ai
+      # route needs a non-empty `models` list to resolve at all and an
+      # unserviceable route fails the whole namespace, so making this one
+      # conditional would break Bedrock on any machine with no local server.
+      # A Bedrock run therefore leaves CARL_LOCAL_MODEL_ID unset and this route
+      # resolves to a model id nothing addresses, which costs one unreachable
+      # catalog entry and no requests.
+      local:
+        api: openai-completions
+        baseURL: !!js "process.env.CARL_LOCAL_BASE_URL ?? 'http://localhost:8000/v1'"
+        # Named rather than omitted: a profile naming no credential defers to
+        # pi-ai's ambient discovery, which has nothing to discover for a
+        # hand-declared provider and fails the run with "No API key". carl fills
+        # this with a placeholder for the usual local server that ignores the
+        # header, and passes a real key through when one is set.
+        apiKeyEnv: CARL_LOCAL_API_KEY
+        # pi-ai cannot recognize a localhost endpoint, so it addresses it as
+        # OpenAI itself: the system prompt as `developer`, the output cap as
+        # `max_completion_tokens`. Local servers serving open-weight models
+        # reject both, so the request is shaped for Chat Completions as they
+        # implement it.
+        compat:
+          supportsDeveloperRole: false
+          maxTokensField: max_tokens
+        # Capacities come from the server's own listing when it discloses them;
+        # LOCAL_FALLBACK_* in src/dsh-runner.ts is what these defaults mirror.
+        models:
+          - id: !!js "process.env.CARL_LOCAL_MODEL_ID ?? 'no-local-model-selected'"
+            contextWindow: !!js "Number(process.env.CARL_LOCAL_CONTEXT_WINDOW ?? 32768)"
+            maxTokens: !!js "Number(process.env.CARL_LOCAL_MAX_TOKENS ?? 8192)"
 
 # ── Tool backends ─────────────────────────────────────────────────────────────
 
@@ -131,6 +180,25 @@
 # read / write / edit — carl's read_file, write_file, str_replace.
 - id: tool-fs
   name: "@deepseek-ai/dsh-tool-fs"
+
+# carl's own plugin, and the only row here that is not an installed package: a
+# `.`-relative name resolves against this file's directory, and `npm run build`
+# emits the bundle. It exists because carl cannot do this from outside — the CLI
+# reads notifications after the fact, and `tools/post-execute` is the only seam
+# that can change what a tool result says.
+#
+# 317 of the 2,321 reads in ~/.config/carl/events.jsonl re-read a file the same
+# run had already read, and the ledger replaces those lines with a pointer to the
+# copy already in the conversation. 14% is a weak average; the case is the tail,
+# where the revisit rate reaches 66% in the last fifth of a long run — see
+# src/degradation.ts and docs/one-shot.md. `CARL_READ_LEDGER=0` turns it off,
+# because a claim about what it saves should be measurable against a run without
+# it — and nothing here emits an event, so that A/B is the only way to see it.
+- id: read-ledger
+  name: "../dist/plugins/read-ledger.mjs"
+  config:
+    enabled: !!js "process.env.CARL_READ_LEDGER !== '0'"
+    minElidedLines: 10
 
 # glob / grep — carl's list_files, find_symbol. A sampled over-cap result reads
 # as a complete one, and carl would rather the model see the cap.

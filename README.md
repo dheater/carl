@@ -116,8 +116,38 @@ There is nothing to configure for AWS beyond having credentials. Every model is
 invoked through a us-east-1 inference profile; AWS refuses on-demand invocation
 of these models any other way, so there is no region to configure.
 
-Earlier versions had a `"backend"` field with one valid value. It is gone, and an
-existing config.json that still names it keeps working — the key is ignored.
+Earlier versions had a `"backend"` field. It is gone, and an existing
+config.json that still names it keeps working — the key is ignored. The model
+name is the only thing that chooses where a run goes; see below.
+
+### Local models
+
+A model name is resolved against your own machine first. Before each run carl
+asks a locally hosted, OpenAI-compatible inference server what it serves, and
+uses it when it can serve the configured model — a local run is free, private,
+and needs no AWS credentials. Bedrock is the fallback, so the same config.json
+works whether or not the local server is up.
+
+Name the model as the server lists it, or as much of that id as identifies it:
+
+```json
+{ "models": { "code": "qwen38-27b" } }
+```
+
+An id fragment matching more than one served model stops the run and names the
+candidates rather than picking one. A name neither hosted locally nor a known
+Bedrock alias is an error that lists both sets, so `carl code` tells you what
+you can actually choose.
+
+| Variable              | Default                      | Purpose                                                    |
+| --------------------- | ---------------------------- | ---------------------------------------------------------- |
+| `CARL_LOCAL_BASE_URL` | `http://localhost:8000/v1`   | Where the local server listens (the address mtplx uses)    |
+| `CARL_LOCAL_API_KEY`  | a placeholder                | Only needed if your server checks the bearer token         |
+
+Context window and output cap come from the server's own model listing when it
+discloses them; carl assumes 32K/8K when it does not. `--effort` reaches Bedrock
+models only — a local model gets no thinking-level parameter — and a local run
+is reported as unpriced by `carl stats`, because it costs nothing to price.
 
 ### Validation
 
@@ -191,19 +221,28 @@ runtime, composed by `runtime/cordis.yml` and driven over stdio JSON-RPC. Carl
 spawns one runtime per skill run and reads its session events for the output,
 token accounting, and tool timings.
 
-Two consequences worth knowing:
+Three consequences worth knowing:
 
-- **Tools run in Code Mode.** The model writes one TypeScript program per turn
-  that calls tools as functions, instead of emitting one tool call per turn.
-  `carl stats` shows both layers: the outer `run_code` calls are model
-  round-trips, the inner `read`/`edit`/`bash` calls are the work.
+- **Code Mode is offered, not enforced.** The model may call a tool directly or
+  write one TypeScript program (`run_code`) that calls several as functions. It
+  ran program-only until the event log showed 1.7 tool calls per program and a
+  6% program error rate, so batching is now worth a program only when there is
+  something to batch. `carl stats` shows both layers: `run_code` rows are model
+  round-trips, the `read`/`edit`/`bash` rows inside them are the work — and a
+  direct call is one row of its own.
 - **`ask`, `plan` and `review` are sandboxed read-only** — they cannot write at
   all. `code`, `feedback` and `pr-review` run workspace-write (`pr-review` only to
   edit its own draft). The sandbox is the runtime's filesystem boundary, not a
   hidden write tool, so `bash` cannot route around it either.
+- **A file is not sent twice.** 42% of the reads in carl's own event log
+  re-requested a file the same run had already read. Carl's read ledger — the one
+  plugin in the composition it wrote itself — replaces lines already in the
+  conversation with a one-line pointer, keeps the lines that are new, and
+  delivers the whole file again when it changed or when compaction has evicted
+  the earlier copy. `CARL_READ_LEDGER=0` turns it off for an A/B.
 
-Session transcripts are written under `~/.config/carl/sessions/`, namespaced by
-workspace — never inside your repository.
+Session transcripts are the runtime's own replay state: they are written to a
+temporary directory, never inside your repository, and deleted when the run ends.
 
 ## Usage
 
@@ -225,9 +264,10 @@ carl --version
 | `carl reset`                     | Clear `.agent/`                                                                             |
 | `carl stats`                     | Report cost, tokens, turns, and duration per skill                                          |
 
-`--model <model>` overrides the model for that run. Supported aliases: `haiku4.5`,
+`--model <model>` overrides the model for that run. Bedrock aliases: `haiku4.5`,
 `sonnet4.5`, `sonnet4.6`, `sonnet5`, `opus4.1`, `opus4.5`, `opus4.6`, `opus4.7`,
-`opus4.8`, `opus5`, `fable5`.
+`opus4.8`, `opus5`, `fable5`. Anything your local server serves also works — see
+[Local models](#local-models).
 
 `--effort low|medium|high` overrides how much the model thinks. `low` is the
 smallest thinking budget the model offers, not none.

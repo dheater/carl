@@ -61,7 +61,22 @@ CREATE TABLE IF NOT EXISTS runs (
   model_id               TEXT,
   cost_usd               REAL,
   prompt_chars           INTEGER,
+  -- The two halves of prompt_chars. The persona is the same text on every run of
+  -- a skill; the instruction is what this run had to restate.
+  persona_chars          INTEGER,
+  instruction_chars      INTEGER,
   response_chars         INTEGER,
+  -- Turn 1 on its own: the cold-start tax carl pays for starting every run from
+  -- an empty conversation. Invisible in the totals, because a long run writes
+  -- cache on later turns too.
+  first_turn_input_tokens       INTEGER,
+  first_turn_output_tokens      INTEGER,
+  first_turn_cache_read_tokens  INTEGER,
+  first_turn_cache_write_tokens INTEGER,
+  -- Largest prompt the run ever sent, and the number of times it had to shed
+  -- context to keep sending them.
+  peak_prompt_tokens     INTEGER,
+  compactions            INTEGER,
   tool_call_count        INTEGER NOT NULL DEFAULT 0,
   tool_error_count       INTEGER NOT NULL DEFAULT 0,
   tracked_changed_before INTEGER,
@@ -84,10 +99,30 @@ CREATE TABLE IF NOT EXISTS tool_calls (
   duration_ms  INTEGER,
   output_bytes INTEGER,
   error        INTEGER,
+  -- The call's arguments, as the runner one-lined them. Kept verbatim because
+  -- the log has always carried it and dropping it made every path-level
+  -- question — which files does a run read, does the next run read them again —
+  -- unanswerable without re-parsing the JSONL by hand.
+  input_summary TEXT,
+  -- The file the call names, lifted out of input_summary so those questions are
+  -- one query rather than one query and a regex.
+  target_path   TEXT,
   UNIQUE(run_id, ordinal)
 );
 
 CREATE INDEX IF NOT EXISTS idx_tool_calls_run ON tool_calls(run_id);
+CREATE INDEX IF NOT EXISTS idx_tool_calls_path ON tool_calls(target_path);
+
+-- One row per model request, in request order: the run's context-growth curve.
+-- prompt_tokens is everything billed as input for that turn — fresh input plus
+-- cache read plus cache write — which is the size of the conversation at that
+-- point, and the figure a preserved context would carry into the next run.
+CREATE TABLE IF NOT EXISTS turn_tokens (
+  run_id        TEXT NOT NULL,
+  turn          INTEGER NOT NULL,
+  prompt_tokens INTEGER,
+  PRIMARY KEY (run_id, turn)
+);
 
 CREATE TABLE IF NOT EXISTS ingest_log (
   source_path     TEXT PRIMARY KEY,
@@ -107,6 +142,21 @@ CREATE TABLE IF NOT EXISTS meta (
 
 const RATES_FINGERPRINT_KEY = "rates_fingerprint";
 
+const DERIVATION_VERSION_KEY = "derivation_version";
+
+/**
+ * Bumped whenever ingest derives a *different value* from the same event.
+ *
+ * The schema check below catches new columns; this catches new meanings, which
+ * no column list can see. Path canonicalisation is why it exists: `target_path`
+ * kept its name and type while every row's value changed spelling, and a cache
+ * holding both generations reports a re-read as a first read — silently, and in
+ * the one figure the section exists to produce.
+ *
+ * 2 — target_path canonicalised against the run's workspace.
+ */
+const DERIVATION_VERSION = "2";
+
 export function openMetricsDb(dbPath = getMetricsDbPath()): DatabaseSync {
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   const db = new DatabaseSync(dbPath);
@@ -120,44 +170,96 @@ export function openMetricsDb(dbPath = getMetricsDbPath()): DatabaseSync {
     resetMetricsDb(db);
   } else {
     db.exec(SCHEMA);
+    if (hasOutdatedDerivation(db)) {
+      console.error(
+        "[Stats] Ingest changed — rebuilding the metrics cache from the event log.",
+      );
+      resetMetricsDb(db);
+    }
   }
   repriceIfRatesChanged(db);
   return db;
 }
 
 /**
- * True when an existing `runs` table predates the current column set.
+ * One column per generation of the schema, named the moment it was added. A new
+ * column here is the whole migration: the check below sees it missing and the
+ * cache is rebuilt from the log.
+ */
+const REQUIRED_COLUMNS: Record<string, string> = {
+  runs: "compactions",
+  tool_calls: "target_path",
+};
+
+/**
+ * True when an existing table predates the current column set.
  * `CREATE TABLE IF NOT EXISTS` silently leaves an existing table alone, so a DB
  * written by an older carl would otherwise fail at the first insert. Migrating is
  * pointless here — the DB is a cache and the log can refill it — so the caller
- * drops and re-ingests instead. A DB with no `runs` table at all is new, not
- * outdated.
+ * drops and re-ingests instead. A table that does not exist at all is new, not
+ * outdated; `turn_tokens` needs no entry for that reason — no DB has ever had an
+ * older version of it.
  */
 function hasOutdatedSchema(db: DatabaseSync): boolean {
-  const columns = (
-    db.prepare("PRAGMA table_info(runs)").all() as Array<{ name: string }>
-  ).map((c) => c.name);
-  return columns.length > 0 && !columns.includes("model_id");
+  return Object.entries(REQUIRED_COLUMNS).some(([table, required]) => {
+    const columns = (
+      db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
+    ).map((c) => c.name);
+    return columns.length > 0 && !columns.includes(required);
+  });
+}
+
+/**
+ * True when the cache holds values an older ingest derived. A DB with nothing
+ * in it is not outdated — there is no derived value to be stale — so a cache
+ * being created for the first time records the version and rebuilds nothing.
+ */
+function hasOutdatedDerivation(db: DatabaseSync): boolean {
+  const stored = (
+    db
+      .prepare("SELECT value FROM meta WHERE key = ?")
+      .get(DERIVATION_VERSION_KEY) as { value: string } | undefined
+  )?.value;
+  if (stored === DERIVATION_VERSION) return false;
+
+  const runs = (
+    db.prepare("SELECT COUNT(*) AS n FROM runs").get() as { n: number }
+  ).n;
+  if (runs === 0) {
+    writeDerivationVersion(db);
+    return false;
+  }
+  return true;
 }
 
 /** Drops every table. The DB is a cache; JSONL remains the source of truth. */
 export function resetMetricsDb(db: DatabaseSync): void {
   db.exec(
     "DROP TABLE IF EXISTS runs; DROP TABLE IF EXISTS tool_calls;" +
+      " DROP TABLE IF EXISTS turn_tokens;" +
       " DROP TABLE IF EXISTS ingest_log; DROP TABLE IF EXISTS meta;",
   );
   db.exec(SCHEMA);
-  // The rows re-ingested after this will be priced at current rates, so record
-  // that now — otherwise the next open would see no fingerprint and reprice
-  // rows that are already current.
+  // The rows re-ingested after this will be priced at current rates and derived
+  // by the current ingest, so record both now — otherwise the next open would
+  // see neither and redo work that is already current.
   writeRatesFingerprint(db);
+  writeDerivationVersion(db);
 }
 
-function writeRatesFingerprint(db: DatabaseSync): void {
+function writeMeta(db: DatabaseSync, key: string, value: string): void {
   db.prepare(
     `INSERT INTO meta (key, value) VALUES (?, ?)
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-  ).run(RATES_FINGERPRINT_KEY, RATES_FINGERPRINT);
+  ).run(key, value);
+}
+
+function writeRatesFingerprint(db: DatabaseSync): void {
+  writeMeta(db, RATES_FINGERPRINT_KEY, RATES_FINGERPRINT);
+}
+
+function writeDerivationVersion(db: DatabaseSync): void {
+  writeMeta(db, DERIVATION_VERSION_KEY, DERIVATION_VERSION);
 }
 
 export type RepriceResult = {
@@ -298,6 +400,90 @@ function measuredOrNull(value: unknown): number | null {
 }
 
 /**
+ * The keys carl's tools name a file with. `pattern` is deliberately absent: a
+ * glob is not a path, and storing one here would make a search look like a read
+ * of a file that may not exist.
+ */
+const PATH_KEY = /"(?:path|file_path|filePath)"\s*:\s*"((?:[^"\\]|\\.)*)"/;
+
+/**
+ * Tools whose whole summary is the path.
+ *
+ * carl's predecessor logged one argument per tool rather than the argument
+ * object, so a `read_file` row reads `src/carl.ts` with no JSON around it —
+ * 1,763 of them, the second-largest tool in the log. Restricted to these names
+ * because a bare `bash` summary is a command line, and `npm test` is not a file.
+ */
+const BARE_PATH_TOOLS = new Set([
+  "read",
+  "read_file",
+  "edit",
+  "str_replace",
+  "write",
+  "write_file",
+]);
+
+/** A summary the runner cut short; half a path names a different file. */
+function isTruncated(summary: string): boolean {
+  return summary.endsWith("…");
+}
+
+/**
+ * One spelling per file, so two runs that read the same file compare equal.
+ *
+ * The model chooses the spelling, and it varies between runs of the same skill:
+ * one run reads `a.ts`, the next reads `/private/tmp/proj/a.ts`. Left alone,
+ * those are two files and a re-read looks like a first read. Resolved against
+ * the run's workspace when there is one, then made relative again so the row
+ * stays readable and stays comparable across a moved checkout. Purely lexical —
+ * the file may be long gone by the time the log is ingested, and a stat() here
+ * would answer for today's filesystem rather than the run's.
+ */
+function canonicalPath(file: string, workspace: string | null): string {
+  if (!workspace) return path.normalize(file);
+  const absolute = path.resolve(workspace, file);
+  const relative = path.relative(workspace, absolute);
+  // Outside the workspace: keep it absolute rather than spell it with `..`.
+  return relative.startsWith("..") ? absolute : relative;
+}
+
+/**
+ * The file a tool call named, recovered from the one-lined arguments the runner
+ * logged. A summary truncated mid-path has no closing quote and yields null,
+ * which is the right answer: an unknown path beats a silently shortened one.
+ */
+export function targetPathFrom(
+  summary: string | undefined,
+  tool?: string | null,
+  workspace?: string | null,
+): string | null {
+  if (!summary) return null;
+  const match = PATH_KEY.exec(summary);
+  if (!match) {
+    if (
+      tool != null &&
+      BARE_PATH_TOOLS.has(tool) &&
+      !summary.startsWith("{") &&
+      !summary.startsWith("[") &&
+      !isTruncated(summary)
+    ) {
+      return canonicalPath(summary, workspace ?? null);
+    }
+    return null;
+  }
+  try {
+    // Back through JSON so `\\` and `\"` in the logged arguments decode to the
+    // path the tool actually received.
+    const decoded = JSON.parse(`"${match[1]}"`) as string;
+    return decoded.length > 0
+      ? canonicalPath(decoded, workspace ?? null)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * A run's workspace. New events carry it directly; legacy events only reveal it
  * through the path of the per-directory log they were written to.
  */
@@ -343,6 +529,7 @@ type Statements = {
   applyPromptEvent: any;
   insertToolCall: any;
   bumpToolCounts: any;
+  insertTurnTokens: any;
 };
 
 function prepareStatements(db: DatabaseSync): Statements {
@@ -394,15 +581,29 @@ function prepareStatements(db: DatabaseSync): Statements {
         model_id           = COALESCE(?, model_id),
         cost_usd           = COALESCE(?, cost_usd),
         prompt_chars       = COALESCE(?, prompt_chars),
-        response_chars     = COALESCE(?, response_chars)
+        persona_chars      = COALESCE(?, persona_chars),
+        instruction_chars  = COALESCE(?, instruction_chars),
+        response_chars     = COALESCE(?, response_chars),
+        first_turn_input_tokens       = COALESCE(?, first_turn_input_tokens),
+        first_turn_output_tokens      = COALESCE(?, first_turn_output_tokens),
+        first_turn_cache_read_tokens  = COALESCE(?, first_turn_cache_read_tokens),
+        first_turn_cache_write_tokens = COALESCE(?, first_turn_cache_write_tokens),
+        peak_prompt_tokens = COALESCE(?, peak_prompt_tokens),
+        compactions        = COALESCE(?, compactions)
       WHERE run_id = ?
     `),
 
     insertToolCall: db.prepare(`
       INSERT INTO tool_calls (
-        run_id, ordinal, timestamp, timestamp_ms, tool, duration_ms, output_bytes, error
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        run_id, ordinal, timestamp, timestamp_ms, tool, duration_ms, output_bytes,
+        error, input_summary, target_path
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(run_id, ordinal) DO NOTHING
+    `),
+
+    insertTurnTokens: db.prepare(`
+      INSERT INTO turn_tokens (run_id, turn, prompt_tokens) VALUES (?, ?, ?)
+      ON CONFLICT(run_id, turn) DO NOTHING
     `),
 
     bumpToolCounts: db.prepare(`
@@ -460,6 +661,7 @@ function applyEvent(
   if (event.event === "prompt" || (event.event === "skill" && usage)) {
     const modelId = resolveModelId(usage, model);
     const cost = usage ? computeCost({ ...usage, modelId }) : null;
+    const series = usage?.turnPromptTokens;
     stmts.applyPromptEvent.run(
       usage?.inputTokens ?? null,
       usage?.outputTokens ?? null,
@@ -470,21 +672,45 @@ function applyEvent(
       modelId ?? null,
       cost,
       event.event === "prompt" ? (meta.prompt_chars ?? null) : null,
+      event.event === "prompt" ? (meta.persona_chars ?? null) : null,
+      event.event === "prompt" ? (meta.instruction_chars ?? null) : null,
       event.event === "prompt" ? (meta.response_chars ?? null) : null,
+      usage?.firstTurn?.inputTokens ?? null,
+      usage?.firstTurn?.outputTokens ?? null,
+      usage?.firstTurn?.cacheReadTokens ?? null,
+      usage?.firstTurn?.cacheWriteTokens ?? null,
+      series && series.length > 0 ? Math.max(...series) : null,
+      usage?.compactions ?? null,
       runId,
     );
+
+    // Turn 1 is `turn = 1`, matching how the run reads in the log rather than
+    // how the array is indexed.
+    if (series) {
+      for (const [index, tokens] of series.entries()) {
+        stmts.insertTurnTokens.run(runId, index + 1, tokens);
+      }
+    }
   }
 
   if (event.event === "tool_call") {
+    const inputSummary =
+      typeof meta.input_summary === "string" && meta.input_summary.length > 0
+        ? meta.input_summary
+        : null;
+    const tool = event.subject ?? meta.tool ?? null;
+    const workspace = resolveWorkspace(event, workspaceFromPath);
     stmts.insertToolCall.run(
       runId,
       toolOrdinal(),
       event.timestamp!,
       Date.parse(event.timestamp!),
-      event.subject ?? meta.tool ?? null,
+      tool,
       measuredOrNull(event.duration_ms),
       measuredOrNull(meta.output_bytes),
       meta.error ? 1 : 0,
+      inputSummary,
+      targetPathFrom(inputSummary ?? undefined, tool, workspace),
     );
     stmts.bumpToolCounts.run(runId, runId, runId);
   }
@@ -539,6 +765,9 @@ export function ingestFile(
     nextToolOrdinal = 0;
     db.prepare(
       "DELETE FROM tool_calls WHERE run_id IN (SELECT run_id FROM runs WHERE source_path = ?)",
+    ).run(resolved);
+    db.prepare(
+      "DELETE FROM turn_tokens WHERE run_id IN (SELECT run_id FROM runs WHERE source_path = ?)",
     ).run(resolved);
   }
 

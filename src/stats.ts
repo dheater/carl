@@ -13,6 +13,16 @@ import {
   NO_DATA,
   type Column,
 } from "./stats-format";
+import {
+  queryContextCost,
+  renderContextCost,
+  type ContextCostReport,
+} from "./context-cost";
+import {
+  queryDegradation,
+  renderDegradation,
+  type DegradationReport,
+} from "./degradation";
 
 export type TimeRange = {
   /** Inclusive start. */
@@ -421,6 +431,10 @@ export type StatsReport = {
   workspaces: WorkspaceSummary[];
   efforts: EffortSummary[];
   daily: DailySummary[];
+  /** What one prompt per run costs and avoids; see src/context-cost.ts. */
+  contextCost: ContextCostReport;
+  /** Whether a run decays as its context grows; see src/degradation.ts. */
+  degradation: DegradationReport;
 };
 
 export function buildReport(
@@ -461,6 +475,8 @@ export function buildReport(
     workspaces: queryWorkspaceSummary(db, range, skill),
     efforts: queryEffortSummary(db, range, skill),
     daily: queryDailySummary(db, range, skill),
+    contextCost: queryContextCost(db, range, skill),
+    degradation: queryDegradation(db, range, skill),
   };
 }
 
@@ -623,6 +639,20 @@ export function renderReport(report: StatsReport): string {
         ]),
       ),
     );
+    out.push("");
+  }
+
+  const contextCost = renderContextCost(report.contextCost);
+  if (contextCost) {
+    out.push(contextCost);
+    out.push("");
+  }
+
+  // Directly after the cost of starting over: this is what starting over buys,
+  // and the two sections only mean anything together.
+  const degradation = renderDegradation(report.degradation);
+  if (degradation) {
+    out.push(degradation);
     out.push("");
   }
 

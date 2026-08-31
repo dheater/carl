@@ -46,6 +46,165 @@ export const BEDROCK_MODEL_IDS: Record<string, string> = {
 };
 
 /**
+ * Where carl looks for a locally hosted model. Any server answering OpenAI's
+ * `GET /models` and chat-completions will do; the default is the address mtplx
+ * serves on.
+ */
+export const DEFAULT_LOCAL_BASE_URL = "http://localhost:8000/v1";
+
+/** How long carl waits for the local server before deciding there isn't one. */
+const LOCAL_DISCOVERY_TIMEOUT_MS = 1500;
+
+export function localBaseURL(env: NodeJS.ProcessEnv = process.env): string {
+  return env.CARL_LOCAL_BASE_URL?.trim() || DEFAULT_LOCAL_BASE_URL;
+}
+
+/**
+ * One model a local server says it can serve. The capacities are optional
+ * because most listings disclose an id and nothing else.
+ */
+export type LocalModel = {
+  id: string;
+  contextWindow?: number;
+  maxTokens?: number;
+};
+
+/** Which route serves this run, and everything that route needs to be built. */
+export type ModelRoute =
+  | { provider: "amazon-bedrock"; modelId: string }
+  | { provider: "local"; baseURL: string; model: LocalModel };
+
+function firstNumber(entry: unknown, keys: string[]): number | undefined {
+  for (const key of keys) {
+    const value = (entry as Record<string, unknown>)?.[key];
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The models in an OpenAI `GET /models` body.
+ *
+ * The capacity keys are the several spellings servers actually use — mtplx
+ * reports `context_length` and `max_model_len`, vLLM `max_model_len`, others
+ * `context_window` — and an entry with no usable id is skipped rather than
+ * failing the whole listing, since one odd row must not hide the model carl was
+ * asked for.
+ */
+export function parseLocalModels(body: unknown): LocalModel[] {
+  const data = (body as { data?: unknown })?.data;
+  if (!Array.isArray(data)) return [];
+  const models: LocalModel[] = [];
+  for (const entry of data) {
+    const id = (entry as { id?: unknown })?.id;
+    if (typeof id !== "string" || !id.trim()) continue;
+    const contextWindow = firstNumber(entry, [
+      "context_window",
+      "context_length",
+      "max_model_len",
+    ]);
+    const maxTokens = firstNumber(entry, ["max_output_tokens", "max_tokens"]);
+    models.push({
+      id,
+      ...(contextWindow === undefined ? {} : { contextWindow }),
+      ...(maxTokens === undefined ? {} : { maxTokens }),
+    });
+  }
+  return models;
+}
+
+/**
+ * What the local server can serve, or `[]` when there is nothing to ask.
+ *
+ * No local server is the ordinary case rather than an error: carl falls back to
+ * Bedrock, so a refused connection, a timeout, an error status, and a body carl
+ * cannot read all answer "nothing local" instead of failing the run before it
+ * starts. The timeout is short because every run pays it.
+ */
+export async function listLocalModels(
+  baseURL: string,
+  timeoutMs = LOCAL_DISCOVERY_TIMEOUT_MS,
+): Promise<LocalModel[]> {
+  try {
+    const response = await fetch(`${baseURL.replace(/\/+$/, "")}/models`, {
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!response.ok) return [];
+    return parseLocalModels(await response.json());
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * A model name reduced to what identifies the model.
+ *
+ * The same model wears three spellings: carl's config says `qwen38-27b`, mtplx's
+ * cache says `Youssofal/Qwen3.8-27B-MTPLX-Optimized-Speed`, and its server says
+ * `mtplx-qwen38-27b-optimized-speed`. Dropping case and everything that is not a
+ * letter or digit makes the config name a substring of both, so one name can
+ * select a model to start (see src/mtplx.ts) and then recognize what the server
+ * ended up serving.
+ */
+export function normalizeModelName(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+/**
+ * Whether a configured name names this model id.
+ *
+ * Every part of the name has to appear in the id, in any order and through any
+ * punctuation. Order has to be free because the two spellings disagree about it:
+ * mtplx's cache says `Qwen3.5-9B-MTPLX-Optimized-Speed` and its server says
+ * `mtplx-qwen35-9b-optimized-speed`, so requiring one substring would let a
+ * config naming either one fail to find the other.
+ *
+ * An empty name matches everything, so callers refuse it before asking.
+ */
+export function matchesModelName(name: string, id: string): boolean {
+  const candidate = normalizeModelName(id);
+  return name
+    .split(/[^a-zA-Z0-9]+/)
+    .filter(Boolean)
+    .every((part) => candidate.includes(normalizeModelName(part)));
+}
+
+/**
+ * The locally served model a configured name asks for, or undefined for none.
+ *
+ * A local server names its models whatever it likes — mtplx serves
+ * `mtplx-qwen38-27b-optimized-speed` — so an exact id is accepted but not
+ * required: a name whose parts the id all carry resolves, which is what lets
+ * `"code": "qwen38-27b"` in config.json keep working when the server renames
+ * around the part that identifies the model. A name matching several models is
+ * refused rather than resolved arbitrarily, because silently picking the wrong
+ * one changes what ran without changing what the config says.
+ */
+export function resolveLocalModel(
+  name: string,
+  served: LocalModel[],
+): LocalModel | undefined {
+  const wanted = normalizeModelName(name);
+  if (!wanted) return undefined;
+
+  const exact = served.find((model) => normalizeModelName(model.id) === wanted);
+  if (exact) return exact;
+
+  const partial = served.filter((model) => matchesModelName(name, model.id));
+  if (partial.length === 1) return partial[0];
+  if (partial.length > 1) {
+    throw new Error(
+      `Model "${name}" matches more than one model on the local server:\n` +
+        partial.map((model) => `  - ${model.id}`).join("\n") +
+        `\nName the one you want exactly.`,
+    );
+  }
+  return undefined;
+}
+
+/**
  * carl's three effort levels as pi-ai thinking levels.
  *
  * `low` maps to `minimal`, not `off`, for two reasons. pi-ai translates `off`
@@ -141,9 +300,11 @@ function assistantText(message: unknown): string {
  * One progress line for a session event, or undefined for events a watching
  * human gains nothing from.
  *
- * Under Code Mode the model's own calls are all `run_code`, so the sub-dispatch
- * events inside the program are what name the actual work (`read src/a.ts`);
- * the outer `run_code` call would only ever print its own name.
+ * A `run_code` call prints nothing itself: the sub-dispatch events inside the
+ * program are what name the actual work (`read src/a.ts`), and the outer call
+ * would only ever print its own name. A direct tool call has no inner events, so
+ * it prints itself — under `both` the two paths interleave and a watching human
+ * sees the same line either way.
  */
 export function formatProgress(event: WireEvent): string | undefined {
   const data = event.data ?? {};
@@ -180,25 +341,43 @@ function contentBytes(content: unknown): number {
   return Buffer.byteLength(JSON.stringify(content), "utf-8");
 }
 
+/** The billed prompt for one request: everything that is not output. */
+function promptTokens(turn: Usage): number {
+  return (
+    (turn.inputTokens ?? 0) +
+    (turn.cacheReadTokens ?? 0) +
+    (turn.cacheWriteTokens ?? 0)
+  );
+}
+
 /**
  * Folds one activity interval's events into the usage summary carl records.
  *
  * `turns` counts model requests (`step/end`), which is what the previous
  * Bedrock loop's turn counter measured; the harness's own `turn` is one whole
  * user-message-to-idle interval and would read as 1 for every run.
+ *
+ * The totals are what the run cost; the per-turn fields are what carl's one
+ * prompt per subprocess costs. Both are folded here because this is the only
+ * place the per-request wire events still exist — the runner discards them as
+ * soon as it returns, and `compaction/start` had no reader at all.
  */
 export function summarizeUsage(
   events: WireEvent[],
   modelId: string,
+  source = "dsh-bedrock",
 ): UsageSummary {
-  const usage: UsageSummary = { source: "dsh-bedrock", modelId, turns: 0 };
+  const usage: UsageSummary = { source, modelId, turns: 0 };
   let inputTokens = 0;
   let outputTokens = 0;
   let cacheReadTokens = 0;
   let cacheWriteTokens = 0;
+  let compactions = 0;
+  const turnPromptTokens: number[] = [];
 
   for (const event of events) {
     if (event.type === "step/end") usage.turns = (usage.turns ?? 0) + 1;
+    if (event.type === "compaction/start") compactions += 1;
     if (event.type !== "assistant/message") continue;
     const stepUsage = event.data?.usage as Usage | undefined;
     if (!stepUsage) continue;
@@ -206,37 +385,71 @@ export function summarizeUsage(
     outputTokens += stepUsage.outputTokens ?? 0;
     cacheReadTokens += stepUsage.cacheReadTokens ?? 0;
     cacheWriteTokens += stepUsage.cacheWriteTokens ?? 0;
+    // Recorded in request order, so index 0 is the cold start and the last entry
+    // is the largest context the run ever paid to send.
+    turnPromptTokens.push(promptTokens(stepUsage));
+    if (usage.firstTurn === undefined) {
+      usage.firstTurn = {
+        ...(stepUsage.inputTokens && { inputTokens: stepUsage.inputTokens }),
+        ...(stepUsage.outputTokens && { outputTokens: stepUsage.outputTokens }),
+        ...(stepUsage.cacheReadTokens && {
+          cacheReadTokens: stepUsage.cacheReadTokens,
+        }),
+        ...(stepUsage.cacheWriteTokens && {
+          cacheWriteTokens: stepUsage.cacheWriteTokens,
+        }),
+      };
+    }
   }
 
   if (inputTokens) usage.inputTokens = inputTokens;
   if (outputTokens) usage.outputTokens = outputTokens;
   if (cacheReadTokens) usage.cacheReadTokens = cacheReadTokens;
   if (cacheWriteTokens) usage.cacheWriteTokens = cacheWriteTokens;
+  if (turnPromptTokens.length > 0) usage.turnPromptTokens = turnPromptTokens;
+  // Always recorded, including as 0: "this run did not compact" is the
+  // measurement, and an absent field would read as "not measured".
+  usage.compactions = compactions;
   return usage;
 }
 
 /**
  * Replays tool activity as carl's `tool_call` events.
  *
- * Under Code Mode every model-emitted call is `run_code`, so the outer calls
- * measure model round-trips while the inner `tool/code-dispatch` entries — the
- * `tools.read(...)` calls the program made — measure the work. Both are
- * reported, under their real names, because the ratio between them is the whole
- * point of moving to Code Mode.
+ * A model-emitted call measures one model round-trip; a `tool/code-dispatch`
+ * entry — the `tools.read(...)` call a program made — measures the work. Both
+ * are reported, under their real names, because the ratio between them is what
+ * says whether Code Mode is earning the program it costs.
+ *
+ * Under `both` the model emits `run_code` and plain tool calls side by side, so
+ * the outer name comes from the call rather than being assumed: recording a
+ * direct `read` as `run_code` would put the two layers in one bucket and make
+ * exactly that ratio unmeasurable.
  */
 export function replayToolCalls(
   events: WireEvent[],
   onToolCall: (event: ToolCallEvent) => void,
 ): void {
   const startedAt = new Map<string, number>();
-  const programLabels = new Map<string, string>();
+  const calls = new Map<string, { tool: string; inputSummary: string }>();
 
   for (const event of events) {
     const data = event.data ?? {};
 
     if (event.type === "tool/call") {
-      startedAt.set(String(data.callId), event.time ?? 0);
-      programLabels.set(String(data.callId), summarizeProgram(data.arguments));
+      const callId = String(data.callId);
+      const tool = String(data.name ?? "unknown");
+      startedAt.set(callId, event.time ?? 0);
+      calls.set(callId, {
+        tool,
+        // A program body is thousands of characters and truncates to noise, so
+        // run_code logs the model's own description instead. Every other tool's
+        // arguments are the summary.
+        inputSummary:
+          tool === "run_code"
+            ? summarizeProgram(data.arguments)
+            : summarizeArguments(data.arguments),
+      });
       continue;
     }
 
@@ -264,9 +477,12 @@ export function replayToolCalls(
       const result = message?.content?.[0];
       const callId = String(result?.toolCallId ?? "");
       const start = startedAt.get(callId);
+      // A resumed or compacted interval can carry a settle whose call landed in
+      // an earlier one; naming it "unknown" keeps it out of another tool's row.
+      const call = calls.get(callId);
       onToolCall({
-        tool: "run_code",
-        inputSummary: programLabels.get(callId) ?? "",
+        tool: call?.tool ?? "unknown",
+        inputSummary: call?.inputSummary ?? "",
         outputBytes: contentBytes(result?.content),
         durationMs: start ? (event.time ?? start) - start : undefined,
         error: result?.isError === true,
@@ -351,6 +567,48 @@ export function sessionDirPath(
 }
 
 /**
+ * Fallback capacities for a local model whose server discloses none. pi-ai's own
+ * route defaults (256K context, 32K output) are sized for a hosted frontier
+ * model and would let carl send a request a small local model cannot hold, so
+ * carl guesses low instead: an undersized window truncates context, an oversized
+ * one fails the request.
+ */
+const LOCAL_FALLBACK_CONTEXT_WINDOW = 32768;
+const LOCAL_FALLBACK_MAX_TOKENS = 8192;
+
+/**
+ * What carl sends as the local server's bearer token when nothing else is set.
+ * A self-hosted server on loopback normally ignores the header, but pi-ai
+ * refuses to send a request with no credential at all, so this stands in.
+ */
+const LOCAL_PLACEHOLDER_API_KEY = "local";
+
+/**
+ * The local route's shape, as environment variables runtime/cordis.yml reads.
+ *
+ * The route is declared there unconditionally, because a hand-declared pi-ai
+ * route with an empty `models` list fails resolution for the whole namespace and
+ * would take Bedrock down with it on any machine running no local server. So a
+ * Bedrock run leaves these unset and the route resolves to a placeholder model
+ * nothing ever addresses; see the comment on that entry.
+ */
+function localRouteEnv(route: ModelRoute): NodeJS.ProcessEnv {
+  if (route.provider !== "local") return {};
+  return {
+    CARL_LOCAL_BASE_URL: route.baseURL,
+    CARL_LOCAL_API_KEY:
+      process.env.CARL_LOCAL_API_KEY?.trim() || LOCAL_PLACEHOLDER_API_KEY,
+    CARL_LOCAL_MODEL_ID: route.model.id,
+    CARL_LOCAL_CONTEXT_WINDOW: String(
+      route.model.contextWindow ?? LOCAL_FALLBACK_CONTEXT_WINDOW,
+    ),
+    CARL_LOCAL_MAX_TOKENS: String(
+      route.model.maxTokens ?? LOCAL_FALLBACK_MAX_TOKENS,
+    ),
+  };
+}
+
+/**
  * Runs one skill as one turn of a DeepSeek Harness runtime.
  *
  * The runtime is a subprocess composed by `runtime/cordis.yml` and driven over
@@ -360,10 +618,23 @@ export function sessionDirPath(
  * vary them than a reload would be.
  */
 export class DshRunner implements AgentRunner {
+  constructor(private readonly route: ModelRoute) {
+    assert(
+      route?.provider,
+      "DshRunner: a resolved ModelRoute is required — resolve it in createRunner",
+    );
+  }
+
+  /** The route as a human reads it: where the model is, and which model it is. */
+  describeRoute(): string {
+    return this.route.provider === "amazon-bedrock"
+      ? `Bedrock (${this.route.modelId})`
+      : `${this.route.baseURL} (${this.route.model.id})`;
+  }
+
   async run(request: AgentRunRequest): Promise<AgentRunResponse> {
     const {
       workspaceRoot,
-      model,
       instruction,
       persona,
       effort,
@@ -372,11 +643,9 @@ export class DshRunner implements AgentRunner {
       onProgress,
     } = request;
 
-    const modelId = BEDROCK_MODEL_IDS[model];
-    assert(
-      modelId,
-      `DshRunner.run: unknown model alias "${model}" — validate in createRunner before constructing DshRunner`,
-    );
+    const route = this.route;
+    const modelId =
+      route.provider === "amazon-bedrock" ? route.modelId : route.model.id;
 
     const started = Date.now();
 
@@ -408,10 +677,11 @@ export class DshRunner implements AgentRunner {
           CARL_SANDBOX_MODE: readOnly ? "read-only" : "workspace-write",
           CARL_REASONING: REASONING_EFFORT[effort],
           CARL_SESSION_ROOT: sessionRoot,
+          ...localRouteEnv(route),
         },
       },
       cwd: workspaceRoot,
-      provider: "amazon-bedrock",
+      provider: route.provider,
       model: modelId,
     });
 
@@ -435,7 +705,13 @@ export class DshRunner implements AgentRunner {
         ? (result.events as WireEvent[])
         : [];
 
-      const usage = summarizeUsage(events, modelId);
+      // `dsh-bedrock` is kept verbatim so a run recorded today still groups with
+      // the ones already in events.jsonl.
+      const usage = summarizeUsage(
+        events,
+        modelId,
+        route.provider === "amazon-bedrock" ? "dsh-bedrock" : "dsh-local",
+      );
       usage.latencyMs = Date.now() - started;
 
       if (onToolCall) replayToolCalls(events, onToolCall);
