@@ -543,10 +543,6 @@ type ModelRate = {
   cacheRead: number;
 };
 
-// AWS charges 1.2× the base Anthropic rate when using cross-region inference
-// profile ARNs (e.g. "us.*"). Set to 1 when using region-specific model ARNs.
-const CROSS_REGION_MULTIPLIER = 1;
-
 const MODEL_RATES: ModelRate[] = [
   {
     pattern: /fable|mythos/i,
@@ -616,11 +612,10 @@ export function computeCost(usage: UsageSummary): number | null {
     return null;
   }
   const cost =
-    (((usage.inputTokens ?? 0) * rates.input +
+    ((usage.inputTokens ?? 0) * rates.input +
       (usage.outputTokens ?? 0) * rates.output +
       (usage.cacheWriteTokens ?? 0) * rates.cacheWrite +
-      (usage.cacheReadTokens ?? 0) * rates.cacheRead) *
-      CROSS_REGION_MULTIPLIER) /
+      (usage.cacheReadTokens ?? 0) * rates.cacheRead) /
     1_000_000;
   return cost;
 }

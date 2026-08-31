@@ -44,17 +44,16 @@ function stepEnd(step: number): TestEvent {
 }
 
 describe("BEDROCK_MODEL_IDS", () => {
-  test("every alias maps to a us-prefixed inference profile, optionally wrapped in an ARN", () => {
+  test("every alias maps to a bare us-prefixed inference profile id", () => {
     const ids = Object.values(BEDROCK_MODEL_IDS);
     expect(ids.length).toBeGreaterThan(0);
     for (const id of ids) {
       // A bare `anthropic.*` id is refused by AWS: on-demand throughput is not
-      // supported for these models, so only an inference profile invokes.
-      // If AWS credentials are available, the profile is wrapped in a us-east-1 ARN
-      // to avoid cross-region costs. Otherwise, the bare profile ID is used.
-      expect(id).toMatch(
-        /^(arn:aws:bedrock:us-east-1:\d+:inference-profile\/)?us\.anthropic\./,
-      );
+      // supported for these models, so only an inference profile invokes. And
+      // the id has to be the catalog's own spelling — the pi-ai route serves
+      // the installed catalog unchanged, so an inference-profile ARN naming the
+      // same profile is UNKNOWN_MODEL there even though Bedrock would take it.
+      expect(id).toMatch(/^us\.anthropic\.[a-z0-9.:-]+$/);
     }
   });
 

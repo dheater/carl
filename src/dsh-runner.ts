@@ -1,6 +1,5 @@
 import assert from "assert";
 import { randomUUID } from "crypto";
-import { execSync } from "child_process";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -15,64 +14,35 @@ import {
 } from "./types";
 
 /**
- * Resolve the AWS account ID from the active AWS profile credentials.
- *
- * us-east-1 inference profile ARNs route to us-east-1 only (no cross-region
- * fees). The bare "us.anthropic.*" IDs let Bedrock route across east-1/east-2/
- * west-2, which incurs cross-region transfer charges.
- *
- * The account ID is resolved once at startup from the active AWS profile via
- * `aws sts get-caller-identity`. If that call fails (no credentials, no CLI),
- * the code falls back to the bare profile ID (cross-region routing).
- */
-function resolveAwsAccountId(): string | null {
-  try {
-    return (
-      execSync("aws sts get-caller-identity --query Account --output text", {
-        encoding: "utf-8",
-        stdio: ["ignore", "pipe", "ignore"],
-        timeout: 10000,
-      }).trim() || null
-    );
-  } catch {
-    return null;
-  }
-}
-
-const _awsAccountId = resolveAwsAccountId();
-
-function usEast1Arn(profileId: string): string {
-  if (!_awsAccountId) return profileId;
-  return `arn:aws:bedrock:us-east-1:${_awsAccountId}:inference-profile/${profileId}`;
-}
-
-/**
  * carl's model aliases mapped to Bedrock catalog ids.
  *
- * These are wrapped in us-east-1 ARNs to avoid cross-region routing costs.
- * The ARN format pins routing to us-east-1 (no cross-region fees), whereas the
- * bare "us.anthropic.*" IDs let Bedrock route across east-1/east-2/west-2,
- * incurring cross-region transfer charges.
+ * Every id must be a catalog id, spelled exactly as pi-ai's installed
+ * amazon-bedrock catalog spells it: runtime/cordis.yml declares no `models`
+ * list, so the route serves that catalog unchanged and anything else — an
+ * inference-profile ARN, for instance — fails the run before its first request
+ * with UNKNOWN_MODEL, no matter that Bedrock itself would accept it.
  *
- * If AWS credentials are unavailable or the account ID cannot be resolved,
- * the bare profile IDs are used and the run falls back to default routing
- * (cross-region).
+ * The ids are `us.`-prefixed inference profiles because a bare `anthropic.*` id
+ * has no on-demand throughput on Bedrock and cannot be invoked at all. The
+ * prefix names a cross-region profile, which is priced at the in-region rate
+ * with no transfer fee, so routing is free to spread across
+ * us-east-1/us-east-2/us-west-2.
  *
  * The table stays in carl rather than deferring to the runtime's catalog because
  * carl prices its own runs, and MODEL_RATES is keyed on these ids.
  */
 export const BEDROCK_MODEL_IDS: Record<string, string> = {
-  sonnet5: usEast1Arn("us.anthropic.claude-sonnet-5"),
-  "sonnet4.6": usEast1Arn("us.anthropic.claude-sonnet-4-6"),
-  "sonnet4.5": usEast1Arn("us.anthropic.claude-sonnet-4-5-20250929-v1:0"),
-  "haiku4.5": usEast1Arn("us.anthropic.claude-haiku-4-5-20251001-v1:0"),
-  opus5: usEast1Arn("us.anthropic.claude-opus-5"),
-  "opus4.8": usEast1Arn("us.anthropic.claude-opus-4-8"),
-  "opus4.7": usEast1Arn("us.anthropic.claude-opus-4-7"),
-  "opus4.6": usEast1Arn("us.anthropic.claude-opus-4-6-v1"),
-  "opus4.5": usEast1Arn("us.anthropic.claude-opus-4-5-20251101-v1:0"),
-  "opus4.1": usEast1Arn("us.anthropic.claude-opus-4-1-20250805-v1:0"),
-  fable5: usEast1Arn("us.anthropic.claude-fable-5"),
+  sonnet5: "us.anthropic.claude-sonnet-5",
+  "sonnet4.6": "us.anthropic.claude-sonnet-4-6",
+  "sonnet4.5": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+  "haiku4.5": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+  opus5: "us.anthropic.claude-opus-5",
+  "opus4.8": "us.anthropic.claude-opus-4-8",
+  "opus4.7": "us.anthropic.claude-opus-4-7",
+  "opus4.6": "us.anthropic.claude-opus-4-6-v1",
+  "opus4.5": "us.anthropic.claude-opus-4-5-20251101-v1:0",
+  "opus4.1": "us.anthropic.claude-opus-4-1-20250805-v1:0",
+  fable5: "us.anthropic.claude-fable-5",
 };
 
 /**
