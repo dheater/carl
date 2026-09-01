@@ -186,6 +186,37 @@ describe("buildSkillInstruction", () => {
     expect(instruction).toContain("# Commit message");
     expect(instruction).toContain("fix:`/`feat:`/`chore:");
   });
+
+  test("includes AGENTS.md content when the file is present in workspaceRoot", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-agents-"));
+    try {
+      fs.writeFileSync(
+        path.join(tmpDir, "AGENTS.md"),
+        "# Project Rules\n\nAlways write tests.",
+        "utf-8",
+      );
+      const instruction = buildSkillInstruction("code", tmpDir);
+      expect(instruction).toContain("# Project Rules");
+      expect(instruction).toContain("Always write tests.");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("omits AGENTS.md section when the file is absent", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-agents-"));
+    try {
+      const instruction = buildSkillInstruction("code", tmpDir);
+      expect(instruction).not.toContain("AGENTS.md");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("omits AGENTS.md section when workspaceRoot is not provided", () => {
+    const instruction = buildSkillInstruction("code");
+    expect(instruction).not.toContain("AGENTS.md");
+  });
 });
 
 describe("buildSkillPersona", () => {

@@ -486,6 +486,14 @@ export function buildSkillInstruction(
   let instruction = "";
   if (workspaceRoot) {
     instruction += `# Workspace\n\nThe workspace root is \`${workspaceRoot}\`. The bash tool already runs with this as the working directory — never prefix commands with \`cd ${workspaceRoot} &&\` or \`cd /workspace &&\`.`;
+
+    const agentsMdPath = path.join(workspaceRoot, "AGENTS.md");
+    if (fs.existsSync(agentsMdPath)) {
+      const content = fs.readFileSync(agentsMdPath, "utf-8").trim();
+      if (content) {
+        instruction += `\n\n---\n\n${content}`;
+      }
+    }
   }
 
   // Said out loud because the alternative is worse than the tokens it costs: a
