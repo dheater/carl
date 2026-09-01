@@ -15,10 +15,7 @@ Append comments to the end of `.agent/notes/pr-review.md`, which holds the PR di
 Reader: a developer six months into the job, on GitHub, with nothing else in front of them. Say what is wrong, then what to do about it.
 
 - Two to five sentences. Longer means two comments, or an `overall` comment.
-- Plain words: "two requests can be in here at once", not "a data race on shared mutable state". "This can be null here", not "the non-null invariant does not hold".
 - Name what they can grep — `parseConfig`, `retries`, `src/http.ts:88`. Never "the caller" or "the downstream consumer".
-- Give the consequence, not the category: "crashes when the list is empty", not "unhandled edge case". Say who sees it and when.
-- Define a term of art in the same clause you use it: "a race (two requests inside this function at once)".
 - One recommendation: the one you would make. A second option only if it is a coin flip, in one sentence.
 - Code fence only after prose, only when three lines beat a paragraph.
 - Hedge the tone, never the substance. "I think this crashes on an empty list", not "this might potentially be a concern". Assume the author had a reason.

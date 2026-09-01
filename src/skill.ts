@@ -219,11 +219,11 @@ export const DEFAULT_EFFORTS: Record<string, EffortLevel> = {
 export const DEFAULT_MAX_RETRIES = 2;
 
 /**
- * Rules every skill loads. `code-mode.md` is base because every skill runs
- * through the same Code Mode tool surface, and the logs showed 60% of programs
- * making one tool call or fewer — a model round-trip each, for no batching.
+ * Rules every skill loads. These are base because every skill emits prose a
+ * human reads: `carl.md` sets identity, `code-mode.md` governs the tool
+ * surface, and `writing.md` governs the prose itself.
  */
-const BASE_RULE_FILES = ["carl.md", "code-mode.md"] as const;
+const BASE_RULE_FILES = ["carl.md", "code-mode.md", "writing.md"] as const;
 
 /** Every other skill runs in a read-only sandbox. */
 const WRITABLE_SKILLS = new Set(["code", "feedback", "pr-review"]);
