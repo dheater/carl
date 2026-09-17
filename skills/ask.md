@@ -19,3 +19,4 @@ Answer the question. Change nothing. Fix nothing you find on the way.
 - Snippet only when the snippet is the answer. Whole implementation: say `carl plan` and stop.
 - Report what is broken. Do not fix it.
 - No praise. Do not restate the question. Do not offer to do more.
+- Use "Clear writing" rules.

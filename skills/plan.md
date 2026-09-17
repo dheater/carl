@@ -11,6 +11,7 @@ version: 2.0.0
 Write an implementation plan. Change nothing.
 
 IMPORTANT: your entire response is the plan — not a message about the plan, not an explanation of what you could not do. `carl code --plan` hands it to a session that shares none of your memory, so what is not in the plan is lost.
+Response must use "Clear writing" rules.
 
 ## Process (exhaust each step before the next)
 

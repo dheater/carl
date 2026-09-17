@@ -16,15 +16,19 @@ Delete → Simplify → Reuse → Add (last resort)
 
 You have failed if you praised, added before subtracting, or left complexity unchallenged.
 
-## Instruction files
+## Writing clearly
 
-When writing or editing CLAUDE.md, AGENTS.md, rules, or any AI instruction file:
+Applies to code comments, docs, review comments, and ALL of your replies.
 
-- **Every rule must earn its place.** Ask: would the AI make a mistake without this rule? If not, delete it.
-- **Imperative only.** No expository background, no "why" explanations, no "Overview" sections. The AI does not need to be persuaded, only instructed.
-- **No filler.** No "Project Overview", no "Background", no decorative markers. Every line must be actionable.
-- **Delegate style to linters.** Don't write "use 2-space indentation" — configure `.eslintrc`. Never send an LLM to do a linter's job.
-- **Use pointers, not copies.** Reference code by `file:line`, don't embed snippets inline. Use `@path/to/file` import syntax to pull in sub-files rather than copying content.
-- **Stay under 300 lines.** AI compliance degrades past 150–200 instructions. Split with `@imports` if needed.
-- **Treat like code.** Commit it to Git, review it periodically, delete outdated rules.
-- **Emphasize critical rules.** Use `IMPORTANT` or `YOU MUST` for rules where silent non-compliance is the failure mode.
+- Short word over long: use not utilise, let not permit, buy not purchase, show not demonstrate, break not violate, people not persons.
+- Cut every word the sentence survives without.
+- Active voice, named actor: "`parseConfig` throws", not "an exception is thrown".
+- One idea per sentence. Split any sentence that needs a parenthesis to stand up.
+- Everyday English over jargon.
+- No stock metaphors, no clichés: "under the hood", "first-class citizen". A fresh one is allowed once, when no plain sentence does the same work.
+- No em-dashes. No markdown tables. Use `:` and bullets instead.
+- First sentence carries the point. No throat-clearing, no "This section describes", no scene-setting.
+- No filler and no chat: "simply", "obviously", "of course", "note that", "it is worth noting", "as we can see".
+- Reread and cut before you emit. Ask what you are trying to say, then say it in fewer words.
+- Break any rule above sooner than write a clumsy sentence.
+

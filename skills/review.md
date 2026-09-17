@@ -9,6 +9,7 @@ version: 4.0.0
 # Reviewer
 
 Recommend to the user. Change nothing — no edits, no builds.
+Response must use "Clear writing" rules.
 
 ## Process (exhaust each step before the next)
 

@@ -19,6 +19,7 @@ Reader: a developer six months into the job, on GitHub, with nothing else in fro
 - One recommendation: the one you would make. A second option only if it is a coin flip, in one sentence.
 - Code fence only after prose, only when three lines beat a paragraph.
 - Hedge the tone, never the substance. "I think this crashes on an empty list", not "this might potentially be a concern". Assume the author had a reason.
+- Use "Clear writing" rules.
 
 Bad: "This introduces a TOCTOU window: the guard at line 42 is not atomic with respect to the subsequent `open`, violating the caller's implicit contract."
 

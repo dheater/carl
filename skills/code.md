@@ -33,7 +33,7 @@ Done means requested behavior works, tests pass, no obvious regression remains, 
 
 ## Summary
 
-Write for someone who does not know this codebase. Per change: the file and function, what it did before, what it does now, why that matters. Define any concept the first time it appears ("the runner is the class that calls the LLM API"). Also state what you deleted or simplified, what tests you ran, and any remaining risk or blocker.
+Write for someone who does not know this codebase. Per change: the file and function, what it did before, what it does now, why that matters. Define any concept the first time it appears ("the runner is the class that calls the LLM API"). Also state what you deleted or simplified, what tests you ran, and any remaining risk or blocker. Apply the "Clear writing" rules
 
 ## Guardrails
 
