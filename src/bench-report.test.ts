@@ -84,7 +84,7 @@ describe("parseBenchArgs", () => {
         "--timeout",
         "120",
         "--judge-model",
-        "opus5",
+        "opus5.5",
         "--judge-samples",
         "5",
         "--out",
@@ -97,7 +97,7 @@ describe("parseBenchArgs", () => {
     expect(args.reps).toBe(3);
     expect(args.effort).toBe("high");
     expect(args.timeoutMs).toBe(120_000);
-    expect(args.judgeModel).toBe("opus5");
+    expect(args.judgeModel).toBe("opus5.5");
     expect(args.judgeSamples).toBe(5);
     expect(args.outDir).toBe("/tmp/out");
   });

@@ -773,6 +773,8 @@ describe("repricing at current rates", () => {
     // A version constant would have to be remembered; this cannot be forgotten.
     expect(RATES_FINGERPRINT).toContain("sonnet");
     expect(RATES_FINGERPRINT).toContain("3/15/3.75/0.3");
+    expect(RATES_FINGERPRINT).toContain("opus-5");
+    expect(RATES_FINGERPRINT).toContain("4/20/5/0.4");
     expect(RATES_FINGERPRINT).toContain("opus");
     expect(RATES_FINGERPRINT).toContain("5/25/6.25/0.5");
   });

@@ -77,14 +77,14 @@
 # otherwise. Both are declared here because the composition is loaded once per
 # subprocess, before carl's chosen provider name reaches the SDK client.
 #
-# Amazon Bedrock, as a pi-ai catalog route serving its installed catalog
-# unchanged. No `models` list: pi-ai refuses an explicit endpoint override on
-# Bedrock (SigV4 needs a region and credentials a baseURL cannot carry), so a
-# hand-declared entry — an inference-profile ARN, for instance — resolves to a
-# route that cannot authenticate. The catalog pins the us-east-1 endpoint, so
-# region selection lives there rather than here, and the model id is what carl
-# chooses. See BEDROCK_MODEL_IDS for why those ids must be `us.`-prefixed
-# inference profiles and why that leaves the cost model unchanged.
+# Amazon Bedrock, as a pi-ai catalog route. The catalog pins the us-east-1
+# endpoint, so region selection lives there rather than here, and the model id
+# is what carl chooses. See BEDROCK_MODEL_IDS for why those ids must be
+# `us.`-prefixed inference profiles and why that leaves the cost model unchanged.
+#
+# A `models` list replaces the catalog's model set, so every model carl uses
+# must appear here. All listed models are in the installed catalog; only their
+# id is needed.
 #
 # No credential reference either: SigV4 resolves through the ambient AWS chain,
 # so no secret is named here and none needs to be.
@@ -98,6 +98,22 @@
         # uses whenever the request names no effort — and carl's never do,
         # because effort is a per-run deployment choice here, not a per-turn one.
         reasoning: !!js "process.env.CARL_REASONING ?? 'medium'"
+        # Every model id from BEDROCK_MODEL_IDS in src/dsh-runner.ts. Keep this
+        # list in sync with that table: a model id that appears in one but not
+        # the other either silently does nothing (extra here) or fails at
+        # runtime with UNKNOWN_MODEL (missing here).
+        models:
+          - id: us.anthropic.claude-sonnet-5
+          - id: us.anthropic.claude-sonnet-4-6
+          - id: "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+          - id: "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+          - id: us.anthropic.claude-opus-5
+          - id: us.anthropic.claude-opus-4-8
+          - id: us.anthropic.claude-opus-4-7
+          - id: "us.anthropic.claude-opus-4-6-v1"
+          - id: "us.anthropic.claude-opus-4-5-20251101-v1:0"
+          - id: "us.anthropic.claude-opus-4-1-20250805-v1:0"
+          - id: us.anthropic.claude-fable-5
 
       # A locally hosted, OpenAI-compatible inference server — mtplx by default.
       # carl asks it what it serves before spawning this process and prefers it

@@ -19,11 +19,11 @@ import {
 /**
  * carl's model aliases mapped to Bedrock catalog ids.
  *
- * Every id must be a catalog id, spelled exactly as pi-ai's installed
- * amazon-bedrock catalog spells it: runtime/cordis.yml declares no `models`
- * list, so the route serves that catalog unchanged and anything else — an
- * inference-profile ARN, for instance — fails the run before its first request
- * with UNKNOWN_MODEL, no matter that Bedrock itself would accept it.
+ * Every id must match what pi-ai's amazon-bedrock route resolves to, which is
+ * the id as runtime/cordis.yml's `models` list spells it. A mismatch — a
+ * version suffix that differs by one character, an inference-profile ARN where
+ * the list uses a bare id — fails the run before its first request with
+ * UNKNOWN_MODEL even if Bedrock itself would accept the id.
  *
  * The ids are `us.`-prefixed inference profiles because a bare `anthropic.*` id
  * has no on-demand throughput on Bedrock and cannot be invoked at all. The
@@ -39,7 +39,7 @@ export const BEDROCK_MODEL_IDS: Record<string, string> = {
   "sonnet4.6": "us.anthropic.claude-sonnet-4-6",
   "sonnet4.5": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
   "haiku4.5": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-  opus5: "us.anthropic.claude-opus-5",
+  "opus5.5": "us.anthropic.claude-opus-5",
   "opus4.8": "us.anthropic.claude-opus-4-8",
   "opus4.7": "us.anthropic.claude-opus-4-7",
   "opus4.6": "us.anthropic.claude-opus-4-6-v1",

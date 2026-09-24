@@ -240,7 +240,11 @@ export function isReadOnlySkill(skill: string): boolean {
 const VALIDATED_SKILLS = new Set(["code", "feedback"]);
 
 /** Rules for a session that writes code someone will have to live with. */
-const WRITING_RULES = ["git-policy.md", "help-error-messages.md"] as const;
+const WRITING_RULES = [
+  "git-policy.md",
+  "help-error-messages.md",
+  "agents-file.md",
+] as const;
 
 /**
  * Rules a skill needs on top of the base. Only `code` and `feedback` write
@@ -545,7 +549,7 @@ export function buildSkillInstruction(
 // Cache write is charged at 1.25x the input rate (5-minute TTL); cache read at
 // 0.1x the input rate.
 //
-// Reviewed 2026-08-06 against the published Anthropic first-party rates.
+// Reviewed 2026-09-24 against the published Anthropic first-party rates.
 // CAVEAT: carl calls Bedrock, which is a separate price list from the
 // first-party API. aws.amazon.com/bedrock/pricing renders its Anthropic rows
 // dynamically and only the Sonnet 5 footnote was retrievable ($2/$10 promo
@@ -569,6 +573,16 @@ const MODEL_RATES: ModelRate[] = [
     cacheWrite: 12.5,
     cacheRead: 1.0,
   },
+  // Opus 5.x (e.g. claude-opus-5-5): $4/$20 per Anthropic first-party pricing.
+  // Must come before the general /opus/ entry so it takes priority.
+  {
+    pattern: /opus-5/i,
+    input: 4.0,
+    output: 20.0,
+    cacheWrite: 5.0,
+    cacheRead: 0.4,
+  },
+  // Opus 4.x and older.
   {
     pattern: /opus/i,
     input: 5.0,

@@ -1427,13 +1427,31 @@ describe("computeCost", () => {
     expect(cost).toBeCloseTo(0.18, 5);
   });
 
-  test("opus: input only", () => {
+  test("opus 4.x: input only", () => {
     const cost = computeCost({
       source: "bedrock",
       modelId: "us.anthropic.claude-opus-4-5-20251101-v1:0",
       inputTokens: 1_000_000,
     });
     expect(cost).toBeCloseTo(5.0, 5);
+  });
+
+  test("opus 5.5: input only", () => {
+    const cost = computeCost({
+      source: "bedrock",
+      modelId: "us.anthropic.claude-opus-5-5",
+      inputTokens: 1_000_000,
+    });
+    expect(cost).toBeCloseTo(4.0, 5);
+  });
+
+  test("opus 5.5: output only", () => {
+    const cost = computeCost({
+      source: "bedrock",
+      modelId: "us.anthropic.claude-opus-5-5",
+      outputTokens: 1_000_000,
+    });
+    expect(cost).toBeCloseTo(20.0, 5);
   });
 
   test("fable: input only", () => {
