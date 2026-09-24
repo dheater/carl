@@ -3,6 +3,9 @@ import { randomUUID } from "crypto";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import type { DeepSeekHarnessOptions } from "@deepseek-ai/dsh-sdk-client" with {
+  "resolution-mode": "import",
+};
 import {
   AgentRunError,
   type AgentRunRequest,
@@ -608,6 +611,51 @@ function localRouteEnv(route: ModelRoute): NodeJS.ProcessEnv {
   };
 }
 
+/** The sandbox mode `runtime/cordis.yml`'s `sandbox-policy` reads from `CARL_SANDBOX_MODE`. */
+export type SandboxMode = "read-only" | "workspace-write";
+
+/**
+ * The `DeepSeekHarness` launch options for one carl-composed runtime subprocess.
+ *
+ * Every per-process choice the harness treats as deployment configuration —
+ * persona, sandbox mode, reasoning effort, session root — arrives through the
+ * environment, because `runtime/cordis.yml` is loaded once per subprocess. Both
+ * a one-shot `DshRunner.run()` and a long-lived chat session (carl mentor) build
+ * their harness from this, so the env-var wiring has one definition.
+ */
+export function buildHarnessLaunch(opts: {
+  route: ModelRoute;
+  workspaceRoot: string;
+  persona: string;
+  sandboxMode: SandboxMode;
+  effort: EffortLevel;
+  sessionRoot: string;
+}): DeepSeekHarnessOptions {
+  const { route, workspaceRoot, persona, sandboxMode, effort, sessionRoot } =
+    opts;
+  const modelId =
+    route.provider === "amazon-bedrock" ? route.modelId : route.model.id;
+  return {
+    launch: {
+      command: process.execPath,
+      args: [RUNTIME_BIN, RUNTIME_CONFIG],
+      cwd: workspaceRoot,
+      env: {
+        ...process.env,
+        CARL_PERSONA: persona,
+        CARL_CWD: workspaceRoot,
+        CARL_SANDBOX_MODE: sandboxMode,
+        CARL_REASONING: REASONING_EFFORT[effort],
+        CARL_SESSION_ROOT: sessionRoot,
+        ...localRouteEnv(route),
+      },
+    },
+    cwd: workspaceRoot,
+    provider: route.provider,
+    model: modelId,
+  };
+}
+
 /**
  * Runs one skill as one turn of a DeepSeek Harness runtime.
  *
@@ -665,25 +713,16 @@ export class DshRunner implements AgentRunner {
     // try/finally rather than `await using`: the syntax needs Node 24, and carl
     // is a CLI people install on whatever Node they have. `close()` is the same
     // teardown the disposer calls.
-    const harness = new DeepSeekHarness({
-      launch: {
-        command: process.execPath,
-        args: [RUNTIME_BIN, RUNTIME_CONFIG],
-        cwd: workspaceRoot,
-        env: {
-          ...process.env,
-          CARL_PERSONA: persona,
-          CARL_CWD: workspaceRoot,
-          CARL_SANDBOX_MODE: readOnly ? "read-only" : "workspace-write",
-          CARL_REASONING: REASONING_EFFORT[effort],
-          CARL_SESSION_ROOT: sessionRoot,
-          ...localRouteEnv(route),
-        },
-      },
-      cwd: workspaceRoot,
-      provider: route.provider,
-      model: modelId,
-    });
+    const harness = new DeepSeekHarness(
+      buildHarnessLaunch({
+        route,
+        workspaceRoot,
+        persona,
+        sandboxMode: readOnly ? "read-only" : "workspace-write",
+        effort,
+        sessionRoot,
+      }),
+    );
 
     try {
       // The notification stream is the only in-flight view of the run: the

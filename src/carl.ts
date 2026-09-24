@@ -22,6 +22,7 @@ import {
   resolveLocalModel,
 } from "./dsh-runner";
 import { startLocalModel } from "./mtplx";
+import { runMentorRepl } from "./mentor";
 import type { AgentRunner } from "./types";
 import { collectPrompt, openFileInEditor, getSkillOutputPath } from "./editor";
 import { checkGhCli, fetchPrMetadata, fetchPrDiff } from "./github";
@@ -521,6 +522,9 @@ function usage(): void {
   );
   console.error("  reset         Clear .agent/");
   console.error(
+    "  mentor        Read-only pairing chat: syntax questions only, no file edits, fixed to Haiku on Bedrock",
+  );
+  console.error(
     `  pr-review <pr-number>  Draft review comments for a PR of the repo in the current directory, then open them in tuicr to review, edit, and submit (requires gh and tuicr) (default effort: ${DEFAULT_EFFORTS["pr-review"]})`,
   );
   console.error(
@@ -697,6 +701,9 @@ async function main(): Promise<void> {
       }
       case "reset":
         cmdReset(workspaceRoot);
+        break;
+      case "mentor":
+        await runMentorRepl(workspaceRoot);
         break;
       case "pr-review": {
         if (args.length !== 2) {
