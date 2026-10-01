@@ -265,7 +265,7 @@ carl --version
 | `carl stats`                     | Report cost, tokens, turns, and duration per skill                                          |
 
 `--model <model>` overrides the model for that run. Bedrock aliases: `haiku4.5`,
-`sonnet4.5`, `sonnet4.6`, `sonnet5`, `opus4.1`, `opus4.5`, `opus4.6`, `opus4.7`,
+`sonnet4.5`, `sonnet4.6`, `sonnet5.5`, `opus4.1`, `opus4.5`, `opus4.6`, `opus4.7`,
 `opus4.8`, `opus5.5`, `fable5`. Anything your local server serves also works — see
 [Local models](#local-models).
 

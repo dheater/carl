@@ -181,12 +181,12 @@ type CarlConfig = {
 };
 
 export const DEFAULT_MODELS: Record<string, string> = {
-  code: "sonnet4.6",
-  ask: "sonnet4.6",
-  plan: "sonnet4.6",
-  feedback: "sonnet4.6",
-  review: "sonnet4.6",
-  "pr-review": "sonnet4.6",
+  code: "sonnet5.5",
+  ask: "sonnet5.5",
+  plan: "opus5.5",
+  feedback: "sonnet5.5",
+  review: "sonnet5.5",
+  "pr-review": "sonnet5.5",
 };
 
 /**
@@ -366,7 +366,7 @@ export function getSkillModel(skill: string, config?: CarlConfig): string {
   const override =
     config?.models?.[skill as keyof NonNullable<CarlConfig["models"]>];
   if (override) return override;
-  return DEFAULT_MODELS[skill] ?? "sonnet4.6";
+  return DEFAULT_MODELS[skill] ?? "sonnet5.5";
 }
 
 export function getSkillEffort(
@@ -534,7 +534,7 @@ export function buildSkillInstruction(
     const diff = getGitDiff(workspaceRoot);
     instruction += "\n\n---\n\n# Diff\n\n";
     if (diff === null) {
-      instruction += "git diff HEAD failed — check repository state.\n";
+      instruction += "Diff unavailable — check repository state.\n";
     } else if (diff === "") {
       instruction += "No diff (nothing staged or modified against HEAD).\n";
     } else {
@@ -549,13 +549,12 @@ export function buildSkillInstruction(
 // Cache write is charged at 1.25x the input rate (5-minute TTL); cache read at
 // 0.1x the input rate.
 //
-// Reviewed 2026-09-24 against the published Anthropic first-party rates.
-// CAVEAT: carl calls Bedrock, which is a separate price list from the
-// first-party API. aws.amazon.com/bedrock/pricing renders its Anthropic rows
-// dynamically and only the Sonnet 5 footnote was retrievable ($2/$10 promo
-// through 2026-08-31, then $3/$15). Sonnet 4.6, Haiku 4.5, and Opus Bedrock
-// rates below are first-party figures used as a stand-in. Costs are estimates;
-// reconcile against AWS Cost Explorer before trusting them to the cent.
+// Reviewed 2026-10-xx against aws.amazon.com/bedrock/pricing (Anthropic section).
+// Bedrock renders its Anthropic rows dynamically; rates below are first-party
+// figures used as a stand-in where Bedrock-specific rates were not retrievable.
+// Sonnet 5.5: $3/$15 (same family as Sonnet 5, which moved to $3/$15 after the
+// $2/$10 promo ended 2026-08-31). Costs are estimates; reconcile against AWS
+// Cost Explorer before trusting them to the cent.
 //
 type ModelRate = {
   pattern: RegExp;

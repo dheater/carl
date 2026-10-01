@@ -140,6 +140,11 @@ describe("carl CLI", () => {
     test("runs the code skill with prompt from file", async () => {
       const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-code-cli-"));
       const skill = require("./skill") as typeof import("./skill");
+      fs.writeFileSync(
+        path.join(configDir, "config.json"),
+        JSON.stringify({}),
+        "utf-8",
+      );
 
       try {
         await expectCliSuccess(["code", promptFile], tmpDir);
@@ -412,6 +417,11 @@ describe("carl CLI", () => {
       // Including the human's edits: the file is the handoff, not the response
       // the plan session happened to return.
       fs.writeFileSync(planPath, "# Plan\n\nStep 1: do it.\n", "utf-8");
+      fs.writeFileSync(
+        path.join(configDir, "config.json"),
+        JSON.stringify({}),
+        "utf-8",
+      );
 
       try {
         await expectCliSuccess(["code", "--plan"], tmpDir);

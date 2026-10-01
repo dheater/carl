@@ -22,6 +22,7 @@ import type {
 import { AgentRunError } from "./types";
 
 jest.mock("./git", () => ({
+  detectJj: jest.fn().mockReturnValue(false),
   getCurrentBranch: jest.fn().mockReturnValue("main"),
   getHeadShaOrNull: jest.fn().mockReturnValue("abc123"),
   getGitStatus: jest.fn().mockReturnValue({
@@ -100,7 +101,7 @@ describe("buildSkillInstruction", () => {
     (git.getGitDiff as jest.Mock).mockReturnValueOnce(null);
     const instruction = buildSkillInstruction("review", "/proj");
     expect(instruction).toContain("# Diff");
-    expect(instruction).toContain("git diff HEAD failed");
+    expect(instruction).toContain("Diff unavailable");
     expect(instruction).not.toContain("```diff");
   });
 
@@ -258,16 +259,19 @@ describe("runSkill", () => {
   let workspaceRoot: string;
   let configDir: string;
   let logSpy: jest.SpyInstance;
+  let warnSpy: jest.SpyInstance;
 
   beforeEach(() => {
     workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "carl-skill-"));
     configDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-config-"));
     process.env.CARL_CONFIG_DIR = configDir;
     logSpy = jest.spyOn(console, "log").mockImplementation(() => {});
+    warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
   });
 
   afterEach(() => {
     logSpy.mockRestore();
+    warnSpy.mockRestore();
     delete process.env.CARL_CONFIG_DIR;
     fs.rmSync(workspaceRoot, { recursive: true, force: true });
     fs.rmSync(configDir, { recursive: true, force: true });
@@ -1368,6 +1372,13 @@ describe("loadCarlConfig two-file merge", () => {
 });
 
 describe("computeCost", () => {
+  beforeEach(() => {
+    jest.spyOn(console, "warn").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
   test("returns null for unknown model", () => {
     expect(
       computeCost({ source: "bedrock", modelId: "unknown-model-xyz" }),

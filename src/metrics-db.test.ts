@@ -94,6 +94,13 @@ afterEach(() => {
 });
 
 describe("ingestFile: folding events into runs", () => {
+  beforeEach(() => {
+    jest.spyOn(console, "warn").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
   test("folds skill and prompt events for one run into a single row", () => {
     write([promptEvent(), makeEvent()]);
     const result = ingestFile(db, logPath);
@@ -365,6 +372,13 @@ describe("targetPathFrom", () => {
 });
 
 describe("ingestFile: per-turn detail", () => {
+  beforeEach(() => {
+    jest.spyOn(console, "warn").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
   test("splits the prompt into persona and instruction", () => {
     write([
       promptEvent({
@@ -767,6 +781,14 @@ describe("repricing at current rates", () => {
       runId,
     );
   }
+
+  beforeEach(() => {
+    jest.spyOn(console, "error").mockImplementation(() => {});
+    jest.spyOn(console, "warn").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
 
   test("the fingerprint is derived from the rate numbers, not hand-maintained", () => {
     // Every rate appears in the fingerprint, so editing any of them changes it.

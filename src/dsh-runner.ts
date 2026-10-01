@@ -35,11 +35,11 @@ import {
  * carl prices its own runs, and MODEL_RATES is keyed on these ids.
  */
 export const BEDROCK_MODEL_IDS: Record<string, string> = {
-  sonnet5: "us.anthropic.claude-sonnet-5",
+  "sonnet5.5": "us.anthropic.claude-sonnet-5-5",
   "sonnet4.6": "us.anthropic.claude-sonnet-4-6",
   "sonnet4.5": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
   "haiku4.5": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-  "opus5.5": "us.anthropic.claude-opus-5",
+  "opus5.5": "us.anthropic.claude-opus-5-5",
   "opus4.8": "us.anthropic.claude-opus-4-8",
   "opus4.7": "us.anthropic.claude-opus-4-7",
   "opus4.6": "us.anthropic.claude-opus-4-6-v1",

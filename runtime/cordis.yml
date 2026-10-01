@@ -102,12 +102,37 @@
         # list in sync with that table: a model id that appears in one but not
         # the other either silently does nothing (extra here) or fails at
         # runtime with UNKNOWN_MODEL (missing here).
+        #
+        # The installed catalog predates the 5.5 ids, so those two entries carry
+        # what the catalog would have supplied (window, output cap and
+        # reasoning levels, as for their 5 siblings), and the route names the
+        # us-east-1 endpoint the catalog pins, which an uncatalogued model
+        # cannot inherit.
+        baseURL: https://bedrock-runtime.us-east-1.amazonaws.com
         models:
-          - id: us.anthropic.claude-sonnet-5
+          - id: us.anthropic.claude-sonnet-5-5
+            contextWindow: 1000000
+            maxTokens: 128000
+            reasoningEfforts:
+              minimal: minimal
+              low: low
+              medium: medium
+              high: high
+              xhigh: xhigh
+              max: max
           - id: us.anthropic.claude-sonnet-4-6
           - id: "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
           - id: "us.anthropic.claude-haiku-4-5-20251001-v1:0"
-          - id: us.anthropic.claude-opus-5
+          - id: us.anthropic.claude-opus-5-5
+            contextWindow: 1000000
+            maxTokens: 128000
+            reasoningEfforts:
+              minimal: minimal
+              low: low
+              medium: medium
+              high: high
+              xhigh: xhigh
+              max: max
           - id: us.anthropic.claude-opus-4-8
           - id: us.anthropic.claude-opus-4-7
           - id: "us.anthropic.claude-opus-4-6-v1"

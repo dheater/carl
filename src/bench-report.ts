@@ -62,7 +62,7 @@ export const SMOKE_TASKS = [
   "05-hard-status-refactor",
 ];
 
-export const DEFAULT_MODELS = ["sonnet4.6", "qwen38-27b", "qwen35-9b"];
+export const DEFAULT_MODELS = ["sonnet5.5", "qwen38-27b", "qwen35-9b"];
 
 /** Long enough for a 27B to finish a hard task; the observed tail is ~31 min. */
 export const DEFAULT_TIMEOUT_MS = 15 * 60_000;
@@ -84,7 +84,7 @@ export function parseBenchArgs(argv: string[], allTasks: string[]): BenchArgs {
     effort: "medium",
     timeoutMs: DEFAULT_TIMEOUT_MS,
     judge: true,
-    judgeModel: "sonnet4.6",
+    judgeModel: "sonnet5.5",
     judgeSamples: DEFAULT_JUDGE_SAMPLES,
     outDir: null,
   };

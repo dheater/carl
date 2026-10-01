@@ -519,13 +519,13 @@ function usage(): void {
   console.log(
     `Usage: just bench [options]
 
-  --models <a,b,c>     models to compare (default: sonnet4.6,qwen38-27b,qwen35-9b)
+  --models <a,b,c>     models to compare (default: sonnet5.5,qwen38-27b,qwen35-9b)
   --tasks <a,b|all>    tasks to run (default: one per difficulty tier)
   --reps <n>           repetitions per model/task cell (default: 1)
   --effort <level>     low | medium | high (default: medium)
   --timeout <seconds>  per-trial wall clock (default: 900)
   --no-judge           skip the blind judge; deterministic checks only
-  --judge-model <m>    model to judge with (default: sonnet4.6)
+  --judge-model <m>    model to judge with (default: sonnet5.5)
   --judge-samples <n>  verdicts per diff, median taken (default: 3)
   --out <dir>          where to write trials and the report
 
