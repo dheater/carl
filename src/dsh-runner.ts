@@ -207,22 +207,6 @@ export function resolveLocalModel(
   return undefined;
 }
 
-/**
- * carl's three effort levels as pi-ai thinking levels.
- *
- * `low` maps to `minimal`, not `off`, for two reasons. pi-ai translates `off`
- * into *omitting* the reasoning parameter, which leaves the provider's own
- * default in force — for a thinking model that is not "do not think". And
- * `us.anthropic.claude-fable-5` does not offer `off` at all, so naming it would
- * fail that model's runs with UNSUPPORTED_REASONING_EFFORT. `minimal` is offered
- * by every Bedrock Claude model in the catalog and says what carl means.
- */
-export const REASONING_EFFORT: Record<EffortLevel, string> = {
-  low: "minimal",
-  medium: "medium",
-  high: "high",
-};
-
 const REPO_ROOT = path.join(__dirname, "..");
 const RUNTIME_CONFIG = path.join(REPO_ROOT, "runtime", "cordis.yml");
 const RUNTIME_BIN = path.join(
@@ -645,7 +629,8 @@ export function buildHarnessLaunch(opts: {
         CARL_PERSONA: persona,
         CARL_CWD: workspaceRoot,
         CARL_SANDBOX_MODE: sandboxMode,
-        CARL_REASONING: REASONING_EFFORT[effort],
+        // Empty means "send no effort"; runtime/cordis.yml reads it so.
+        CARL_REASONING: effort === "default" ? "" : effort,
         CARL_SESSION_ROOT: sessionRoot,
         ...localRouteEnv(route),
       },

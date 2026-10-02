@@ -1,4 +1,22 @@
-export type EffortLevel = "low" | "medium" | "high";
+/**
+ * Effort strings from the model cards. `default` sends no effort, so the model
+ * uses its own default, which is adaptive thinking where the model has it. Which
+ * levels a given model accepts is the runtime's call: it fails the run with
+ * UNSUPPORTED_REASONING_EFFORT for one the model lacks.
+ */
+export const EFFORT_LEVELS = [
+  "default",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
+export type EffortLevel = (typeof EFFORT_LEVELS)[number];
+
+export function isEffortLevel(value: unknown): value is EffortLevel {
+  return (EFFORT_LEVELS as readonly unknown[]).includes(value);
+}
 
 export interface ToolCallEvent {
   tool: string;

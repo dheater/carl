@@ -93,11 +93,11 @@
   config:
     providers:
       amazon-bedrock:
-        # carl's --effort, mapped to a pi-ai thinking level by REASONING_EFFORT
-        # in src/dsh-runner.ts. This is the profile's default level, which pi-ai
-        # uses whenever the request names no effort — and carl's never do,
-        # because effort is a per-run deployment choice here, not a per-turn one.
-        reasoning: !!js "process.env.CARL_REASONING ?? 'medium'"
+        # carl's effort (src/dsh-runner.ts). This is the profile's default level,
+        # which pi-ai uses whenever the request names no effort — and carl's
+        # never do, because effort is a per-run deployment choice here, not a
+        # per-turn one. Empty means carl asked for the model's own default.
+        reasoning: !!js "process.env.CARL_REASONING || undefined"
         # Every model id from BEDROCK_MODEL_IDS in src/dsh-runner.ts. Keep this
         # list in sync with that table: a model id that appears in one but not
         # the other either silently does nothing (extra here) or fails at

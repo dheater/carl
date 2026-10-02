@@ -10,6 +10,8 @@ import {
   isReadOnlySkill,
   computeCost,
   loadCarlConfig,
+  getSkillModel,
+  getSkillEffort,
   DEFAULT_MAX_RETRIES,
 } from "./skill";
 import * as validateModule from "./validate";
@@ -1261,9 +1263,10 @@ describe("loadCarlConfig two-file merge", () => {
     fs.writeFileSync(
       path.join(configDir, "config.json"),
       JSON.stringify({
-        effort: "high",
-        efforts: { code: "high", review: "high" },
-        models: { code: "opus", review: "haiku" },
+        models: {
+          code: { model: "opus", effort: "high" },
+          review: { model: "haiku", effort: "high" },
+        },
       }),
       "utf-8",
     );
@@ -1273,9 +1276,7 @@ describe("loadCarlConfig two-file merge", () => {
     fs.writeFileSync(
       path.join(localConfigDir, "config.json"),
       JSON.stringify({
-        effort: "low",
-        efforts: { review: "low" },
-        models: { review: "sonnet" },
+        models: { review: { model: "sonnet", effort: "low" } },
       }),
       "utf-8",
     );
@@ -1283,15 +1284,46 @@ describe("loadCarlConfig two-file merge", () => {
     const config = loadCarlConfig(workspaceRoot);
 
     // local field wins
-    expect(config.efforts?.review).toBe("low");
-    expect(config.models?.review).toBe("sonnet");
+    expect(getSkillModel("review", config)).toBe("sonnet");
+    expect(getSkillEffort("review", config)).toBe("low");
 
     // global field not touched by local survives
-    expect(config.efforts?.code).toBe("high");
-    expect(config.models?.code).toBe("opus");
+    expect(getSkillModel("code", config)).toBe("opus");
+    expect(getSkillEffort("code", config)).toBe("high");
+  });
 
-    // scalar top-level: local wins
-    expect(config.effort).toBe("low");
+  test("effort is per skill; a bare string means default effort", () => {
+    fs.writeFileSync(
+      path.join(configDir, "config.json"),
+      JSON.stringify({
+        models: {
+          ask: "sonnet4.6",
+          code: { model: "sonnet5.5", effort: "xhigh" },
+        },
+      }),
+      "utf-8",
+    );
+    const config = loadCarlConfig(workspaceRoot);
+    expect(getSkillModel("ask", config)).toBe("sonnet4.6");
+    expect(getSkillEffort("ask", config)).toBe("default");
+    expect(getSkillEffort("code", config)).toBe("xhigh");
+  });
+
+  test("rejects the removed effort keys and unknown effort strings", () => {
+    fs.writeFileSync(
+      path.join(configDir, "config.json"),
+      JSON.stringify({ effort: "high" }),
+      "utf-8",
+    );
+    expect(() => loadCarlConfig(workspaceRoot)).toThrow(/Removed key "effort"/);
+    fs.writeFileSync(
+      path.join(configDir, "config.json"),
+      JSON.stringify({ models: { code: { model: "x", effort: "med" } } }),
+      "utf-8",
+    );
+    expect(() => loadCarlConfig(workspaceRoot)).toThrow(
+      /Invalid "models.code"/,
+    );
   });
 
   function writeGlobal(config: unknown): void {

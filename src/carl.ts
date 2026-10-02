@@ -5,13 +5,13 @@ import {
   runSkillWithValidation,
   resolveValidation,
   DEFAULT_MODELS,
-  DEFAULT_EFFORTS,
   DEFAULT_MAX_RETRIES,
   getSkillModel,
   getSkillEffort,
   loadCarlConfig,
   type SkillValidation,
 } from "./skill";
+import { EFFORT_LEVELS, isEffortLevel } from "./types";
 import type { EffortLevel } from "./types";
 import { cmdStats } from "./stats-command";
 import {
@@ -501,31 +501,33 @@ function usage(): void {
     `                         A locally hosted model of that name is used when one is served at ${localBaseURL()}; otherwise Bedrock: ${Object.keys(BEDROCK_MODEL_IDS).join(", ")}`,
   );
   console.error(
-    "  --effort <level>       Override effort for this run: low, medium, high (ignores config and defaults)",
+    "  --effort <level>       Override effort for this run: " +
+      EFFORT_LEVELS.join(", ") +
+      " (ignores config)",
   );
   console.error("");
   console.error("Commands:");
   console.error(
-    `  code [<file>|--plan] Read prompt from file, from the saved plan (--plan), or open editor; run the implementation skill (default model: ${DEFAULT_MODELS.code}, default effort: ${DEFAULT_EFFORTS.code})`,
+    `  code [<file>|--plan] Read prompt from file, from the saved plan (--plan), or open editor; run the implementation skill (default model: ${DEFAULT_MODELS.code})`,
   );
   console.error(
-    `  ask [<file>]  Ask a question about the code; read-only session, answer written to .agent/notes/ask.md (default effort: ${DEFAULT_EFFORTS.ask})`,
+    `  ask [<file>]  Ask a question about the code; read-only session, answer written to .agent/notes/ask.md`,
   );
   console.error(
-    `  plan [<file>] Plan a change without making it; read-only session, plan written to .agent/notes/plan.md for \`carl code --plan\` (default effort: ${DEFAULT_EFFORTS.plan})`,
+    `  plan [<file>] Plan a change without making it; read-only session, plan written to .agent/notes/plan.md for \`carl code --plan\``,
   );
   console.error(
-    `  review        Run reviewer once (cleanup/refactor your own local changes) (default effort: ${DEFAULT_EFFORTS.review})`,
+    `  review        Run reviewer once (cleanup/refactor your own local changes)`,
   );
   console.error(
-    `  feedback [<file>|--review] Assess review comments, apply the correct ones, and report how each was disposed of; validates like \`code\` (default effort: ${DEFAULT_EFFORTS.feedback})`,
+    `  feedback [<file>|--review] Assess review comments, apply the correct ones, and report how each was disposed of; validates like \`code\``,
   );
   console.error("  reset         Clear .agent/");
   console.error(
     "  mentor        Read-only pairing chat: syntax questions only, no file edits, fixed to Haiku on Bedrock",
   );
   console.error(
-    `  pr-review <pr-number>  Draft review comments for a PR of the repo in the current directory, then open them in tuicr to review, edit, and submit (requires gh and tuicr) (default effort: ${DEFAULT_EFFORTS["pr-review"]})`,
+    `  pr-review <pr-number>  Draft review comments for a PR of the repo in the current directory, then open them in tuicr to review, edit, and submit (requires gh and tuicr)`,
   );
   console.error(
     "  stats         Report cost, tokens, turns, and duration per skill from the event log",
@@ -548,7 +550,10 @@ function usage(): void {
     "Config: ~/.config/carl/config.json (global default), .carl/config.json (local override, optional)",
   );
   console.error(
-    `  { "models": ${JSON.stringify(DEFAULT_MODELS, null, 2)}, "effort": "high", "efforts": { "code": "medium", "review": "high", "pr-review": "high" } }`,
+    `  { "models": ${JSON.stringify({ ...DEFAULT_MODELS, code: { model: DEFAULT_MODELS.code, effort: "medium" } }, null, 2)} }`,
+  );
+  console.error(
+    `  A skill is a model string or { "model": ..., "effort": ... }; effort is one of ${EFFORT_LEVELS.join(", ")}. Omit it for the model's own default (adaptive thinking where available)`,
   );
   console.error("");
   console.error(
@@ -580,7 +585,7 @@ async function main(): Promise<void> {
   }
 
   let model: string | undefined;
-  let effort: "low" | "medium" | "high" | undefined;
+  let effort: EffortLevel | undefined;
   const args: string[] = [];
   for (let i = 0; i < rawArgs.length; i++) {
     if (rawArgs[i] === "--model") {
@@ -595,9 +600,9 @@ async function main(): Promise<void> {
         console.error("error: --effort requires a value");
         process.exit(1);
       }
-      if (val !== "low" && val !== "medium" && val !== "high") {
+      if (!isEffortLevel(val)) {
         console.error(
-          `error: --effort must be one of: low, medium, high (got: ${JSON.stringify(val)})`,
+          `error: --effort must be one of: ${EFFORT_LEVELS.join(", ")} (got: ${JSON.stringify(val)})`,
         );
         process.exit(1);
       }

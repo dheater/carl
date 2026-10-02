@@ -522,7 +522,7 @@ function usage(): void {
   --models <a,b,c>     models to compare (default: sonnet5.5,qwen38-27b,qwen35-9b)
   --tasks <a,b|all>    tasks to run (default: one per difficulty tier)
   --reps <n>           repetitions per model/task cell (default: 1)
-  --effort <level>     low | medium | high (default: medium)
+  --effort <level>     default | low | medium | high | xhigh | max (default: medium)
   --timeout <seconds>  per-trial wall clock (default: 900)
   --no-judge           skip the blind judge; deterministic checks only
   --judge-model <m>    model to judge with (default: sonnet5.5)

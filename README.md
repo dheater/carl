@@ -110,7 +110,24 @@ On first run, carl writes `~/.config/carl/config.json`:
 A per-project `.carl/config.json` is optional and overrides the global file
 field-by-field. `CARL_CONFIG_DIR` overrides the global directory (used by tests).
 
-Edit `~/.config/carl/config.json` to change the default models and effort levels.
+Edit `~/.config/carl/config.json` to change the models and effort levels.
+Each skill is a model string, which uses the model's default effort, or an
+object that adds an effort:
+
+```json
+{
+  "models": {
+    "code": { "model": "sonnet5.5", "effort": "medium" },
+    "ask": "sonnet4.6"
+  }
+}
+```
+
+Effort is one of `low`, `medium`, `high`, `xhigh`, `max`, or `default`, the
+strings on the model cards. A model rejects levels it lacks. Without an effort,
+the model decides: adaptive thinking where the model has it. The top-level
+`effort` and `efforts` keys no longer exist; carl refuses a config that has them.
+The log and `carl stats` record the effort each run used (`default` when unset).
 
 There is nothing to configure for AWS beyond having credentials. Every model is
 invoked through a us-east-1 inference profile; AWS refuses on-demand invocation
@@ -269,8 +286,8 @@ carl --version
 `opus4.8`, `opus5.5`, `fable5`. Anything your local server serves also works — see
 [Local models](#local-models).
 
-`--effort low|medium|high` overrides how much the model thinks. `low` is the
-smallest thinking budget the model offers, not none.
+`--effort <level>` overrides how much the model thinks for that run, using the
+levels above.
 
 While a skill runs, carl streams progress to **stderr** — one timestamped line
 per model request, per tool call the agent's program makes, and per thing the
@@ -319,9 +336,9 @@ delete from the plan is gone and anything you add is instruction.
 `carl code --plan` fails with a pointer to `carl plan` when there is no plan file.
 `carl reset` deletes it along with the rest of `.agent/`.
 
-Both commands respect `models` and `efforts` in config.json under the keys `ask`
-and `plan`. `plan` defaults to `high` effort for the same reason `pr-review` does:
-it is the cheap step whose mistakes are paid for by the expensive one after it.
+Both commands respect `models` in config.json under the keys `ask` and `plan`.
+Consider a high effort for `plan`: it is the cheap step whose mistakes are paid
+for by the expensive one after it.
 
 ### Why not DSH plan mode
 

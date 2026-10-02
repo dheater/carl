@@ -153,7 +153,7 @@ describe("carl CLI", () => {
           "code",
           "ship it",
           skill.DEFAULT_MODELS.code,
-          skill.DEFAULT_EFFORTS.code,
+          "default",
           expect.any(Object),
           undefined,
         );
@@ -196,7 +196,7 @@ describe("carl CLI", () => {
           "code",
           "ship it",
           skill.DEFAULT_MODELS.code,
-          skill.DEFAULT_EFFORTS.code,
+          "default",
           expect.any(Object),
           { command: "npm test", maxRetries: 3 },
         );
@@ -318,7 +318,7 @@ describe("carl CLI", () => {
           "ask",
           "ship it",
           skill.DEFAULT_MODELS.ask,
-          skill.DEFAULT_EFFORTS.ask,
+          "default",
           expect.any(Object),
         );
         // A configured `validate` is about changed files, and ask changes none.
@@ -365,7 +365,7 @@ describe("carl CLI", () => {
           "plan",
           "ship it",
           skill.DEFAULT_MODELS.plan,
-          skill.DEFAULT_EFFORTS.plan,
+          "default",
           expect.any(Object),
         );
         // The plan is worthless if the human does not know what consumes it.
@@ -430,7 +430,7 @@ describe("carl CLI", () => {
           "code",
           "# Plan\n\nStep 1: do it.",
           skill.DEFAULT_MODELS.code,
-          skill.DEFAULT_EFFORTS.code,
+          "default",
           expect.any(Object),
           undefined,
         );
@@ -486,7 +486,7 @@ describe("carl CLI", () => {
           "feedback",
           "ship it",
           skill.DEFAULT_MODELS.feedback,
-          skill.DEFAULT_EFFORTS.feedback,
+          "default",
           expect.any(Object),
           { command: "npm test", maxRetries: 3 },
         );
@@ -509,7 +509,7 @@ describe("carl CLI", () => {
           "feedback",
           "1. src/a.ts:3 — delete this",
           skill.DEFAULT_MODELS.feedback,
-          skill.DEFAULT_EFFORTS.feedback,
+          "default",
           expect.any(Object),
           undefined,
         );
@@ -597,7 +597,7 @@ describe("carl CLI", () => {
           "pr-review",
           expect.stringContaining("||| COMMENT"),
           skill.DEFAULT_MODELS["pr-review"],
-          skill.DEFAULT_EFFORTS["pr-review"],
+          "default",
           expect.any(Object),
         );
         const draft = fs.readFileSync(draftPath, "utf-8");

@@ -1,7 +1,6 @@
 import {
   BEDROCK_MODEL_IDS,
   DEFAULT_LOCAL_BASE_URL,
-  REASONING_EFFORT,
   describeFailure,
   finalTurnReason,
   formatProgress,
@@ -65,22 +64,6 @@ describe("BEDROCK_MODEL_IDS", () => {
   test("aliases are unique per model id", () => {
     const ids = Object.values(BEDROCK_MODEL_IDS);
     expect(new Set(ids).size).toBe(ids.length);
-  });
-});
-
-describe("REASONING_EFFORT", () => {
-  test("maps carl's three levels onto pi-ai thinking levels", () => {
-    expect(REASONING_EFFORT).toEqual({
-      low: "minimal",
-      medium: "medium",
-      high: "high",
-    });
-  });
-
-  test("never sends off, which pi-ai spells as omitting the parameter", () => {
-    // `off` leaves the provider's own default in force rather than disabling
-    // thinking, and fable-5 does not offer it at all.
-    expect(Object.values(REASONING_EFFORT)).not.toContain("off");
   });
 });
 

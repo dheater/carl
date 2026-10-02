@@ -6,6 +6,7 @@ import {
 } from "./git";
 import { getSkillOutputPath } from "./editor";
 import { formatDuration } from "./stats-format";
+import { EFFORT_LEVELS, isEffortLevel } from "./types";
 import type { AgentRunner, UsageSummary, EffortLevel } from "./types";
 import { attachUsage, usageFromError } from "./types";
 import {
@@ -149,25 +150,21 @@ type RunContext = {
  * region could not take effect. Stale keys in an existing config.json are
  * ignored rather than rejected.
  */
+/**
+ * A skill's model, bare or with an effort: `"ask": "sonnet4.6"` or
+ * `"code": { "model": "sonnet4.6", "effort": "medium" }`. A bare string uses the
+ * model's default effort.
+ */
+type ModelSetting = string | { model: string; effort?: EffortLevel };
+
 type CarlConfig = {
   models?: {
-    code?: string;
-    ask?: string;
-    plan?: string;
-    feedback?: string;
-    review?: string;
-    "pr-review"?: string;
-  };
-  /** Global fallback effort level for all skills. */
-  effort?: EffortLevel;
-  /** Per-skill effort overrides; take precedence over the global `effort` field. */
-  efforts?: {
-    code?: EffortLevel;
-    ask?: EffortLevel;
-    plan?: EffortLevel;
-    feedback?: EffortLevel;
-    review?: EffortLevel;
-    "pr-review"?: EffortLevel;
+    code?: ModelSetting;
+    ask?: ModelSetting;
+    plan?: ModelSetting;
+    feedback?: ModelSetting;
+    review?: ModelSetting;
+    "pr-review"?: ModelSetting;
   };
   /**
    * Shell command that decides whether `carl code` finished the job — typically
@@ -187,24 +184,6 @@ export const DEFAULT_MODELS: Record<string, string> = {
   feedback: "sonnet5.5",
   review: "sonnet5.5",
   "pr-review": "sonnet5.5",
-};
-
-/**
- * `plan` gets `high` for the same reason `pr-review` does: it is the cheap step
- * whose mistakes are paid for by the expensive one after it. `ask` gets `medium`
- * because a question can be as hard as the code it is about.
- *
- * `feedback` gets `high` because its job is judging whether a claim is true. A
- * wrong "applied" edits the code to match a mistake, which is the one outcome
- * that costs more than the run.
- */
-export const DEFAULT_EFFORTS: Record<string, EffortLevel> = {
-  code: "medium",
-  ask: "medium",
-  plan: "high",
-  feedback: "high",
-  review: "medium",
-  "pr-review": "high",
 };
 
 /**
@@ -281,6 +260,30 @@ function readConfigFile(configPath: string): CarlConfig {
  * file asks for.
  */
 function assertValidConfig(config: CarlConfig, source: string): void {
+  for (const key of ["effort", "efforts"]) {
+    if (key in config) {
+      throw new Error(
+        `Removed key "${key}" in ${source}. Effort now sits beside the model, per skill.\n` +
+          `Delete "${key}" and write e.g. "models": { "code": { "model": "sonnet5.5", "effort": "medium" } }.`,
+      );
+    }
+  }
+  for (const [skill, setting] of Object.entries(config.models ?? {})) {
+    if (typeof setting === "string") continue;
+    const s = setting as { model?: unknown; effort?: unknown } | null;
+    if (
+      typeof s !== "object" ||
+      s === null ||
+      typeof s.model !== "string" ||
+      !s.model.trim() ||
+      (s.effort !== undefined && !isEffortLevel(s.effort))
+    ) {
+      throw new Error(
+        `Invalid "models.${skill}" in ${source}: got ${JSON.stringify(setting)}.\n` +
+          `Use a model string, or { "model": "<name>", "effort": "<${EFFORT_LEVELS.join("|")}>" }.`,
+      );
+    }
+  }
   if (config.validate !== undefined) {
     if (typeof config.validate !== "string" || !config.validate.trim()) {
       throw new Error(
@@ -335,7 +338,6 @@ export function loadCarlConfig(workspaceRoot: string): CarlConfig {
     ...globalConfig,
     ...localConfig,
     models: { ...globalConfig.models, ...localConfig.models },
-    efforts: { ...globalConfig.efforts, ...localConfig.efforts },
   };
 }
 
@@ -362,22 +364,26 @@ function loadSkillFile(name: string): string {
   return raw.replace(/^---\n[\s\S]*?\n---\n?/, "").trimStart();
 }
 
-export function getSkillModel(skill: string, config?: CarlConfig): string {
-  const override =
+function skillSetting(
+  skill: string,
+  config?: CarlConfig,
+): { model?: string; effort?: EffortLevel } {
+  const setting =
     config?.models?.[skill as keyof NonNullable<CarlConfig["models"]>];
-  if (override) return override;
-  return DEFAULT_MODELS[skill] ?? "sonnet5.5";
+  return typeof setting === "string" ? { model: setting } : (setting ?? {});
+}
+
+export function getSkillModel(skill: string, config?: CarlConfig): string {
+  return (
+    skillSetting(skill, config).model ?? DEFAULT_MODELS[skill] ?? "sonnet5.5"
+  );
 }
 
 export function getSkillEffort(
   skill: string,
   config?: CarlConfig,
 ): EffortLevel {
-  const perSkill =
-    config?.efforts?.[skill as keyof NonNullable<CarlConfig["efforts"]>];
-  if (perSkill) return perSkill;
-  if (config?.effort) return config.effort;
-  return DEFAULT_EFFORTS[skill] ?? "medium";
+  return skillSetting(skill, config).effort ?? "default";
 }
 
 /** A configured check plus how many repair runs carl may spend on it. */
