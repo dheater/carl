@@ -24,6 +24,8 @@ export interface ToolCallEvent {
   outputBytes?: number;
   durationMs?: number;
   error: boolean;
+  /** The failing result's text, one-lined; absent on success. */
+  errorMessage?: string;
 }
 
 export interface AgentRunRequest {

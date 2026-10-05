@@ -254,6 +254,56 @@ describe("replayToolCalls", () => {
     return seen;
   }
 
+  test("carries the text of a failed call and nothing for a success", () => {
+    const seen = collect([
+      {
+        type: "tool/call",
+        time: 1000,
+        data: { callId: "c1", name: "edit", arguments: { file_path: "a.ts" } },
+      },
+      {
+        type: "tool/result",
+        time: 1010,
+        data: {
+          message: {
+            content: [
+              {
+                toolCallId: "c1",
+                isError: true,
+                content: [
+                  { type: "text", text: 'edit requires reading\n"a.ts" first' },
+                ],
+              },
+            ],
+          },
+        },
+      },
+      {
+        type: "tool/call",
+        time: 1020,
+        data: { callId: "c2", name: "read", arguments: {} },
+      },
+      {
+        type: "tool/result",
+        time: 1030,
+        data: {
+          message: {
+            content: [
+              {
+                toolCallId: "c2",
+                isError: false,
+                content: [{ type: "text", text: "fine" }],
+              },
+            ],
+          },
+        },
+      },
+    ]);
+
+    expect(seen[0].errorMessage).toBe('edit requires reading "a.ts" first');
+    expect(seen[1].errorMessage).toBeUndefined();
+  });
+
   test("reports an inner code dispatch under the real tool name", () => {
     const seen = collect([
       {

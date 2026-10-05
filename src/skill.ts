@@ -74,6 +74,8 @@ type ToolCallMeta = {
   input_summary: string;
   output_bytes: number;
   error: boolean;
+  /** Why the call failed; present only when `error` is true. */
+  error_message?: string;
 };
 
 /**
@@ -939,6 +941,7 @@ export async function runSkill(
               input_summary: event.inputSummary ?? "",
               output_bytes: event.outputBytes ?? 0,
               error: event.error,
+              error_message: event.errorMessage,
             });
           },
         });

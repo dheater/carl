@@ -288,6 +288,30 @@ describe("ingestFile: tool calls", () => {
     expect(call.target_path).toBe("src/skill.ts");
   });
 
+  test("keeps why a call failed, and NULL when it did not", () => {
+    write([
+      toolCall({
+        subject: "edit",
+        meta: {
+          input_summary: '{"file_path":"a.ts"}',
+          output_bytes: 60,
+          error: true,
+          error_message: 'edit requires reading "a.ts" first',
+        },
+      }),
+      toolCall(),
+    ]);
+    ingestFile(db, logPath);
+
+    const calls = db
+      .prepare("SELECT error_message FROM tool_calls ORDER BY ordinal")
+      .all() as any[];
+    expect(calls.map((c) => c.error_message)).toEqual([
+      'edit requires reading "a.ts" first',
+      null,
+    ]);
+  });
+
   test("leaves target_path NULL for a call that names no file", () => {
     write([toolCall({ subject: "bash" })]);
     ingestFile(db, logPath);

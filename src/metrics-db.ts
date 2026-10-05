@@ -107,6 +107,9 @@ CREATE TABLE IF NOT EXISTS tool_calls (
   -- The file the call names, lifted out of input_summary so those questions are
   -- one query rather than one query and a regex.
   target_path   TEXT,
+  -- Why a failed call failed, as the tool reported it. NULL on success and on
+  -- calls logged before this column existed.
+  error_message TEXT,
   UNIQUE(run_id, ordinal)
 );
 
@@ -188,7 +191,7 @@ export function openMetricsDb(dbPath = getMetricsDbPath()): DatabaseSync {
  */
 const REQUIRED_COLUMNS: Record<string, string> = {
   runs: "compactions",
-  tool_calls: "target_path",
+  tool_calls: "error_message",
 };
 
 /**
@@ -596,8 +599,8 @@ function prepareStatements(db: DatabaseSync): Statements {
     insertToolCall: db.prepare(`
       INSERT INTO tool_calls (
         run_id, ordinal, timestamp, timestamp_ms, tool, duration_ms, output_bytes,
-        error, input_summary, target_path
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        error, input_summary, target_path, error_message
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(run_id, ordinal) DO NOTHING
     `),
 
@@ -711,6 +714,7 @@ function applyEvent(
       meta.error ? 1 : 0,
       inputSummary,
       targetPathFrom(inputSummary ?? undefined, tool, workspace),
+      typeof meta.error_message === "string" ? meta.error_message : null,
     );
     stmts.bumpToolCounts.run(runId, runId, runId);
   }

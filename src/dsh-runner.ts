@@ -328,6 +328,21 @@ function contentBytes(content: unknown): number {
   return Buffer.byteLength(JSON.stringify(content), "utf-8");
 }
 
+/** Text of a failed result, one line, capped. */
+function errorText(content: unknown): string | undefined {
+  if (!Array.isArray(content)) return undefined;
+  const text = content
+    .map((block: unknown) =>
+      typeof block === "object" &&
+      block !== null &&
+      typeof (block as { text?: unknown }).text === "string"
+        ? (block as { text: string }).text
+        : "",
+    )
+    .join(" ");
+  return text.trim().length > 0 ? oneLine(text, 200) : undefined;
+}
+
 /** The billed prompt for one request: everything that is not output. */
 function promptTokens(turn: Usage): number {
   return (
@@ -453,6 +468,8 @@ export function replayToolCalls(
         outputBytes: contentBytes(data.content),
         durationMs: start ? (event.time ?? start) - start : undefined,
         error: data.isError === true,
+        errorMessage:
+          data.isError === true ? errorText(data.content) : undefined,
       });
       continue;
     }
@@ -473,6 +490,8 @@ export function replayToolCalls(
         outputBytes: contentBytes(result?.content),
         durationMs: start ? (event.time ?? start) - start : undefined,
         error: result?.isError === true,
+        errorMessage:
+          result?.isError === true ? errorText(result.content) : undefined,
       });
     }
   }
