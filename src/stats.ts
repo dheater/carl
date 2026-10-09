@@ -23,6 +23,7 @@ import {
   renderDegradation,
   type DegradationReport,
 } from "./degradation";
+import { MAX_TURNS } from "./claude-runner";
 
 export type TimeRange = {
   /** Inclusive start. */
@@ -220,9 +221,6 @@ export type SkillSummary = {
   turns: number[];
   tokens: number[];
 };
-
-/** Turn cap in BedrockRunner; runs at the cap were cut off, not completed. */
-const MAX_TURNS = 80;
 
 export function summarizeSkill(skill: string, runs: RunRow[]): SkillSummary {
   const costs = nonNull(runs.map((r) => r.cost_usd));

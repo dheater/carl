@@ -14,6 +14,7 @@ import {
   type BenchRunRow,
   type TrialRecord,
 } from "./bench-report";
+import { BEDROCK_MODEL_IDS } from "./claude-runner";
 
 const ALL_TASKS = [
   "01-easy-count-by-status",
@@ -26,8 +27,8 @@ const ALL_TASKS = [
 
 function trial(over: Partial<TrialRecord> = {}): TrialRecord {
   return {
-    id: "sonnet4.6/01-easy-count-by-status/rep1",
-    model: "sonnet4.6",
+    id: "sonnet5.5/01-easy-count-by-status/rep1",
+    model: "sonnet5.5",
     task: "01-easy-count-by-status",
     rep: 1,
     workspace: "/tmp/bench/trials/sonnet/01/rep1/repo",
@@ -49,7 +50,7 @@ function row(over: Partial<BenchRunRow> = {}): BenchRunRow {
     run_id: "r1",
     workspace: "/tmp/bench/trials/sonnet/01/rep1/repo",
     started_at_ms: 1_000_500,
-    model_id: "us.anthropic.claude-sonnet-4-6-20260514-v1:0",
+    model_id: BEDROCK_MODEL_IDS["sonnet5.5"],
     cost_usd: 0.12,
     turns: 7,
     tool_call_count: 20,
@@ -74,7 +75,7 @@ describe("parseBenchArgs", () => {
     const args = parseBenchArgs(
       [
         "--models",
-        "sonnet4.6, qwen35-9b",
+        "sonnet5.5, haiku5.5",
         "--tasks",
         "02-easy-list-numbering",
         "--reps",
@@ -92,7 +93,7 @@ describe("parseBenchArgs", () => {
       ],
       ALL_TASKS,
     );
-    expect(args.models).toEqual(["sonnet4.6", "qwen35-9b"]);
+    expect(args.models).toEqual(["sonnet5.5", "haiku5.5"]);
     expect(args.tasks).toEqual(["02-easy-list-numbering"]);
     expect(args.reps).toBe(3);
     expect(args.effort).toBe("high");
@@ -141,6 +142,17 @@ describe("parseBenchArgs", () => {
     expect(() => parseBenchArgs(["--models"], ALL_TASKS)).toThrow(
       /needs a value/,
     );
+  });
+
+  // The routing guard looks the name up exactly; a name with no Bedrock id
+  // would mark every one of its trials misrouted.
+  it("refuses a model or judge name that is not a Bedrock alias", () => {
+    expect(() => parseBenchArgs(["--models", "qwen35-9b"], ALL_TASKS)).toThrow(
+      /Unknown model\(s\): qwen35-9b/,
+    );
+    expect(() =>
+      parseBenchArgs(["--judge-model", "sonnet"], ALL_TASKS),
+    ).toThrow(/Unknown model\(s\): sonnet/);
   });
 });
 
@@ -194,30 +206,19 @@ describe("joinTrialRuns", () => {
     expect(joined.runStatus).toBe("success");
   });
 
-  // The guard that gives the whole benchmark its meaning: `--model qwen38-27b`
-  // falls back to Bedrock when the local server is down.
+  // The guard that gives the whole benchmark its meaning.
   it("flags a trial the log says ran on another route", () => {
-    const [joined] = joinTrialRuns([trial({ model: "qwen38-27b" })], [row()]);
+    const [joined] = joinTrialRuns([trial({ model: "opus5.5" })], [row()]);
     expect(joined.modelMismatch).toBe(true);
-    expect(joined.loggedModel).toBe(
-      "us.anthropic.claude-sonnet-4-6-20260514-v1:0",
-    );
+    expect(joined.loggedModel).toBe(BEDROCK_MODEL_IDS["sonnet5.5"]);
   });
 
-  it("accepts the local server's spelling of a configured name", () => {
+  it("accepts the exact id its alias maps to", () => {
     const [joined] = joinTrialRuns(
-      [trial({ model: "qwen38-27b" })],
-      [row({ model_id: "mtplx-qwen38-27b-optimized-speed" })],
+      [trial({ model: "haiku5.5" })],
+      [row({ model_id: BEDROCK_MODEL_IDS["haiku5.5"] })],
     );
     expect(joined.modelMismatch).toBe(false);
-  });
-
-  it("does not confuse the two local models with each other", () => {
-    const [joined] = joinTrialRuns(
-      [trial({ model: "qwen35-9b" })],
-      [row({ model_id: "mtplx-qwen38-27b-optimized-speed" })],
-    );
-    expect(joined.modelMismatch).toBe(true);
   });
 
   it("treats an unrecorded route as a mismatch rather than a match", () => {
@@ -323,12 +324,12 @@ describe("combineJudgeSamples", () => {
 
 describe("summarizeBench", () => {
   const trials = [
-    trial({ id: "a", model: "sonnet4.6", pass: true, wallMs: 40_000 }),
-    trial({ id: "b", model: "sonnet4.6", pass: false, wallMs: 60_000 }),
+    trial({ id: "a", model: "sonnet5.5", pass: true, wallMs: 40_000 }),
+    trial({ id: "b", model: "sonnet5.5", pass: false, wallMs: 60_000 }),
     trial({
       id: "c",
-      model: "qwen35-9b",
-      workspace: "/tmp/bench/trials/qwen/01/rep1/repo",
+      model: "haiku5.5",
+      workspace: "/tmp/bench/trials/haiku/01/rep1/repo",
       pass: false,
       wallMs: 200_000,
     }),
@@ -336,19 +337,19 @@ describe("summarizeBench", () => {
     (t) =>
       joinTrialRuns(
         [t],
-        [row({ workspace: t.workspace, model_id: t.model })],
+        [row({ workspace: t.workspace, model_id: BEDROCK_MODEL_IDS[t.model] })],
       )[0],
   );
 
   it("keeps each model's rates to that model's trials", () => {
-    const [sonnet, qwen] = summarizeBench(trials);
-    expect(sonnet.model).toBe("sonnet4.6");
+    const [sonnet, haiku] = summarizeBench(trials);
+    expect(sonnet.model).toBe("sonnet5.5");
     expect(sonnet.scored).toBe(2);
     expect(sonnet.passes).toBe(1);
     expect(sonnet.passRate).toBe(0.5);
     expect(sonnet.meanWallMs).toBe(50_000);
-    expect(qwen.model).toBe("qwen35-9b");
-    expect(qwen.passRate).toBe(0);
+    expect(haiku.model).toBe("haiku5.5");
+    expect(haiku.passRate).toBe(0);
   });
 
   it("charges cost against passes, not against trials", () => {
@@ -360,15 +361,15 @@ describe("summarizeBench", () => {
   });
 
   it("leaves cost per pass unknown when nothing passed", () => {
-    const [qwen] = summarizeBench([trials[2]]);
-    expect(qwen.costPerPassUsd).toBeNull();
+    const [haiku] = summarizeBench([trials[2]]);
+    expect(haiku.costPerPassUsd).toBeNull();
   });
 
   // A misrouted trial must not lend its result to the model it was filed under,
   // in either direction.
   it("excludes mismatched trials from every rate and counts them", () => {
     const misrouted = joinTrialRuns(
-      [trial({ id: "d", model: "qwen38-27b", pass: true })],
+      [trial({ id: "d", model: "opus5.5", pass: true })],
       [row()],
     );
     const [summary] = summarizeBench(misrouted);
@@ -388,7 +389,7 @@ describe("summarizeBench", () => {
 
   it("reports an unmeasured model without inventing zeroes", () => {
     const [summary] = summarizeBench([
-      trial({ model: "qwen35-9b", pass: false }),
+      trial({ model: "haiku5.5", pass: false }),
     ]);
     expect(summary.meanTurns).toBeNull();
     expect(summary.toolErrorRate).toBeNull();
@@ -397,30 +398,30 @@ describe("summarizeBench", () => {
 });
 
 describe("renderBenchReport", () => {
-  it("prices a local model as free rather than as zero", () => {
-    const local = joinTrialRuns(
-      [trial({ model: "qwen35-9b", workspace: "/tmp/w" })],
+  it("shows an unknown cost as no data rather than as zero", () => {
+    const unpriced = joinTrialRuns(
+      [trial({ model: "haiku5.5", workspace: "/tmp/w" })],
       [
         row({
           workspace: "/tmp/w",
-          model_id: "mtplx-qwen35-9b-optimized-speed",
+          model_id: BEDROCK_MODEL_IDS["haiku5.5"],
           cost_usd: null,
         }),
       ],
     );
-    const out = renderBenchReport(summarizeBench(local), local);
-    expect(out).toContain("free");
+    const out = renderBenchReport(summarizeBench(unpriced), unpriced);
+    expect(out).not.toContain("free");
     expect(out).not.toContain("$0.00");
   });
 
   it("names every excluded trial so a misroute cannot pass unnoticed", () => {
     const misrouted = joinTrialRuns(
-      [trial({ id: "qwen38-27b/05/rep1", model: "qwen38-27b" })],
+      [trial({ id: "opus5.5/05/rep1", model: "opus5.5" })],
       [row()],
     );
     const out = renderBenchReport(summarizeBench(misrouted), misrouted);
-    expect(out).toContain("qwen38-27b/05/rep1");
-    expect(out).toContain("asked qwen38-27b");
+    expect(out).toContain("opus5.5/05/rep1");
+    expect(out).toContain("asked opus5.5");
     expect(out).toContain("misrouted");
   });
 
@@ -469,7 +470,7 @@ describe("judgePrompt", () => {
   // The judge scoring blind is the whole reason its opinion is worth anything.
   it("names no model and reveals no check result", () => {
     const prompt = judgePrompt("Add countByStatus.", "diff").toLowerCase();
-    for (const leak of ["sonnet", "qwen", "claude", "bedrock", "mtplx"]) {
+    for (const leak of ["sonnet", "haiku", "opus", "claude", "bedrock"]) {
       expect(prompt).not.toContain(leak);
     }
   });

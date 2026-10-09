@@ -13,15 +13,12 @@
  *   event log that `carl stats` and docs/one-shot.md are computed from. A
  *   hundred fixture runs would swamp a log of real work.
  *
- *   Trials are grouped by model, not interleaved. Starting a local model loads
- *   ~20GB, and carl stops an idle server serving a different pack to start the
- *   one asked for — interleaving would pay that load on nearly every trial.
+ *   Trials are grouped by model, not interleaved.
  *
- *   Every trial's logged route is compared against the model it was filed under.
- *   `--model qwen38-27b` resolves against the local server first and falls back
- *   to Bedrock, so a benchmark run with mtplx down would otherwise measure Sonnet
- *   three times and print it as three models. Mismatches are excluded from the
- *   table, named, and make the command exit non-zero.
+ *   Every trial's logged route is compared against the model it was filed under,
+ *   so a trial that ran on another model cannot print its numbers under this
+ *   one's name. Mismatches are excluded from the table, named, and make the
+ *   command exit non-zero.
  *
  * The arithmetic lives in src/bench-report.ts, under test. This file is the
  * orchestration: copying directories, spawning carl, and killing it when it runs
@@ -35,6 +32,7 @@ import * as path from "path";
 import {
   clampDiff,
   combineJudgeSamples,
+  DEFAULT_MODELS,
   judgePrompt,
   joinTrialRuns,
   parseBenchArgs,
@@ -81,9 +79,9 @@ type Ran = {
 /**
  * Runs a command to completion or to the timeout, whichever comes first.
  *
- * Detached so the kill can take the whole process group: carl spawns a runtime
- * subprocess, and killing only carl would leave that runtime holding the local
- * model — which the next trial then waits on forever.
+ * Detached so the kill can take the whole process group: carl spawns Claude
+ * Code as a subprocess, and killing only carl would leave it running and
+ * billing.
  */
 function run(
   command: string,
@@ -519,7 +517,7 @@ function usage(): void {
   console.log(
     `Usage: just bench [options]
 
-  --models <a,b,c>     models to compare (default: sonnet5.5,qwen38-27b,qwen35-9b)
+  --models <a,b,c>     models to compare (default: ${DEFAULT_MODELS.join(",")})
   --tasks <a,b|all>    tasks to run (default: one per difficulty tier)
   --reps <n>           repetitions per model/task cell (default: 1)
   --effort <level>     default | low | medium | high | xhigh | max (default: medium)
@@ -584,8 +582,6 @@ async function main(): Promise<void> {
 
   const trials: TrialRecord[] = [];
   const diffs = new Map<string, string>();
-  // Model outer, so a local model is loaded once per arm rather than once per
-  // trial.
   for (const model of args.models) {
     console.log(`── ${model} ──`);
     for (const task of args.tasks) {

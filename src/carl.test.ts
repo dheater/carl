@@ -93,7 +93,7 @@ describe("carl CLI", () => {
     process.env.CARL_CONFIG_DIR = configDir;
     fs.writeFileSync(
       path.join(configDir, "config.json"),
-      JSON.stringify({ models: { code: "sonnet4.6" } }),
+      JSON.stringify({ models: { code: "sonnet5.5" } }),
       "utf-8",
     );
   });

@@ -1,34 +1,44 @@
 # Carl
 
-Opinionated AI development workflow CLI: ask about the code, plan a change, write it, review your own changes, work through review feedback, review a teammate's PR.
+Opinionated AI development workflow CLI: ask about the code, plan a change,
+write it, review your own changes, work through review feedback, review a
+teammate's PR.
 
 ## Why
 
-I have tried spec-driven development with sopisticated AI orchastration. I prefer being the orcharstrator and using
-AI as an assistance tool. I've found that being to far from the implementation means I can't effectively answer questions
-about, debug, and maintain the code. Carl is my effort to find a good balance between human and AI coding.
-Carl's commands are intentionally single-shot. I find this helps me keep iterations small and keeps me in the loop.
+I have tried spec-driven development with sopisticated AI orchastration. I
+prefer being the orcharstrator and using AI as an assistance tool. I've found
+that being to far from the implementation means I can't effectively answer
+questions about, debug, and maintain the code. Carl is my effort to find a good
+balance between human and AI coding. Carl's commands are intentionally
+single-shot. I find this helps me keep iterations small and keeps me in the
+loop.
 
-I prefer my text editor over small prompt boxes. That is why Carl uses $EDITOR as a "Tom Riddle's Diary" interface.
-When Carl is run, you enter your prompt in your editor. When Carl responds, its output is also written into your editor.
-This allows you to edit the output, save it, and feed the file back as the next prompt. This works very well for
-iterating between `carl review` and `carl code`.
+I prefer my text editor over small prompt boxes. That is why Carl uses $EDITOR
+as a "Tom Riddle's Diary" interface. When Carl is run, you enter your prompt in
+your editor. When Carl responds, its output is also written into your editor.
+This allows you to edit the output, save it, and feed the file back as the next
+prompt. This works very well for iterating between `carl review` and
+`carl code`.
 
-Off a terminal — backgrounded, piped, or in CI — Carl opens no editor. It prints the path it wrote instead, and a
-command with no prompt file exits with the file to pass.
+Off a terminal — backgrounded, piped, or in CI — Carl opens no editor. It prints
+the path it wrote instead, and a command with no prompt file exits with the file
+to pass.
 
 ## Prerequisites
 
-- Node.js 22.15+ — the agent runtime compresses session transcripts with
-  `node:zlib`'s Zstandard APIs, which landed in that release. Carl is developed
-  and tested on Node 26.
+- Node.js 18+. Carl is developed and tested on Node 26.
+- macOS or Linux. Every run needs an OS sandbox and fails without one: macOS
+  ships Seatbelt, and Linux needs `bubblewrap` installed. Windows is
+  unsupported.
 - AWS credentials with Bedrock access, in the environment or a profile the AWS
-  SDK chain can find (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`, `~/.aws`, or
-  an IAM role).
-- `gh` CLI, installed and authenticated — required only for `carl pr-review`, which
-  reads the PR diff with it.
-- [`tuicr`](https://github.com/agavra/tuicr) — required only for `carl pr-review`,
-  which opens the drafted comments in it (`brew install tuicr`).
+  SDK chain can find (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`, `~/.aws`,
+  or an IAM role).
+- `gh` CLI, installed and authenticated — required only for `carl pr-review`,
+  which reads the PR diff with it.
+- [`tuicr`](https://github.com/agavra/tuicr) — required only for
+  `carl pr-review`, which opens the drafted comments in it
+  (`brew install tuicr`).
 - `just` — optional; it only saves you writing the shim by hand.
 
 ## Install
@@ -53,42 +63,25 @@ chmod +x ~/.local/bin/carl
 Either way, `~/.local/bin` needs to be on your `PATH`.
 
 The shim points back at the clone on purpose. `dist/carl.mjs` is not
-self-contained: the agent runtime is a separate process launched out of
-`node_modules/`, and its composition lives in `runtime/cordis.yml`, so the bundle
-needs both siblings present. Copying `carl.mjs` somewhere on its own will not
-work, and there is no single-file release for the same reason.
+self-contained: the agent runtime is the Claude Agent SDK, which runs a Claude
+Code binary out of `node_modules/`, so the bundle needs it present. Copying
+`carl.mjs` somewhere on its own will not work, and there is no single-file
+release for the same reason.
 
 To update: `git pull && npm ci`. Re-run `just install` only if you moved the
 clone.
 
-### Do I have to install DeepSeek Harness first?
+### Do I have to install Claude Code first?
 
-No. DSH is not a separate program you install and point carl at — it is a set of
-npm libraries, and carl depends on them like any other package. `npm ci`
-installs them. There is no `dsh` CLI to install, nothing to initialize, and no
-`~/.dsh` profile to write: carl composes its own runtime from
-`runtime/cordis.yml` in this repo (see [Runtime](#runtime)) and boots it with the
-DSH JSON-RPC entry point out of `node_modules/`.
+No. The Claude Agent SDK is an npm dependency and ships its own Claude Code
+binary for your platform, so `npm ci` installs everything. An existing Claude
+Code installation neither helps nor interferes: carl loads none of your
+`~/.claude` settings, hooks, skills, or CLAUDE.md files, and saves no session
+transcripts there.
 
-Carl also never reads or creates `~/.dsh`, so an existing DSH installation
-neither helps nor interferes. The plugins that would read from there — the
-user-global `AGENTS.md` loader and the skill filesystem — are both switched off
-in carl's composition. `DSH_HOME` is still exported into `bash` tool calls, since
-a script may care, but nothing in carl consults it.
-
-Two npm details worth knowing, in case an install looks odd:
-
-- **Carl pins exact DSH versions.** The `latest` dist-tag on these packages is
-  older than the `next` one, so `npm install @deepseek-ai/dsh-...` without a
-  version resolves to a stale prerelease. Change versions in `package.json`
-  deliberately, not by re-adding a dependency.
-- **`npm ci` prints an `allow-scripts` warning listing packages whose install
-  scripts were skipped.** That is expected and nothing is broken. Carl approves
-  the one install script it actually needs — `dsh-subprocess-local`, which
-  restores the executable bit on the terminal helper `bash` spawns — through the
-  `allowScripts` field in `package.json`, so `npm ci` runs it for you. The rest
-  are skipped because their packages ship prebuilt binaries for every platform
-  carl runs on.
+`npm ci` prints an `allow-scripts` warning listing packages whose install
+scripts were skipped. That is expected and nothing is broken: the SDK's binaries
+are prebuilt.
 
 ## Configuration
 
@@ -97,28 +90,29 @@ On first run, carl writes `~/.config/carl/config.json`:
 ```json
 {
   "models": {
-    "code": "sonnet4.6",
-    "ask": "sonnet4.6",
-    "plan": "sonnet4.6",
-    "feedback": "sonnet4.6",
-    "review": "sonnet4.6",
-    "pr-review": "sonnet4.6"
+    "code": "sonnet5.5",
+    "ask": "sonnet5.5",
+    "plan": "opus5.5",
+    "feedback": "sonnet5.5",
+    "review": "sonnet5.5",
+    "pr-review": "sonnet5.5"
   }
 }
 ```
 
 A per-project `.carl/config.json` is optional and overrides the global file
-field-by-field. `CARL_CONFIG_DIR` overrides the global directory (used by tests).
+field-by-field. `CARL_CONFIG_DIR` overrides the global directory (used by
+tests).
 
-Edit `~/.config/carl/config.json` to change the models and effort levels.
-Each skill is a model string, which uses the model's default effort, or an
-object that adds an effort:
+Edit `~/.config/carl/config.json` to change the models and effort levels. Each
+skill is a model string, which uses the model's default effort, or an object
+that adds an effort:
 
 ```json
 {
   "models": {
     "code": { "model": "sonnet5.5", "effort": "medium" },
-    "ask": "sonnet4.6"
+    "ask": "sonnet5.5"
   }
 }
 ```
@@ -126,45 +120,16 @@ object that adds an effort:
 Effort is one of `low`, `medium`, `high`, `xhigh`, `max`, or `default`, the
 strings on the model cards. A model rejects levels it lacks. Without an effort,
 the model decides: adaptive thinking where the model has it. The top-level
-`effort` and `efforts` keys no longer exist; carl refuses a config that has them.
-The log and `carl stats` record the effort each run used (`default` when unset).
+`effort` and `efforts` keys no longer exist; carl refuses a config that has
+them. The log and `carl stats` record the effort each run used (`default` when
+unset).
 
 There is nothing to configure for AWS beyond having credentials. Every model is
 invoked through a us-east-1 inference profile; AWS refuses on-demand invocation
 of these models any other way, so there is no region to configure.
 
 Earlier versions had a `"backend"` field. It is gone, and an existing
-config.json that still names it keeps working — the key is ignored. The model
-name is the only thing that chooses where a run goes; see below.
-
-### Local models
-
-A model name is resolved against your own machine first. Before each run carl
-asks a locally hosted, OpenAI-compatible inference server what it serves, and
-uses it when it can serve the configured model — a local run is free, private,
-and needs no AWS credentials. Bedrock is the fallback, so the same config.json
-works whether or not the local server is up.
-
-Name the model as the server lists it, or as much of that id as identifies it:
-
-```json
-{ "models": { "code": "qwen38-27b" } }
-```
-
-An id fragment matching more than one served model stops the run and names the
-candidates rather than picking one. A name neither hosted locally nor a known
-Bedrock alias is an error that lists both sets, so `carl code` tells you what
-you can actually choose.
-
-| Variable              | Default                      | Purpose                                                    |
-| --------------------- | ---------------------------- | ---------------------------------------------------------- |
-| `CARL_LOCAL_BASE_URL` | `http://localhost:8000/v1`   | Where the local server listens (the address mtplx uses)    |
-| `CARL_LOCAL_API_KEY`  | a placeholder                | Only needed if your server checks the bearer token         |
-
-Context window and output cap come from the server's own model listing when it
-discloses them; carl assumes 32K/8K when it does not. `--effort` reaches Bedrock
-models only — a local model gets no thinking-level parameter — and a local run
-is reported as unpriced by `carl stats`, because it costs nothing to price.
+config.json that still names it keeps working — the key is ignored.
 
 ### Validation
 
@@ -176,48 +141,49 @@ is reported as unpriced by `carl stats`, because it costs nothing to price.
 ```
 
 `validate` is the shell command that decides whether a change is good. After
-`carl code` or `carl feedback` stops, carl runs it in the workspace root through a shell (so
-`just lint && just test` works), and if it fails, starts a **fresh** session with
-the original request, the previous session's summary, and the command's output —
-up to `maxRetries` repair runs (default `2`; `0` validates and reports without
-repairing). Whether the tests pass is a fact about the workspace, so carl checks
-it instead of asking the model whether it is done.
+`carl code` or `carl feedback` stops, carl runs it in the workspace root through
+a shell (so `just lint && just test` works), and if it fails, starts a **fresh**
+session with the original request, the previous session's summary, and the
+command's output — up to `maxRetries` repair runs (default `2`; `0` validates
+and reports without repairing). Whether the tests pass is a fact about the
+workspace, so carl checks it instead of asking the model whether it is done.
 
 `maxRetries` is a ceiling, not a promise to spend: **a repair session that
 changed no file ends the loop.** It cannot have changed the outcome, so another
 run would only re-roll the same dice at full price. That is why the budget needs
 no upper bound — the gate, not the number, is what stops a runaway.
 
-Because it is a per-project fact, `validate` usually belongs in the project's own
-`.carl/config.json`. With no `validate` configured, carl runs the skill once and
-hands back, and tells the session that nothing will check its work.
+Because it is a per-project fact, `validate` usually belongs in the project's
+own `.carl/config.json`. With no `validate` configured, carl runs the skill once
+and hands back. It tells the session not to run tests or builds, and to end its
+summary with the commands that would check its work.
 
 Details worth knowing:
 
 - `carl code` and `carl feedback` validate — they are the two commands that
   change the workspace. `ask`, `plan` and `review` are read-only and `pr-review`
   only writes a draft, so there is nothing to check.
-- The model is told which command carl will run, and asked to run it before
-  finishing — a fix inside the first session is far cheaper than another one.
-- A second or later repair session is told how many repairs already failed, so it
-  reconsiders instead of retrying the previous session's fix.
+- The model is told which command carl will run, and told not to run it or any
+  other test or build. Carl runs the check after the session stops.
+- A second or later repair session is told how many repairs already failed, so
+  it reconsiders instead of retrying the previous session's fix.
 - The last 8000 characters of combined stdout and stderr go to the repair
   session. Runners print failures last, so the tail is the useful end.
 - A command that has not finished in 15 minutes is killed and **not** retried:
   `spawnSync` discards a killed process's output, so there would be nothing to
   hand the repair session.
-- "Changed no file" means no successful `write`/`edit` tool call. `bash` does not
-  count — nearly every session runs it to look around — so a session that only
-  mutated files through `sed -i` reads as stalled. The cost of that is stopping
-  early and handing back to you.
-- If validation is still failing when the loop ends, carl says so after the notes
-  close, prints the output, and exits non-zero. Nothing is reverted — the
+- "Changed no file" means no successful `write`/`edit` tool call. `bash` does
+  not count — nearly every session runs it to look around — so a session that
+  only mutated files through `sed -i` reads as stalled. The cost of that is
+  stopping early and handing back to you.
+- If validation is still failing when the loop ends, carl says so after the
+  notes close, prints the output, and exits non-zero. Nothing is reverted — the
   workspace is left as the last run made it. The message says _why_ it stopped,
   because raising `maxRetries` helps an exhausted budget and helps nothing else.
 
-Each validated run appends a `validation` event to
-`~/.config/carl/events.jsonl` recording how the loop ended, so the defaults can
-be argued from data rather than taste:
+Each validated run appends a `validation` event to `~/.config/carl/events.jsonl`
+recording how the loop ended, so the defaults can be argued from data rather
+than taste:
 
 ```bash
 jq -r 'select(.event=="validation") | [.meta.repairs, .meta.passed, .meta.stopped] | @tsv' \
@@ -225,41 +191,37 @@ jq -r 'select(.event=="validation") | [.meta.repairs, .meta.passed, .meta.stoppe
 ```
 
 Read the columns as: how many repairs it took, whether it ended green, and what
-ended it (`passed`, `budget`, `stalled`, `timeout`). A pile of
-`1  true  passed` says one repair earns its keep; `stalled` rows are runs the
-gate saved you from paying for. The per-attempt `validate` events carry
-`session_mutations` if you want to see it attempt by attempt. `carl stats` does
-not report any of this yet.
+ended it (`passed`, `budget`, `stalled`, `timeout`). A pile of `1  true  passed`
+says one repair earns its keep; `stalled` rows are runs the gate saved you from
+paying for. The per-attempt `validate` events carry `session_mutations` if you
+want to see it attempt by attempt. `carl stats` does not report any of this yet.
 
 ## Runtime
 
-The agent itself is a [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)
-runtime, composed by `runtime/cordis.yml` and driven over stdio JSON-RPC. Carl
-spawns one runtime per skill run and reads its session events for the output,
-token accounting, and tool timings.
+The agent itself is the
+[Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-typescript),
+pointed at Bedrock. Carl runs one query per skill run and reads its message
+stream for the output, token accounting, and tool timings.
 
 Three consequences worth knowing:
 
-- **Code Mode is offered, not enforced.** The model may call a tool directly or
-  write one TypeScript program (`run_code`) that calls several as functions. It
-  ran program-only until the event log showed 1.7 tool calls per program and a
-  6% program error rate, so batching is now worth a program only when there is
-  something to batch. `carl stats` shows both layers: `run_code` rows are model
-  round-trips, the `read`/`edit`/`bash` rows inside them are the work — and a
-  direct call is one row of its own.
+- **The persona is the whole system prompt.** Carl's rules and skill replace
+  Claude Code's own prompt, so nothing sits ahead of the rules'
+  `[ABSOLUTE — overrides all]` block. The model gets `Read`, `Grep`, `Glob` and
+  `Bash`, plus `Edit` and `Write` where the skill may change the workspace —
+  nothing else Claude Code ships. The log records them lowercased (`read`,
+  `edit`), as earlier runtimes spelled them, so `carl stats` keeps grouping old
+  and new runs together.
 - **`ask`, `plan` and `review` are sandboxed read-only** — they cannot write at
-  all. `code`, `feedback` and `pr-review` run workspace-write (`pr-review` only to
-  edit its own draft). The sandbox is the runtime's filesystem boundary, not a
-  hidden write tool, so `bash` cannot route around it either.
-- **A file is not sent twice.** 42% of the reads in carl's own event log
-  re-requested a file the same run had already read. Carl's read ledger — the one
-  plugin in the composition it wrote itself — replaces lines already in the
-  conversation with a one-line pointer, keeps the lines that are new, and
-  delivers the whole file again when it changed or when compaction has evicted
-  the earlier copy. `CARL_READ_LEDGER=0` turns it off for an A/B.
-
-Session transcripts are the runtime's own replay state: they are written to a
-temporary directory, never inside your repository, and deleted when the run ends.
+  all. `code`, `feedback` and `pr-review` run workspace-write (`pr-review` only
+  to edit its own draft). Read-only skills get no write tools, and `bash` runs
+  in the OS sandbox (Seatbelt on macOS, bubblewrap on Linux) with the workspace
+  denied for writing, so it cannot route around them. A machine with no sandbox
+  fails the run rather than running it unenforced. The sandbox also limits
+  network access from `bash`.
+- **No session is saved.** Each run starts from an empty conversation and
+  nothing is written to `~/.claude/projects/`. The human carries state from one
+  run to the next.
 
 ## Usage
 
@@ -268,23 +230,21 @@ carl [--model <model>] <command>
 carl --version
 ```
 
-| Command                          | What it does                                                                                |
-| -------------------------------- | ------------------------------------------------------------------------------------------- |
-| `carl code [<prompt-file>]`      | Open editor (or read file) for a prompt; run the implementation skill; open notes in editor |
-| `carl code --plan`               | Implement the plan in `.agent/notes/plan.md`, your edits included                           |
-| `carl ask [<prompt-file>]`       | Ask a question about the code; read-only, answer opens in editor                            |
-| `carl plan [<prompt-file>]`      | Plan a change without making it; read-only, plan opens in editor                            |
-| `carl review`                    | Review staged/uncommitted local changes; open notes in editor                               |
-| `carl feedback [<file>]`         | Assess review comments, apply the correct ones, report each disposition                     |
-| `carl feedback --review`         | Same, reading the comments from `.agent/notes/review.md`                                    |
-| `carl pr-review <pr-number>`     | Review a teammate's PR; open the drafted comments in tuicr to edit and submit               |
-| `carl reset`                     | Clear `.agent/`                                                                             |
-| `carl stats`                     | Report cost, tokens, turns, and duration per skill                                          |
+| Command                      | What it does                                                                                |
+| ---------------------------- | ------------------------------------------------------------------------------------------- |
+| `carl code [<prompt-file>]`  | Open editor (or read file) for a prompt; run the implementation skill; open notes in editor |
+| `carl code --plan`           | Implement the plan in `.agent/notes/plan.md`, your edits included                           |
+| `carl ask [<prompt-file>]`   | Ask a question about the code; read-only, answer opens in editor                            |
+| `carl plan [<prompt-file>]`  | Plan a change without making it; read-only, plan opens in editor                            |
+| `carl review`                | Review staged/uncommitted local changes; open notes in editor                               |
+| `carl feedback [<file>]`     | Assess review comments, apply the correct ones, report each disposition                     |
+| `carl feedback --review`     | Same, reading the comments from `.agent/notes/review.md`                                    |
+| `carl pr-review <pr-number>` | Review a teammate's PR; open the drafted comments in tuicr to edit and submit               |
+| `carl reset`                 | Clear `.agent/`                                                                             |
+| `carl stats`                 | Report cost, tokens, turns, and duration per skill                                          |
 
-`--model <model>` overrides the model for that run. Bedrock aliases: `haiku4.5`,
-`sonnet4.5`, `sonnet4.6`, `sonnet5.5`, `opus4.1`, `opus4.5`, `opus4.6`, `opus4.7`,
-`opus4.8`, `opus5.5`, `fable5`. Anything your local server serves also works — see
-[Local models](#local-models).
+`--model <model>` overrides the model for that run. Bedrock aliases: `haiku5.5`,
+`sonnet5.5`, `opus5.5`.
 
 `--effort <level>` overrides how much the model thinks for that run, using the
 levels above.
@@ -303,7 +263,8 @@ It is stderr so that redirecting stdout keeps the progress on your terminal, and
 piping stdout keeps the progress out of the pipe. `carl code 2>/dev/null`
 silences it; `carl code 2>progress.log` follows it from another window.
 
-Diagnostics are appended to `~/.config/carl/events.jsonl`, one JSON object per line.
+Diagnostics are appended to `~/.config/carl/events.jsonl`, one JSON object per
+line.
 
 ## Ask and plan
 
@@ -319,54 +280,42 @@ carl code --plan             # implement that plan, your edits included
 ```
 
 `carl ask` answers a question about the code and writes the answer to
-`.agent/notes/ask.md`. It is one turn, not a chat session: to follow up, edit the
-answer file and pass it back with `carl ask .agent/notes/ask.md`. That is the same
-diary loop `review` and `code` use, and it keeps you in the loop by construction.
-The skill is told to lead with the answer, cite `path:line`, and say "I don't
-know" rather than guess.
+`.agent/notes/ask.md`. It is one turn, not a chat session: to follow up, edit
+the answer file and pass it back with `carl ask .agent/notes/ask.md`. That is
+the same diary loop `review` and `code` use, and it keeps you in the loop by
+construction. The skill is told to lead with the answer, cite `path:line`, and
+say "I don't know" rather than guess.
 
-`carl plan` investigates and writes an implementation plan — goal, files to touch,
-ordered steps, tests, out of scope, risks — to `.agent/notes/plan.md`. It opens in
-your editor when the session ends, which is where the plan is approved: **edit the
-file until it says what you want built, then run `carl code --plan`.** That reads
-the file back verbatim, your edits included, as the implementation prompt. The
-plan session and the implementation session share no memory, so anything you
-delete from the plan is gone and anything you add is instruction.
+`carl plan` investigates and writes an implementation plan — goal, files to
+touch, ordered steps, tests, out of scope, risks — to `.agent/notes/plan.md`. It
+opens in your editor when the session ends, which is where the plan is approved:
+**edit the file until it says what you want built, then run
+`carl code --plan`.** That reads the file back verbatim, your edits included, as
+the implementation prompt. The plan session and the implementation session share
+no memory, so anything you delete from the plan is gone and anything you add is
+instruction.
 
-`carl code --plan` fails with a pointer to `carl plan` when there is no plan file.
-`carl reset` deletes it along with the rest of `.agent/`.
+`carl code --plan` fails with a pointer to `carl plan` when there is no plan
+file. `carl reset` deletes it along with the rest of `.agent/`.
 
 Both commands respect `models` in config.json under the keys `ask` and `plan`.
 Consider a high effort for `plan`: it is the cheap step whose mistakes are paid
 for by the expensive one after it.
 
-### Why not DSH plan mode
+### Why not Claude Code's plan mode
 
-DSH ships `@deepseek-ai/dsh-plan-mode`, and carl deliberately does not mount it.
-Three reasons, all structural:
-
-- **Carl could not turn it on.** Plan mode activates through `ctx.planMode.set()`
-  or the `/plan` command in the UI command plane. The JSON-RPC wire carl drives
-  the runtime over serves `initialize`, `session/prompt` and `shutdown` — there is
-  no command plane and no service access, so every SDK session would start with
-  plan mode inactive and no way to flip it.
-- **Its exit needs a human at the keyboard.** `exit_plan_mode` reviews the plan
-  through `ctx.userQuestions` and requires an exact approval. Carl has no
-  interactive channel during a run — the same reason approvals are set to `never`
-  — so that tool could only ever fail. Carl's approval is the editor, after the
-  run.
-- **Carl's guidance is already stronger.** Plan mode contributes its section at
-  system-prompt order 50; carl's skill and rules are the order-0 persona.
-
-So `carl plan` is a carl skill with a read-only sandbox and a file handoff, which
+Claude Code has a plan permission mode, and carl deliberately does not use it.
+Its exit asks a human to approve the plan mid-run, and carl has no interactive
+channel during a run: carl's approval is the editor, after the run. So
+`carl plan` is a carl skill with a read-only sandbox and a file handoff, which
 lands in the same place: explore, do not touch the code, present a plan a human
 approves before anything is built.
 
 ## Feedback
 
-`carl feedback` works through review comments: it checks each one, applies the ones
-that hold up, and writes a reply per comment that you can paste back into the
-thread it came from.
+`carl feedback` works through review comments: it checks each one, applies the
+ones that hold up, and writes a reply per comment that you can paste back into
+the thread it came from.
 
 ```bash
 carl feedback                  # editor opens; paste the PR review
@@ -374,20 +323,21 @@ carl feedback comments.md      # or read it from a file
 carl feedback --review         # or take the comments from .agent/notes/review.md
 ```
 
-**The comments are claims, not instructions.** The skill is told to read the code
-each one points at, judge the claim against that code rather than the reviewer's
-confidence, and prove behavioral claims by running something before acting on
-them. A reviewer — human or bot — can cite a language rule that does not say what
-they think it says, or describe a function that has since been deleted. Rejecting
-a wrong comment with evidence is a success; applying one is a defect carl
-introduced.
+**The comments are claims, not instructions.** The skill is told to read the
+code each one points at, judge the claim against that code rather than the
+reviewer's confidence, and prove behavioral claims by running something before
+acting on them. A reviewer — human or bot — can cite a language rule that does
+not say what they think it says, or describe a function that has since been
+deleted. Rejecting a wrong comment with evidence is a success; applying one is a
+defect carl introduced.
 
 Every comment gets exactly one verdict: **Applied**, **Applied differently**,
-**Already handled**, **Stale**, **Rejected**, **Deferred**, or **Needs your call**.
-Each becomes its own block in `.agent/notes/feedback.md`, headed with the
-`path:line` or the reviewer's own heading, saying what was checked, what was found,
-and what changed — plain enough to paste into a thread without rewriting it. The
-file ends with the verdict counts, the files changed, and the check that was run.
+**Already handled**, **Stale**, **Rejected**, **Deferred**, or **Needs your
+call**. Each becomes its own block in `.agent/notes/feedback.md`, headed with
+the `path:line` or the reviewer's own heading, saying what was checked, what was
+found, and what changed — plain enough to paste into a thread without rewriting
+it. The file ends with the verdict counts, the files changed, and the check that
+was run.
 
 Because it edits code, `carl feedback` validates exactly like `carl code`: the
 `validate` command runs afterwards and a failure starts a repair session. It
@@ -395,7 +345,8 @@ carries the same git policy too — it will not commit for you.
 
 ## Stats
 
-`carl stats` reports what carl costs and how hard it is working, broken out by skill.
+`carl stats` reports what carl costs and how hard it is working, broken out by
+skill.
 
 ```
 carl stats                                  # this week (default)
@@ -414,12 +365,12 @@ review       33   $5.58  $0.17      47s        8.5        127k         14    89%
 TOTAL       287  $84.53  $0.32      56s         10        127k                     6%
 ```
 
-Also printed: per-skill cost/duration/turn/token histograms, per-tool call counts
-and error rates, and breakdowns by effort level, workspace, and day.
+Also printed: per-skill cost/duration/turn/token histograms, per-tool call
+counts and error rates, and breakdowns by effort level, workspace, and day.
 
 The event log is the source of truth. `~/.config/carl/metrics.db` is a derived
-cache that is refreshed incrementally on every run; delete it or pass `--rebuild`
-at any time and it is reconstructed from the log.
+cache that is refreshed incrementally on every run; delete it or pass
+`--rebuild` at any time and it is reconstructed from the log.
 
 Unpriced runs (no token data recorded, or a model with no known rates) are
 reported as unpriced, never as $0.
@@ -438,35 +389,39 @@ gh pr checkout <number>
 carl pr-review <number>
 ```
 
-The PR number is resolved against the repo in the current directory. Carl fetches the
-authoritative diff from GitHub, runs the review skill, then opens
-[tuicr](https://github.com/agavra/tuicr) on that PR and loads every drafted comment
-into it as a local draft, authored as `carl (<model>)`. You read the diff, edit or
-delete comments, add your own, and `:submit` when you are happy — carl never posts
-anything to GitHub itself. Comments you drop in tuicr are dropped.
+The PR number is resolved against the repo in the current directory. Carl
+fetches the authoritative diff from GitHub, runs the review skill, then opens
+[tuicr](https://github.com/agavra/tuicr) on that PR and loads every drafted
+comment into it as a local draft, authored as `carl (<model>)`. You read the
+diff, edit or delete comments, add your own, and `:submit` when you are happy —
+carl never posts anything to GitHub itself. Comments you drop in tuicr are
+dropped.
 
-Carl waits for tuicr to publish its review session before injecting the comments, so
-they appear a moment after the TUI opens (after the commit selector, if tuicr shows
-one).
+Carl waits for tuicr to publish its review session before injecting the
+comments, so they appear a moment after the TUI opens (after the commit
+selector, if tuicr shows one).
 
-Comments are written for the person who has to act on them: what is wrong in plain
-language, then one concrete recommendation, in a short paragraph. The skill is told
-to write for a developer six months into the job who does not know the codebase, to
-name a consequence rather than a category ("this crashes when the list is empty",
-not "unhandled edge case"), and to define any term of art in the same sentence it
-uses one. Carl rejects an inline comment that opens with a code fence instead of a
-sentence, and re-runs the session to fix it.
+Comments are written for the person who has to act on them: what is wrong in
+plain language, then one concrete recommendation, in a short paragraph. The
+skill is told to write for a developer six months into the job who does not know
+the codebase, to name a consequence rather than a category ("this crashes when
+the list is empty", not "unhandled edge case"), and to define any term of art in
+the same sentence it uses one. Carl rejects an inline comment that opens with a
+code fence instead of a sentence, and re-runs the session to fix it.
 
-Requires: `gh` and `tuicr` installed, `gh` authenticated, and local HEAD matching the
-PR head commit — the review skill reads workspace files for context, so a checkout on
-a different commit would produce comments about code the PR does not contain.
+Requires: `gh` and `tuicr` installed, `gh` authenticated, and local HEAD
+matching the PR head commit — the review skill reads workspace files for
+context, so a checkout on a different commit would produce comments about code
+the PR does not contain.
 
-**Reset a draft:** `carl reset` clears `.agent/`. Rerun `carl pr-review <number>` to start fresh.
+**Reset a draft:** `carl reset` clears `.agent/`. Rerun
+`carl pr-review <number>` to start fresh.
 
 ## Vim integration
 
-I often just open a scratch buffer `:enew` and write a propt there, then use a keybind to send the prompt to `carl code`.
-These are some keybinds for carl that I use with nvim:
+I often just open a scratch buffer `:enew` and write a propt there, then use a
+keybind to send the prompt to `carl code`. These are some keybinds for carl that
+I use with nvim:
 
 ```
 -- Carl: run code skill with current buffer as prompt

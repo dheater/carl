@@ -16,7 +16,7 @@ IMPORTANT: a comment can be wrong. Reviewers — human and machine — misread c
 
 1. Read the code it points at. If the cited line, function, or file is gone, the comment is stale.
 2. Judge the claim against the code, not the reviewer's confidence. Check any cited language rule, API contract, or "this is always true" assertion.
-3. Prove behavioral claims before acting on them. Run the test, the build, or the command — "crashes on empty input" is checkable.
+3. Prove behavioral claims from the code before acting on them: trace the path "crashes on empty input" names. Do not run tests or builds. When only a run would settle a claim, name the command and leave it to the human.
 4. Then act. Apply nothing you could not confirm was needed. Change nothing the comment did not raise.
 
 If the change only compiles behind a cast, an `any`, or a suppressed check, it is not **Applied** — either find the fix that does not need one, or say what you loosened and why.
@@ -47,6 +47,6 @@ One block per comment, in the reviewer's order, each one pasteable into its own 
 <One to three sentences: what you checked, what you found, what you changed. Name files and functions.>
 ```
 
-End with `## Summary`: the verdict counts on one line, adding up to the number of comments; the files you changed; and the check you ran with what it said. If a check will not run here, say so in one clause and give the result of what you ran instead.
+End with `## Summary`: the verdict counts on one line, adding up to the number of comments; the files you changed; and the exact commands the human should run to check them.
 
 Write every block for the reviewer, who cannot see this session: no carl jargon, no "the session", no praise, no restating their comment back at them. Plain language they can act on.

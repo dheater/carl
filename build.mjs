@@ -4,11 +4,16 @@ import { createRequire } from "module";
 const require = createRequire(import.meta.url);
 const { version } = require("./package.json");
 
+// Loaded from node_modules at run time: the SDK locates its platform's Claude
+// Code binary relative to its own install, which a bundle would lose.
+const external = ["@anthropic-ai/claude-agent-sdk"];
+
 await build({
   entryPoints: ["src/carl.ts"],
   bundle: true,
   platform: "node",
   format: "esm",
+  external,
   banner: {
     js: [
       'import {fileURLToPath as _fup} from "url";',
@@ -33,6 +38,7 @@ await build({
   bundle: true,
   platform: "node",
   format: "esm",
+  external,
   banner: {
     js: [
       'import {fileURLToPath as _fup} from "url";',
@@ -46,16 +52,4 @@ await build({
     CARL_VERSION: JSON.stringify(version),
   },
   outfile: "dist/bench.mjs",
-});
-
-// The read-ledger harness plugin. Not part of the CLI bundle: this one is
-// imported by the DeepSeek Harness subprocess, which resolves it as an ESM
-// module relative to runtime/cordis.yml. It depends on no @deepseek-ai package,
-// so the bundle is carl's own source and nothing else.
-await build({
-  entryPoints: ["src/read-ledger-plugin.ts"],
-  bundle: true,
-  platform: "node",
-  format: "esm",
-  outfile: "dist/plugins/read-ledger.mjs",
 });

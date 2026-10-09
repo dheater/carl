@@ -137,16 +137,15 @@ describe("buildSkillInstruction", () => {
       expect(instruction).toContain("# Validation");
       expect(instruction).toContain("just check");
       expect(instruction).toContain("starts a new session with the failures");
+      expect(instruction).toContain("Do not run it");
     }
   });
 
-  test("code: says nothing will check the work when no command is configured", () => {
+  test("code: leaves tests to the human when no command is configured", () => {
     const instruction = buildSkillInstruction("code", "/proj", "main");
     expect(instruction).toContain("# Validation");
     expect(instruction).toContain("configures no validation command");
-    expect(instruction).toContain(
-      "Run the smallest check that would catch a mistake",
-    );
+    expect(instruction).toContain("Do not run tests or builds");
   });
 
   test("read-only skills are told the denial is deliberate", () => {
@@ -325,6 +324,24 @@ describe("runSkill", () => {
         `# ${skill} output`,
       );
     }
+  });
+
+  test("warns once per unpriced model, not once per run", async () => {
+    const usage = { source: "test", modelId: "unpriced-model-warn-once" };
+    for (let i = 0; i < 2; i++) {
+      await runSkill(
+        workspaceRoot,
+        "ask",
+        "a question",
+        "test-model",
+        "medium",
+        new MockRunner("answer", usage),
+      );
+    }
+    const warnings = warnSpy.mock.calls.filter(([msg]) =>
+      String(msg).includes('No pricing for model "unpriced-model-warn-once"'),
+    );
+    expect(warnings).toHaveLength(1);
   });
 
   test("runs the code skill writable", async () => {
@@ -766,6 +783,23 @@ describe("runSkill", () => {
     const skillEvent = readEvents().find((e) => e.event === "skill");
     expect(skillEvent.meta.status).toBe("error");
     expect(skillEvent.meta.usage).toBeUndefined();
+  });
+
+  test("records why the run failed on the skill event", async () => {
+    const runner: AgentRunner = {
+      async run() {
+        throw new Error("ExpiredTokenException:\n  token expired");
+      },
+    };
+
+    await expect(
+      runSkill(workspaceRoot, "code", "x", "test-model", "medium", runner),
+    ).rejects.toThrow("ExpiredTokenException");
+
+    const skillEvent = readEvents().find((e) => e.event === "skill");
+    expect(skillEvent.meta.error_message).toBe(
+      "ExpiredTokenException: token expired",
+    );
   });
 });
 
@@ -1228,14 +1262,15 @@ describe("resolveValidation", () => {
     expect(resolveValidation(undefined)).toBeUndefined();
   });
 
-  test("defaults maxRetries when only a command is configured", () => {
+  // Skipped while resolveValidation is disabled. Change to `test` on restore.
+  test.skip("defaults maxRetries when only a command is configured", () => {
     expect(resolveValidation({ validate: "npm test" })).toEqual({
       command: "npm test",
       maxRetries: DEFAULT_MAX_RETRIES,
     });
   });
 
-  test("keeps an explicit maxRetries of 0", () => {
+  test.skip("keeps an explicit maxRetries of 0", () => {
     expect(resolveValidation({ validate: "npm test", maxRetries: 0 })).toEqual({
       command: "npm test",
       maxRetries: 0,
@@ -1404,17 +1439,14 @@ describe("loadCarlConfig two-file merge", () => {
 });
 
 describe("computeCost", () => {
-  beforeEach(() => {
-    jest.spyOn(console, "warn").mockImplementation(() => {});
-  });
-  afterEach(() => {
-    jest.restoreAllMocks();
-  });
-
-  test("returns null for unknown model", () => {
+  // Ingest reprices every historical run, so computeCost must stay quiet.
+  test("returns null for an unknown model without warning", () => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
     expect(
       computeCost({ source: "bedrock", modelId: "unknown-model-xyz" }),
     ).toBeNull();
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
   });
 
   test("returns null when modelId is absent", () => {
@@ -1523,14 +1555,5 @@ describe("computeCost", () => {
       expect(write).toBeCloseTo(input * 1.25, 5);
       expect(read).toBeCloseTo(input * 0.1, 5);
     }
-  });
-
-  test("returns null for an unpriced model and warns once", () => {
-    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
-    const usage = { source: "openai", modelId: "gpt5.4", inputTokens: 1000 };
-    expect(computeCost(usage)).toBeNull();
-    expect(computeCost(usage)).toBeNull();
-    expect(warn).toHaveBeenCalledTimes(1);
-    warn.mockRestore();
   });
 });

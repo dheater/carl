@@ -151,7 +151,7 @@ describe("countEpisodeReReads", () => {
     });
   });
 
-  test("counts a within-run repeat once, leaving it to the read ledger", () => {
+  test("counts a file read several times in one run once, and not as a re-read", () => {
     const episodes = [[run({ run_id: "a" })]];
     const paths = new Map([["a", ["src/x.ts", "src/x.ts", "src/x.ts"]]]);
 

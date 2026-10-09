@@ -189,9 +189,7 @@ export function coldStartTax(run: ContextRun): number | null {
  *
  * Counted per episode rather than per pair of adjacent runs: the file a run
  * re-reads was often read two runs ago, and the human's own re-orientation
- * happened somewhere in between. Both dispatch layers count — a program's
- * `tools.read` costs the same walk through the filesystem as a direct call, and
- * the question here is re-discovery, not context bytes.
+ * happened somewhere in between.
  */
 export function countEpisodeReReads(
   episodes: ContextRun[][],
@@ -203,8 +201,7 @@ export function countEpisodeReReads(
     const seen = new Set<string>();
     for (const run of episode) {
       const paths = pathsByRun.get(run.run_id) ?? [];
-      // Within-run repeats are the read ledger's problem, not this one, so a
-      // path counts once per run.
+      // This counts re-discovery across runs, so a path counts once per run.
       const distinct = new Set(paths);
       for (const path of distinct) {
         attributed += 1;

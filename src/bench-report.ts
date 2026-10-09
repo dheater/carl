@@ -7,15 +7,12 @@
  * one. Everything here is a pure function over records, and everything here is
  * tested.
  *
- * The one guard worth naming: `joinTrialRuns` compares the model carl was *asked*
- * for against the model the event log says it *used*. carl resolves a model name
- * against the local server first and falls back to Bedrock, so a benchmark run
- * with the local server down would otherwise measure Sonnet three times and
- * report it as three models. A mismatch is carried on the record and refused
- * later, not smoothed over here.
+ * The one guard worth naming: `joinTrialRuns` compares the Bedrock id of the
+ * model carl was *asked* for against the id the event log says it *used*. A
+ * mismatch is carried on the record and refused later, not smoothed over here.
  */
 
-import { matchesModelName } from "./dsh-runner";
+import { BEDROCK_MODEL_IDS } from "./claude-runner";
 import {
   formatUsd,
   formatDuration,
@@ -62,9 +59,8 @@ export const SMOKE_TASKS = [
   "05-hard-status-refactor",
 ];
 
-export const DEFAULT_MODELS = ["sonnet5.5", "qwen38-27b", "qwen35-9b"];
+export const DEFAULT_MODELS = ["sonnet5.5", "opus5.5", "haiku5.5"];
 
-/** Long enough for a 27B to finish a hard task; the observed tail is ~31 min. */
 export const DEFAULT_TIMEOUT_MS = 15 * 60_000;
 
 export const DEFAULT_JUDGE_SAMPLES = 3;
@@ -148,6 +144,17 @@ export function parseBenchArgs(argv: string[], allTasks: string[]): BenchArgs {
       `Unknown task(s): ${unknown.join(", ")}\nAvailable: ${allTasks.join(", ")}`,
     );
   }
+  // The routing guard compares alias ids exactly, so a name with no id could
+  // never match its own run.
+  const aliases = Object.keys(BEDROCK_MODEL_IDS);
+  const unknownModels = [...args.models, args.judgeModel].filter(
+    (model) => !aliases.includes(model),
+  );
+  if (unknownModels.length > 0) {
+    throw new Error(
+      `Unknown model(s): ${unknownModels.join(", ")}\nBedrock models: ${aliases.join(", ")}`,
+    );
+  }
   return args;
 }
 
@@ -190,10 +197,10 @@ export type BenchRunRow = {
   workspace: string | null;
   started_at_ms: number | null;
   /**
-   * The route that actually served the request — a Bedrock model id, or the id
-   * mtplx's server reports. This, not `runs.model`, is what the guard checks:
-   * `runs.model` is the name carl was *asked* for, so it agrees with the trial by
-   * construction and would confirm a misroute rather than catch one.
+   * The Bedrock model id that served the request. This, not `runs.model`, is
+   * what the guard checks: `runs.model` is the name carl was *asked* for, so it
+   * agrees with the trial by construction and would confirm a misroute rather
+   * than catch one.
    */
   model_id: string | null;
   cost_usd: number | null;
@@ -252,10 +259,8 @@ export function joinTrialRuns(
       ...trial,
       loggedModel,
       // A trial whose log names another route measured another model. The
-      // benchmark refuses these rather than reporting them. `matchesModelName` is
-      // the same comparison carl used to pick the route, so a name that selected
-      // a model recognizes it here.
-      modelMismatch: ids.some((id) => !matchesModelName(trial.model, id)),
+      // benchmark refuses these rather than reporting them.
+      modelMismatch: ids.some((id) => id !== BEDROCK_MODEL_IDS[trial.model]),
       runCount: mine.length,
       costUsd: sumOrNull(mine.map((row) => row.cost_usd)),
       turns: sumOrNull(mine.map((row) => row.turns)),
@@ -460,9 +465,8 @@ function formatBytes(bytes: number): string {
 /**
  * The comparison table, plus the per-trial detail underneath it.
  *
- * Local models are priced at nothing, which is true of the marginal request and
- * false of the machine, so the cost columns read `free` rather than `$0.00` — a
- * zero in a cost column invites the reader to divide by it.
+ * An unknown cost reads `—`, never `$0.00`: a zero in a cost column invites the
+ * reader to divide by it.
  */
 export function renderBenchReport(
   summaries: ModelSummary[],
@@ -493,8 +497,8 @@ export function renderBenchReport(
         formatDuration(s.meanWallMs),
         s.meanTurns != null ? s.meanTurns.toFixed(1) : NO_DATA,
         formatPercent(s.toolErrorRate, 1),
-        s.totalCostUsd != null ? formatUsd(s.totalCostUsd) : "free",
-        s.costPerPassUsd != null ? formatUsd(s.costPerPassUsd) : "free",
+        s.totalCostUsd != null ? formatUsd(s.totalCostUsd) : NO_DATA,
+        s.costPerPassUsd != null ? formatUsd(s.costPerPassUsd) : NO_DATA,
         score(s.judgeCorrectness),
         score(s.judgeScope),
         score(s.judgeStyle),
@@ -565,7 +569,7 @@ export function renderBenchReport(
               : "fail",
         formatDuration(trial.wallMs),
         trial.turns != null ? String(trial.turns) : NO_DATA,
-        trial.costUsd != null ? formatUsd(trial.costUsd) : "free",
+        trial.costUsd != null ? formatUsd(trial.costUsd) : NO_DATA,
         String(trial.filesChanged),
         formatBytes(trial.diffBytes),
         trial.judge

@@ -9,6 +9,7 @@ import { formatDuration } from "./stats-format";
 import { EFFORT_LEVELS, isEffortLevel } from "./types";
 import type { AgentRunner, UsageSummary, EffortLevel } from "./types";
 import { attachUsage, usageFromError } from "./types";
+import { oneLine } from "./claude-runner";
 import {
   buildValidationRetryPrompt,
   describeValidation,
@@ -58,6 +59,8 @@ type PromptMeta = {
 type SkillMeta = {
   status: "success" | "error";
   error_type: "network" | "exception" | null;
+  /** Why the run failed, one line; present only when `status` is "error". */
+  error_message?: string;
   retry_count: number;
   git_repo: boolean;
   tracked_changed_before: number;
@@ -153,8 +156,8 @@ type RunContext = {
  * ignored rather than rejected.
  */
 /**
- * A skill's model, bare or with an effort: `"ask": "sonnet4.6"` or
- * `"code": { "model": "sonnet4.6", "effort": "medium" }`. A bare string uses the
+ * A skill's model, bare or with an effort: `"ask": "sonnet5.5"` or
+ * `"code": { "model": "sonnet5.5", "effort": "medium" }`. A bare string uses the
  * model's default effort.
  */
 type ModelSetting = string | { model: string; effort?: EffortLevel };
@@ -201,10 +204,10 @@ export const DEFAULT_MAX_RETRIES = 2;
 
 /**
  * Rules every skill loads. These are base because every skill emits prose a
- * human reads: `carl.md` sets identity, `code-mode.md` governs the tool
+ * human reads: `carl.md` sets identity, `tools.md` governs the tool
  * surface, and `writing.md` governs the prose itself.
  */
-const BASE_RULE_FILES = ["carl.md", "code-mode.md", "writing.md"] as const;
+const BASE_RULE_FILES = ["carl.md", "tools.md", "writing.md"] as const;
 
 /** Every other skill runs in a read-only sandbox. */
 const WRITABLE_SKILLS = new Set(["code", "feedback", "pr-review"]);
@@ -400,13 +403,16 @@ export type SkillValidation = {
  * always did.
  */
 export function resolveValidation(
-  config?: CarlConfig,
+  _config?: CarlConfig,
 ): SkillValidation | undefined {
-  if (!config?.validate) return undefined;
-  return {
-    command: config.validate,
-    maxRetries: config.maxRetries ?? DEFAULT_MAX_RETRIES,
-  };
+  // Validation is switched off: the human runs tests. To restore it, delete the
+  // line below and uncomment the original body.
+  return undefined;
+  // if (!config?.validate) return undefined;
+  // return {
+  //   command: config.validate,
+  //   maxRetries: config.maxRetries ?? DEFAULT_MAX_RETRIES,
+  // };
 }
 
 function writeTimingEvent(event: TimingEvent): void {
@@ -519,12 +525,13 @@ export function buildSkillInstruction(
   }
 
   // Which command proves the work is a fact about the project, so carl states it
-  // rather than leaving the model to infer one.
+  // rather than leaving the model to infer one. The model does not run tests or
+  // builds: each run is a paid turn, and the human runs them anyway.
   if (VALIDATED_SKILLS.has(skill)) {
     instruction += "\n\n---\n\n# Validation\n\n";
     instruction += validateCommand
-      ? `Carl runs \`${validateCommand}\` in the workspace after you stop, and starts a new session with the failures if it fails. Run it yourself before you finish, so the fix lands in this session instead of costing another one.\n`
-      : `This project configures no validation command, so nothing checks your work after you stop. Run the smallest check that would catch a mistake in what you changed.\n`;
+      ? `Carl runs \`${validateCommand}\` in the workspace after you stop, and starts a new session with the failures if it fails. Do not run it, or any other test or build, yourself.\n`
+      : `This project configures no validation command. Do not run tests or builds; the human runs them. End your summary with the exact commands that would catch a mistake in what you changed.\n`;
   }
 
   if (skill === "review" && workspaceRoot) {
@@ -641,15 +648,7 @@ export function computeCost(usage: UsageSummary): number | null {
   const { modelId } = usage;
   if (!modelId) return null;
   const rates = MODEL_RATES.find((r) => r.pattern.test(modelId));
-  if (!rates) {
-    if (!warnedUnpricedModels.has(modelId)) {
-      warnedUnpricedModels.add(modelId);
-      console.warn(
-        `[Cost] No pricing for model "${modelId}" — reporting it as unpriced.`,
-      );
-    }
-    return null;
-  }
+  if (!rates) return null;
   const cost =
     ((usage.inputTokens ?? 0) * rates.input +
       (usage.outputTokens ?? 0) * rates.output +
@@ -679,7 +678,16 @@ function buildUsageSummary(
     parts.push(`${cacheRead} cache read / ${cacheWrite} cache write tokens`);
   }
   const cost = usage ? computeCost(usage) : null;
-  if (cost != null) parts.push(`$${cost.toFixed(4)}`);
+  if (cost != null) {
+    parts.push(`$${cost.toFixed(4)}`);
+  } else if (usage?.modelId && !warnedUnpricedModels.has(usage.modelId)) {
+    // Warned here, on the live run, and not in computeCost: ingest reprices
+    // every historical run on each rebuild and would repeat the warning.
+    warnedUnpricedModels.add(usage.modelId);
+    console.warn(
+      `[Cost] No pricing for model "${usage.modelId}". This run's cost is unknown. Add its rates to MODEL_RATES in src/skill.ts.`,
+    );
+  }
   return `Completed in ${parts.join(" · ")}`;
 }
 
@@ -723,18 +731,12 @@ export interface RunSkillResult {
 }
 
 /**
- * Tool names that change files, as the runtime reports them inside Code Mode
- * programs. A failed call does not count — a `write` that errored mutated
- * nothing. `bash` is deliberately absent: nearly every session runs it to look
- * around, so counting it would call every session a mutation.
+ * Tool names that change files, lowercased as src/claude-runner.ts records them.
+ * A failed call does not count — a `write` that errored mutated nothing. `bash`
+ * is deliberately absent: nearly every session runs it to look around, so
+ * counting it would call every session a mutation.
  */
-const MUTATING_TOOLS = new Set([
-  "write",
-  "edit",
-  "write_file",
-  "str_replace",
-  "multi_edit",
-]);
+const MUTATING_TOOLS = new Set(["write", "edit"]);
 
 function countGitStatus(workspaceRoot: string): GitStatusCounts {
   const status = getGitStatus(workspaceRoot);
@@ -762,14 +764,15 @@ function buildSkillEventMeta(
   status: "success" | "error",
   gitStatusBefore: GitStatusCounts,
   retryCount: number,
-  errorType?: "network" | "exception",
+  error?: { type: "network" | "exception"; message: string },
   usage?: UsageSummary,
 ): SkillMeta {
   const gitStatusAfter = countGitStatus(workspaceRoot);
   const outputPath = getSkillOutputRelativePath(workspaceRoot, skill);
   return {
     status,
-    error_type: status === "error" ? (errorType ?? "exception") : null,
+    error_type: status === "error" ? (error?.type ?? "exception") : null,
+    ...(error && { error_message: error.message }),
     retry_count: retryCount,
     git_repo: gitStatusBefore.is_repo,
     tracked_changed_before: gitStatusBefore.tracked_changed,
@@ -1007,7 +1010,13 @@ export async function runSkill(
         "error",
         gitStatusBefore,
         retryCount,
-        classifySkillError(err),
+        {
+          type: classifySkillError(err),
+          message: oneLine(
+            err instanceof Error ? err.message : String(err),
+            500,
+          ),
+        },
         usageFromError(err),
       ),
     );

@@ -173,14 +173,20 @@ describe("ingestFile: folding events into runs", () => {
     expect(run.cost_usd).toBeCloseTo(3.0, 5);
   });
 
+  // The historical local-model runs in the log have no rates and never will.
   test("leaves cost NULL for a model with no known rates", () => {
+    const warn = jest.spyOn(console, "warn");
     write([
       promptEvent({
-        model: "gpt5.4",
+        model: "qwen38-27b",
         meta: {
           prompt_chars: 10,
           response_chars: 10,
-          usage: { source: "openai", inputTokens: 1000 },
+          usage: {
+            source: "dsh",
+            modelId: "mtplx-qwen38-27b-optimized-speed",
+            inputTokens: 1000,
+          },
         },
       }),
     ]);
@@ -190,7 +196,9 @@ describe("ingestFile: folding events into runs", () => {
     expect(run.input_tokens).toBe(1000);
     expect(run.cost_usd).toBeNull();
     // The model is still recorded so repricing can retry it if rates are added.
-    expect(run.model_id).toBe("gpt5.4");
+    expect(run.model_id).toBe("mtplx-qwen38-27b-optimized-speed");
+    // Ingest replays history on every rebuild; warning here would repeat forever.
+    expect(warn).not.toHaveBeenCalled();
   });
 
   test("prices legacy events that carry only a short model alias", () => {
@@ -857,11 +865,15 @@ describe("repricing at current rates", () => {
   test("leaves unpriced runs NULL rather than costing them at zero", () => {
     write([
       promptEvent({
-        model: "gpt5.4",
+        model: "qwen38-27b",
         meta: {
           prompt_chars: 10,
           response_chars: 10,
-          usage: { source: "openai", modelId: "gpt5.4", inputTokens: 1000 },
+          usage: {
+            source: "dsh",
+            modelId: "mtplx-qwen38-27b-optimized-speed",
+            inputTokens: 1000,
+          },
         },
       }),
     ]);

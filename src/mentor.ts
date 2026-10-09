@@ -1,19 +1,15 @@
 import * as fs from "fs";
-import * as os from "os";
 import * as path from "path";
 import * as readline from "readline";
-import { randomUUID } from "crypto";
 import {
   BEDROCK_MODEL_IDS,
-  buildHarnessLaunch,
+  buildQueryOptions,
   describeFailure,
-  finalTurnReason,
-  sessionDirPath,
-  type ModelRoute,
-} from "./dsh-runner";
+  type SdkMessage,
+} from "./claude-runner";
 import { buildSkillPersona } from "./skill";
 
-const MENTOR_MODEL = "haiku4.5";
+const MENTOR_MODEL = "sonnet5.5";
 
 /**
  * A short opening note instead of `buildSkillInstruction`: that helper's
@@ -34,31 +30,90 @@ function openingNote(workspaceRoot: string): string {
   return note;
 }
 
+type UserMessage = {
+  type: "user";
+  message: { role: "user"; content: string };
+  parent_tool_use_id: null;
+};
+
 /**
- * `carl mentor`: a non-agentic pairing chat. One live dsh session for the
- * whole terminal split, fixed to Haiku on Bedrock, always read-only — the
- * human types the code, the model only answers.
+ * The questions the human types, as the SDK's streaming input: one live
+ * conversation, fed a message at a time, ended by `close()`.
+ */
+export class Inbox implements AsyncIterable<UserMessage> {
+  private readonly queued: UserMessage[] = [];
+  private waiting: ((result: IteratorResult<UserMessage>) => void) | undefined;
+  private closed = false;
+
+  push(content: string): void {
+    const message: UserMessage = {
+      type: "user",
+      message: { role: "user", content },
+      parent_tool_use_id: null,
+    };
+    if (this.waiting) {
+      this.waiting({ value: message, done: false });
+      this.waiting = undefined;
+    } else {
+      this.queued.push(message);
+    }
+  }
+
+  close(): void {
+    this.closed = true;
+    this.waiting?.({ value: undefined, done: true });
+    this.waiting = undefined;
+  }
+
+  [Symbol.asyncIterator](): AsyncIterator<UserMessage> {
+    return {
+      next: () => {
+        const message = this.queued.shift();
+        if (message) return Promise.resolve({ value: message, done: false });
+        if (this.closed) {
+          return Promise.resolve({ value: undefined, done: true });
+        }
+        return new Promise((resolve) => {
+          this.waiting = resolve;
+        });
+      },
+    };
+  }
+}
+
+/**
+ * `carl mentor`: a non-agentic pairing chat. One live session for the whole
+ * terminal split, fixed to Haiku on Bedrock, always read-only — the human types
+ * the code, the model only answers.
  */
 export async function runMentorRepl(workspaceRoot: string): Promise<void> {
-  const modelId = BEDROCK_MODEL_IDS[MENTOR_MODEL];
-  const route: ModelRoute = { provider: "amazon-bedrock", modelId };
+  const { query } = await import("@anthropic-ai/claude-agent-sdk");
 
-  const { DeepSeekHarness } = await import("@deepseek-ai/dsh-sdk-client");
-
-  const sessionRoot = path.join(os.tmpdir(), "carl-mentor-sessions");
-  const sessionId = randomUUID();
-
-  const harness = new DeepSeekHarness(
-    buildHarnessLaunch({
-      route,
+  const inbox = new Inbox();
+  const session = query({
+    prompt: inbox,
+    options: buildQueryOptions({
       workspaceRoot,
+      modelId: BEDROCK_MODEL_IDS[MENTOR_MODEL],
       persona: buildSkillPersona("mentor"),
-      sandboxMode: "read-only",
       effort: "low",
-      sessionRoot,
+      readOnly: true,
     }),
-  );
-  const session = harness.session(sessionId);
+  });
+  const replies = session[Symbol.asyncIterator]();
+
+  /** Everything up to this question's result, then the answer or the failure. */
+  async function answer(): Promise<string> {
+    for (;;) {
+      const next = await replies.next();
+      if (next.done) return "(session ended)";
+      const message = next.value as SdkMessage;
+      if (message.type !== "result") continue;
+      return message.subtype === "success" && !message.is_error
+        ? message.result || "(no response)"
+        : describeFailure(message);
+    }
+  }
 
   console.log(
     "carl mentor — read-only, syntax help only. Blank line sends, :q quits.\n",
@@ -90,19 +145,15 @@ export async function runMentorRepl(workspaceRoot: string): Promise<void> {
         }
         const question = buffer.join("\n");
         buffer = [];
-        const input = first
-          ? `${openingNote(workspaceRoot)}\n\n---\n\n${question}`
-          : question;
+        inbox.push(
+          first
+            ? `${openingNote(workspaceRoot)}\n\n---\n\n${question}`
+            : question,
+        );
         first = false;
 
         try {
-          const result = await session.run(input);
-          const reason = finalTurnReason(result.events as never);
-          console.log(
-            reason && reason.kind !== "completed"
-              ? describeFailure(reason)
-              : result.finalResponse || "(no response)",
-          );
+          console.log(await answer());
         } catch (err) {
           console.error((err as Error)?.message ?? String(err));
         }
@@ -122,15 +173,7 @@ export async function runMentorRepl(workspaceRoot: string): Promise<void> {
     if (!closed) throw err;
   } finally {
     rl.close();
-    await harness.close();
-    try {
-      fs.rmSync(sessionDirPath(sessionRoot, workspaceRoot, sessionId), {
-        recursive: true,
-        force: true,
-      });
-    } catch {
-      // Best-effort: a missing directory or a permission error must not
-      // fail the exit.
-    }
+    inbox.close();
+    session.close();
   }
 }
