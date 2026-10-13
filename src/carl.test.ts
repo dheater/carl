@@ -180,6 +180,31 @@ describe("carl CLI", () => {
       }
     });
 
+    test("passes the configured validation contract through to the skill", async () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-code-val-"));
+      const skill = require("./skill") as typeof import("./skill");
+      fs.writeFileSync(
+        path.join(configDir, "config.json"),
+        JSON.stringify({ validate: "npm test", maxRetries: 3 }),
+        "utf-8",
+      );
+
+      try {
+        await expectCliSuccess(["code", promptFile], tmpDir);
+        expect(skill.runSkillWithValidation).toHaveBeenCalledWith(
+          tmpDir,
+          "code",
+          "ship it",
+          skill.DEFAULT_MODELS.code,
+          "default",
+          expect.any(Object),
+          { command: "npm test", maxRetries: 3 },
+        );
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
     test("exits non-zero and prints the failure when validation never passes", async () => {
       const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-code-fail-"));
       const skill = require("./skill") as typeof import("./skill");
@@ -443,12 +468,19 @@ describe("carl CLI", () => {
   });
 
   describe("feedback", () => {
-    test("runs the feedback skill on a pasted review", async () => {
+    test("runs the feedback skill on a pasted review, and validates the result", async () => {
       const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "carl-feedback-"));
       const skill = require("./skill") as typeof import("./skill");
+      fs.writeFileSync(
+        path.join(configDir, "config.json"),
+        JSON.stringify({ validate: "npm test", maxRetries: 3 }),
+        "utf-8",
+      );
 
       try {
         await expectCliSuccess(["feedback", promptFile], tmpDir);
+        // Applying a comment edits code, so the check command decides whether it
+        // worked — the same contract `carl code` gets.
         expect(skill.runSkillWithValidation).toHaveBeenCalledWith(
           tmpDir,
           "feedback",
@@ -456,7 +488,7 @@ describe("carl CLI", () => {
           skill.DEFAULT_MODELS.feedback,
           "default",
           expect.any(Object),
-          undefined,
+          { command: "npm test", maxRetries: 3 },
         );
       } finally {
         fs.rmSync(tmpDir, { recursive: true, force: true });
