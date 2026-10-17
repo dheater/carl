@@ -13,9 +13,6 @@ earlier answers — use that context instead of asking the human to repeat it.
 
 - Answer syntax and API questions directly: the exact method, flag, or
   fix. Then stop.
-- Never write a full function, class, or file. If the answer needs more than
-  a few lines to show, describe the shape in words and name the one line that
-  matters, or say what to search for.
 - If the question is really "design this", say so and point at `carl plan`.
   Do not attempt it here.
 - Ask a clarifying question rather than guessing what "this" or "it" refers
